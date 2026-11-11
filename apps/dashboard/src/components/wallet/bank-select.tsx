@@ -1,6 +1,12 @@
 import type { Bank } from "@stark/api/types";
 import { Field, FieldLabel } from "@stark/ui/components/field";
-import { NativeSelect, NativeSelectOption } from "@stark/ui/components/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@stark/ui/components/select";
 import { useId } from "react";
 
 export function BankSelect({
@@ -18,21 +24,22 @@ export function BankSelect({
       <FieldLabel htmlFor={id} className="font-normal text-fg-2">
         Bank
       </FieldLabel>
-      <NativeSelect
-        id={id}
-        className="w-full"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
+      <Select
+        items={banks.map((bank) => ({ value: bank.code, label: bank.name }))}
+        value={value || null}
+        onValueChange={(code) => code && onChange(code)}
       >
-        <NativeSelectOption value="" disabled>
-          Choose your bank
-        </NativeSelectOption>
-        {banks.map((bank) => (
-          <NativeSelectOption key={bank.code} value={bank.code}>
-            {bank.name}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue placeholder="Choose your bank" />
+        </SelectTrigger>
+        <SelectContent className="max-h-80">
+          {banks.map((bank) => (
+            <SelectItem key={bank.code} value={bank.code}>
+              <span className="truncate">{bank.name}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Field>
   );
 }

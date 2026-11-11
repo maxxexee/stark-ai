@@ -1,103 +1,187 @@
 import { errorCopy } from "@stark/api/errors";
-import { useStartDeposit } from "@stark/api/mutations";
-import { cryptoAssetsQuery } from "@stark/api/queries";
-import type { Deposit, FundingMethods } from "@stark/api/types";
-import { AmountField } from "@stark/ui/components/amount-field";
+import { useStartDeposit, useTopUp } from "@stark/api/mutations";
+import { cryptoAssetsQuery, depositPreviewQuery, usdcRatesQuery } from "@stark/api/queries";
+import type { Deposit, DepositPreviewInput, FundingMethods } from "@stark/api/types";
 import { Button } from "@stark/ui/components/button";
 import { FieldError } from "@stark/ui/components/field";
-import { PillTabs } from "@stark/ui/components/pill-tabs";
 import { Spinner } from "@stark/ui/components/spinner";
-import { formatNaira } from "@stark/utils/format";
+import { formatAmountInput, formatNaira, parseAmountInput } from "@stark/utils/format";
+import { requestId } from "@stark/utils/id";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { CryptoAssetSelect } from "@/components/wallet/crypto-asset-select";
-import { FundForm } from "@/components/wallet/fund-form";
+import { useMemo, useRef, useState } from "react";
+import { ArrowDown as ArrowDownIcon } from "reicon-react";
+import { SendCurrencyPicker } from "@/components/wallet/send-currency-picker";
+import { SwapPanel } from "@/components/wallet/swap-panel";
+import { TestMoneyNote } from "@/components/wallet/test-money-note";
+import { useDebouncedValue } from "@/components/wallet/use-debounced-value";
+import { type SendOption, SendOptions } from "@/lib/wallet/send-options";
 
-type Method = "bank" | "crypto" | "test";
+const MIN_NGN = 100;
 
-const LABELS: Record<Method, string> = {
-  bank: "Bank or card",
-  crypto: "Crypto",
-  test: "Test money",
-};
+/** What the card was filled with, kept in the URL so going back to it restores it. */
+export type AddMoneyChoice = { amount: number; option: string | undefined };
 
-/** Pick how to pay and how much. Starting a deposit moves nothing until it settles. */
+// Which panel the user typed into; the other one is worked out from it. Naira sides are
+// whole-naira digits, the Send side of a crypto option is a decimal in that asset.
+type Typed = { side: "send" | "receive"; value: string };
+
+/**
+ * Send on top, Receive (naira in the Stark balance) below, one button. For crypto either
+ * side can be typed: the other fills from a dry quote once typing settles, and the deposit
+ * started from it locks its own quote.
+ */
 export function AddMoneyForm({
   methods,
+  initial,
   onStarted,
   onTestMoneyAdded,
 }: {
   methods: FundingMethods;
-  onStarted: (deposit: Deposit) => void;
+  initial: AddMoneyChoice;
+  onStarted: (deposit: Deposit, choice: AddMoneyChoice) => void;
   onTestMoneyAdded: () => void;
 }) {
-  const offered = (["bank", "crypto", "test"] as const).filter((m) =>
-    m === "test" ? methods.test_money : methods[m],
-  );
-  const [method, setMethod] = useState<Method>(offered[0] ?? "test");
-  const [amount, setAmount] = useState(20000);
-  const [assetId, setAssetId] = useState("");
-  const assets = useQuery({ ...cryptoAssetsQuery(), enabled: method === "crypto" });
-  const start = useStartDeposit();
+  const assets = useQuery({ ...cryptoAssetsQuery(), enabled: methods.crypto });
+  const groups = SendOptions.groups(methods, assets.data ?? []);
+  const [pickedKey, setPickedKey] = useState(initial.option);
+  const option =
+    groups.flatMap((group) => group.items).find((o) => SendOptions.key(o) === pickedKey) ??
+    groups[0]?.items[0] ??
+    null;
+  const [typed, setTyped] = useState<Typed>({
+    side: "receive",
+    value: String(initial.amount),
+  });
+  const settled = useDebouncedValue(typed, 400);
+  const sendPanel = useRef<HTMLDivElement>(null);
 
-  if (offered.length === 0) {
+  const crypto = option?.kind === "crypto" ? option.asset : null;
+  const previewInput: DepositPreviewInput | null =
+    crypto && Number(settled.value) > 0
+      ? settled.side === "receive"
+        ? { asset_id: crypto.asset_id, amount_ngn: Number(settled.value) }
+        : { asset_id: crypto.asset_id, amount_in: settled.value }
+      : null;
+  const preview = useQuery(depositPreviewQuery(previewInput));
+  const rates = useQuery({ ...usdcRatesQuery(), enabled: crypto !== null });
+  const start = useStartDeposit();
+  const topUp = useTopUp();
+
+  const settling = typed !== settled || preview.isFetching;
+  const receiveNgn =
+    crypto && typed.side === "send" ? (preview.data?.amount_ngn ?? 0) : Number(typed.value);
+  const topUpKey = useMemo(() => requestId("dep"), [receiveNgn]);
+
+  if (!option) {
     return <p className="m-0 text-fg-2">Adding money isn’t switched on here yet.</p>;
   }
 
-  const handleStart = () => {
-    const input =
-      method === "crypto"
-        ? { method, amount_ngn: amount, asset_id: assetId }
-        : { method: "bank" as const, amount_ngn: amount };
-    start.mutate(input, { onSuccess: onStarted });
+  const sendValue = crypto
+    ? typed.side === "send"
+      ? typed.value
+      : (preview.data?.amount_in ?? "")
+    : formatAmountInput(Number(typed.value));
+  const receiveValue = formatAmountInput(receiveNgn);
+
+  const handleSendChange = (raw: string) => {
+    if (!crypto)
+      return setTyped({
+        side: "receive",
+        value: String(parseAmountInput(raw)),
+      });
+    const decimal = raw.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
+    setTyped({ side: "send", value: decimal });
   };
 
-  return (
-    <div className="flex flex-col gap-6">
-      {offered.length > 1 ? (
-        <PillTabs
-          label="How you’re paying"
-          tabs={offered.map((value) => ({ value, label: LABELS[value] }))}
-          value={method}
-          onChange={setMethod}
-        />
-      ) : null}
+  const handleReceiveChange = (raw: string) =>
+    setTyped({ side: "receive", value: String(parseAmountInput(raw)) });
 
-      {method === "test" ? (
-        <FundForm onDone={onTestMoneyAdded} />
-      ) : (
-        <>
-          <AmountField
-            label="Amount"
-            value={amount}
-            onChange={setAmount}
-            presets={[10000, 20000, 50000]}
-          />
-          {method === "crypto" ? (
-            <CryptoAssetSelect
-              label="Pay with"
-              placeholder="Choose what you hold"
-              assets={assets.data ?? []}
-              value={assetId}
-              onChange={setAssetId}
+  const handleOptionChange = (next: SendOption) => {
+    // A crypto amount means nothing in another asset; keep the naira it was worth.
+    if (typed.side === "send") setTyped({ side: "receive", value: String(receiveNgn) });
+    setPickedKey(SendOptions.key(next));
+  };
+
+  const handleContinue = () => {
+    if (option.kind === "test")
+      return topUp.mutate(
+        { amount_ngn: receiveNgn, request_id: topUpKey },
+        { onSuccess: onTestMoneyAdded },
+      );
+    const input = crypto
+      ? {
+          method: "crypto" as const,
+          amount_ngn: receiveNgn,
+          asset_id: crypto.asset_id,
+        }
+      : { method: "bank" as const, amount_ngn: receiveNgn };
+    start.mutate(input, {
+      onSuccess: (deposit) =>
+        onStarted(deposit, { amount: receiveNgn, option: SendOptions.key(option) }),
+    });
+  };
+
+  const busy = start.isPending || topUp.isPending;
+  const error = preview.error ?? start.error ?? topUp.error;
+  const ready =
+    receiveNgn >= MIN_NGN && !busy && (!crypto || (preview.data !== undefined && !settling));
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="relative flex flex-col gap-1 rounded-2xl bg-surface p-1">
+        <SwapPanel
+          ref={sendPanel}
+          label="Send"
+          value={sendValue}
+          onChange={handleSendChange}
+          inputMode={crypto ? "decimal" : "numeric"}
+          pending={crypto !== null && typed.side === "receive" && settling}
+          currency={
+            <SendCurrencyPicker
+              groups={groups}
+              value={option}
+              onChange={handleOptionChange}
+              anchor={sendPanel}
             />
-          ) : null}
-          {start.error ? (
-            <FieldError className="text-[13px]">{errorCopy(start.error)}</FieldError>
-          ) : null}
-          <Button
-            size="lg"
-            block
-            disabled={amount < 100 || start.isPending || (method === "crypto" && !assetId)}
-            onClick={handleStart}
-          >
-            {start.isPending ? <Spinner /> : null}
-            {method === "bank"
-              ? `Pay ${formatNaira(amount)}`
-              : `Get a price for ${formatNaira(amount)}`}
-          </Button>
-        </>
-      )}
+          }
+        />
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 left-1/2 flex size-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl border-4 border-surface bg-canvas text-muted-foreground"
+        >
+          <ArrowDownIcon className="size-4" />
+        </span>
+        <SwapPanel
+          label="Receive in your Stark balance"
+          value={receiveValue}
+          onChange={handleReceiveChange}
+          inputMode="numeric"
+          pending={crypto !== null && typed.side === "send" && settling}
+          currency={
+            <span className="flex h-10 shrink-0 items-center rounded-full bg-surface px-3.5 text-[15px] font-medium">
+              NGN
+            </span>
+          }
+        />
+      </div>
+
+      {crypto && rates.data ? (
+        <p className="m-0 text-[13px] text-fg-2">
+          1 USDC = {formatNaira(Number(rates.data.deposit))}. The exact amount to send locks when
+          you continue.
+        </p>
+      ) : null}
+      {option.kind === "test" ? <TestMoneyNote /> : null}
+      {error ? <FieldError className="text-[13px]">{errorCopy(error)}</FieldError> : null}
+
+      <Button size="lg" block disabled={!ready} onClick={handleContinue}>
+        {busy ? <Spinner /> : null}
+        {option.kind === "test"
+          ? `Add ${formatNaira(receiveNgn)} test money`
+          : crypto
+            ? `Pay with ${crypto.symbol}`
+            : `Pay ${formatNaira(receiveNgn)}`}
+      </Button>
     </div>
   );
 }
