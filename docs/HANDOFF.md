@@ -54,7 +54,7 @@ client). Both now send `stark-backend/1.0`. VTpass does not block it.
 
 **Crypto withdrawals** (`wallet/crypto_withdrawal_service.py`, `chain/treasury_chain.py`,
 `POST /v1/wallet/withdraw/crypto`): the naira is held exactly like a bank withdrawal,
-converted to USDC at `STARK_USDC_NGN_RATE` (rounded down), and the treasury's
+converted to USDC at Stark's selling rate, Paycrest's live rate + `STARK_USDC_NGN_SPREAD` (rounded down), and the treasury's
 **full-access hot key** (`STARK_TREASURY_KEY`; `ft_transfer` needs 1 yocto, which a
 function-call key cannot attach) sends it to a 1Click deposit address that swaps and
 delivers to the user. Capped per withdrawal and per rolling day; the signed transaction
@@ -920,7 +920,7 @@ PAY       paused? caps? balance? ─► Flutterwave balance covers it (minus pen
 WITHDRAW  resolve name ─► hold the money + vault debit ─► Flutterwave transfer (reference =
           withdrawal id; GET /transfers?reference= first) ─► transfer.completed SUCCESSFUL │
           FAILED ─► credit back + vault fund(<id>-r)
-CRYPTO    hold ─► USDC at STARK_USDC_NGN_RATE ─► treasury ft_transfer to a 1Click address
+CRYPTO    hold ─► USDC at market + spread ─► treasury ft_transfer to a 1Click address
 LOOP      every 30s: flush vault ops, send withdrawals, warn under STARK_FLOAT_LOW_NGN
 DEPOSITS  each open deposit has a next_check_at; one thread sleeps until the earliest
 ```
@@ -940,7 +940,7 @@ Decisions taken, and why:
 | One vault per user, a sub-account `u-<id>.<funder>` created in one tx | user's choice; the agent key is added per vault and can only `pay` there |
 | Vault code as a **global contract** by default | a 277 KB wasm per user is ~2.8 NEAR of storage; a global contract is stored once |
 | Checkout **per deposit**, keyed on our `tx_ref` | the deposit is credited only from Flutterwave's own verify call, never from a webhook body |
-| Crypto credited at a **locked env rate** (`STARK_USDC_NGN_RATE`) | Flutterwave does not take USDC or NEAR; the treasury sells USDC off-platform |
+| Crypto credited at the **rate locked at quote time**: Paycrest's live rate − `STARK_USDC_NGN_SPREAD` (`STARK_USDC_NGN_RATE` pins it) | Flutterwave does not take USDC or NEAR; the treasury sells USDC off-platform |
 | Policy synced **lazily before each pay** | caps only bind at payment time; no chain call on every settings change |
 | `pay_approved` is owner-only | an approved over-cap payment cannot be reached with the agent key |
 

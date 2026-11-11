@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -24,6 +25,7 @@ from app.modules.chain.treasury_chain import SignedTransfer
 from app.modules.chain.vault_chain import ChainResult, VaultChain
 from app.modules.intents.one_click import OneClickError
 from app.modules.liquidity.float_service import FloatService, FloatSettings
+from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.payment import payment_service
 from app.modules.vault.vault_service import AuthorisationFailed, VaultService
 from app.modules.vending import vending
@@ -38,11 +40,22 @@ from app.modules.wallet.deposit_service import (
     DepositService,
     FundingSettings,
     _check_delay,
+    _payable,
 )
 from app.modules.wallet.withdrawal_service import WithdrawalService
 from tests import support
 
 KEY = near_tx.KeyPair.from_secret(bytes(range(32)))
+RATE_1500 = UsdcRate(spread_ngn=Decimal(0), fixed=Decimal("1500"))
+SPREAD_RATE = UsdcRate(spread_ngn=Decimal(10), fixed=Decimal("1500"))
+
+
+class DownRate(UsdcRate):
+    def __init__(self):
+        super().__init__(spread_ngn=Decimal(10))
+
+    def _fetch(self):
+        raise RateUnavailable("Paycrest down")
 AGENT = near_tx.KeyPair.from_secret(bytes(range(1, 33)))
 METER = "04512345678"
 ELECTRICITY = {"id": "bill_home", "label": "Home meter", "kind": "electricity",
@@ -169,15 +182,21 @@ class FakeOneClick:
     def __init__(self):
         self.status_reply = {"status": "PENDING_DEPOSIT", "swapDetails": {}}
         self.quotes: list[dict] = []
+        self.refuse: Optional[Exception] = None
 
     def tokens(self):
-        return [{"assetId": "nep141:tron-usdt", "symbol": "USDT", "blockchain": "tron"}]
+        return [{"assetId": "nep141:tron-usdt", "symbol": "USDT", "blockchain": "tron",
+                 "decimals": 6}]
 
-    def quote(self, *, origin_asset, usdc_out, recipient, deadline, dry=False):
-        self.quotes.append({"origin": origin_asset, "usdc_out": usdc_out,
-                            "recipient": recipient})
-        return {"quote": {"depositAddress": "TXdeposit1", "depositMemo": None,
-                          "amountIn": "13460000", "amountInFormatted": "13.46",
+    def quote(self, *, origin_asset, swap_type, amount, recipient, deadline, dry=False):
+        if self.refuse is not None:
+            raise self.refuse
+        self.quotes.append({"origin": origin_asset, "swap_type": swap_type, "amount": amount,
+                            "recipient": recipient, "dry": dry})
+        return {"quote": {"depositAddress": None if dry else "TXdeposit1",
+                          "depositMemo": None, "amountIn": "13460000",
+                          "amountInFormatted": "13.46", "amountOut": "14700000",
+                          "minAmountOut": "14553000",
                           "deadline": deadline}}
 
     def status(self, address, memo):
@@ -549,12 +568,12 @@ class PaymentPathTests(MoneyCase):
 
 
 class DepositTests(MoneyCase):
-    def deposits(self, *, crypto=True):
+    def deposits(self, *, crypto=True, rate=RATE_1500):
         self.flutterwave = FakeFlutterwave()
         self.one_click = FakeOneClick()
         settings = FundingSettings(app_url="https://app.test",
                                    treasury_account="stark-treasury.near" if crypto else None,
-                                   usdc_ngn_rate=Decimal("1500") if crypto else None)
+                                   usdc_rate=rate)
         return DepositService(self.db, self.receipts, self.vaults, self.flutterwave,
                               self.one_click, settings)
 
@@ -641,10 +660,59 @@ class DepositTests(MoneyCase):
     def test_a_crypto_quote_covers_the_naira_at_the_locked_rate(self):
         service = self.deposits()
         deposit = service.start(self.account.id, 20_000, "crypto", "nep141:tron-usdt")
-        self.assertEqual(self.one_click.quotes[0]["usdc_out"], 13_333_334, "rounded up")
+        self.assertEqual(self.one_click.quotes[0]["amount"], 13_333_334, "rounded up")
         self.assertEqual(self.one_click.quotes[0]["recipient"], "stark-treasury.near")
         self.assertEqual(deposit["pay"]["address"], "TXdeposit1")
         self.assertEqual(deposit["pay"]["amount"], "13.46")
+
+    def test_a_crypto_deposit_locks_starks_buying_rate(self):
+        deposit = self.deposits(rate=SPREAD_RATE).start(self.account.id, 20_000, "crypto",
+                                                        "nep141:tron-usdt")
+        # ₦20,000 at ₦1,490 (market ₦1,500 less ₦10) is 13.422819 USDC, rounded up.
+        self.assertEqual(self.one_click.quotes[0]["amount"], 13_422_819)
+        self.assertEqual(self.db.value("SELECT rate_ngn_per_usdc FROM deposits WHERE id = $1",
+                                       [deposit["id"]]), "1490")
+
+    def test_a_preview_from_the_naira_side_reserves_nothing(self):
+        preview = self.deposits().preview("nep141:tron-usdt", 20_000, None)
+        self.assertEqual(preview["amount_in"], "13.46")
+        self.assertEqual(preview["amount_ngn"], 20_000)
+        quote = self.one_click.quotes[0]
+        self.assertEqual((quote["swap_type"], quote["amount"], quote["dry"]),
+                         ("EXACT_OUTPUT", 13_333_334, True))
+        self.assertIsNone(self.db.value("SELECT id FROM deposits WHERE user_id = $1",
+                                        [self.account.id]))
+
+    def test_a_preview_from_the_crypto_side_credits_what_the_swap_yields(self):
+        preview = self.deposits().preview("nep141:tron-usdt", None, Decimal("13.46"))
+        quote = self.one_click.quotes[0]
+        self.assertEqual((quote["swap_type"], quote["amount"]), ("EXACT_INPUT", 13_460_000))
+        # At most 1% slippage: 14.553 USDC is the least that arrives, at ₦1,500.
+        self.assertEqual(preview["amount_ngn"], 21_829)
+
+    def test_the_amount_to_send_rounds_up_to_a_cent(self):
+        sol = {"decimals": 9, "price": 82.93}
+        self.assertEqual(_payable("13285316", sol), "0.0133")
+        self.assertEqual(_payable("13300000", sol), "0.0133", "already on the step")
+        self.assertEqual(_payable("109351234", {"decimals": 8, "price": 100_000}), "1.0935124")
+        self.assertEqual(_payable("13460001", {"decimals": 6, "price": 1}), "13.47")
+        self.assertEqual(_payable("13460001", {"decimals": 6}), "13.460001", "no price")
+
+    def test_one_clicks_minimum_is_named_in_naira(self):
+        service = self.deposits()
+        self.one_click.refuse = OneClickError(
+            400, '{"message":"Temporary swap limits: minimum swap amount is $100"}')
+        with self.assertRaises(ApiError) as caught:
+            service.preview("nep141:tron-usdt", 20_000, None)
+        self.assertEqual(caught.exception.code, "below_minimum")
+        self.assertIn("₦150,000", str(caught.exception.message))
+
+    def test_no_rate_means_no_crypto_quote(self):
+        with self.assertRaises(ApiError) as caught:
+            self.deposits(rate=DownRate()).start(self.account.id, 20_000, "crypto",
+                                                 "nep141:tron-usdt")
+        self.assertEqual(caught.exception.code, "provider_failed")
+        self.assertEqual(self.one_click.quotes, [])
 
     def test_a_settled_swap_credits_no_more_than_was_asked(self):
         service = self.deposits()
@@ -660,6 +728,13 @@ class DepositTests(MoneyCase):
         self.one_click.status_reply = {"status": "SUCCESS",
                                        "swapDetails": {"amountOut": "10000000"}}
         self.assertEqual(service.get(self.account.id, deposit["id"])["credited_ngn"], 15_000)
+
+    def test_a_swap_in_progress_reads_confirming(self):
+        service = self.deposits()
+        deposit = service.start(self.account.id, 20_000, "crypto", "nep141:tron-usdt")
+        self.one_click.status_reply = {"status": "PROCESSING", "swapDetails": {}}
+        self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "confirming")
+        self.assertEqual(self.wallet()["balance_ngn"], 0)
 
     def test_a_refunded_swap_credits_nothing(self):
         service = self.deposits()
@@ -685,7 +760,7 @@ class DepositTests(MoneyCase):
             self.deposits().start(self.account.id, 20_000, "crypto", "nep141:unknown")
         self.assertEqual(caught.exception.code, "bad_asset")
         no_flutterwave = DepositService(self.db, self.receipts, self.vaults, None,
-                                        FakeOneClick(), FundingSettings(None, None, None))
+                                        FakeOneClick(), FundingSettings(None, None, RATE_1500))
         with self.assertRaises(ApiError) as caught:
             no_flutterwave.start(self.account.id, 20_000, "bank", None)
         self.assertEqual(caught.exception.code, "not_available")
@@ -875,16 +950,15 @@ ADDRESS = "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE"
 class CryptoWithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def service(self, *, treasury=True, max_ngn=200_000, daily_ngn=10**12):
+    def service(self, *, treasury=True, max_ngn=200_000, daily_ngn=10**12, rate=RATE_1500):
         self.one_click = FakePayoutOneClick()
         self.treasury = FakeTreasury() if treasury else None
         deposits = DepositService(self.db, self.receipts, self.vaults, None, self.one_click,
-                                  FundingSettings(None, "stark-treasury.near",
-                                                  Decimal("1500")))
+                                  FundingSettings(None, "stark-treasury.near", RATE_1500))
         ledger = WithdrawalService(self.db, self.receipts, self.vaults, None)
         self.payouts = CryptoWithdrawalService(
             self.db, ledger, self.vaults, deposits, self.one_click, self.treasury,
-            CryptoPayoutSettings(Decimal("1500"), max_ngn, daily_ngn),
+            CryptoPayoutSettings(rate, max_ngn, daily_ngn),
         )
         return self.payouts
 
@@ -908,6 +982,20 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(self.one_click.submitted, ["hash1"])
         self.assertIn(("debit", {"amount_ngn": "20000", "reference": result["id"]}),
                       self.chain.calls)
+
+    def test_a_withdrawal_is_priced_at_starks_selling_rate(self):
+        self.service(rate=SPREAD_RATE)
+        self.request()
+        # ₦20,000 at ₦1,510 (market ₦1,500 plus ₦10) is 13.245033 USDC, rounded down.
+        self.assertEqual(self.one_click.payout_quotes[0]["usdc_in"], 13_245_033)
+
+    def test_no_rate_means_nothing_is_held(self):
+        self.service(rate=DownRate())
+        with self.assertRaises(ApiError) as caught:
+            self.request()
+        self.assertEqual(caught.exception.code, "provider_failed")
+        self.assertEqual(self.wallet()["balance_ngn"], self.balance)
+        self.assertEqual(self.one_click.payout_quotes, [])
 
     def test_a_settled_swap_is_paid_with_what_arrived(self):
         self.service()

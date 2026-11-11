@@ -566,6 +566,36 @@ sooner. Errors `bad_method`, `bad_tx`.
 
 Empty while crypto deposits are not configured.
 
+### `POST /v1/wallet/deposits/preview`
+
+```json
+{ "asset_id": "nep141:sol.omft.near", "amount_ngn": 20000 }
+→ { "asset_id": "nep141:sol.omft.near", "amount_ngn": 20000, "amount_in": "0.178036425", "rate": "1372.12" }
+
+{ "asset_id": "nep141:sol.omft.near", "amount_in": "0.5" }
+→ { "asset_id": "nep141:sol.omft.near", "amount_ngn": 56795, "amount_in": "0.5", "rate": "1372.12" }
+```
+
+Prices a crypto deposit from either side with a **dry** 1Click quote: nothing is
+reserved, so call it as the user types (debounced). Send exactly one of `amount_ngn`
+or `amount_in` (a decimal in the asset). Starting the deposit with the shown
+`amount_ngn` locks its own quote, so its `pay.amount` can differ by a hair from a
+preview made from the crypto side. Errors `bad_amount`, `bad_asset`, `not_available`,
+`provider_failed`, and **`below_minimum`** (400) when 1Click refuses a swap that small;
+its message names the floor in naira. `POST /v1/wallet/deposits` returns
+`below_minimum` the same way.
+
+### `GET /v1/wallet/rates`
+
+```json
+{ "deposit": "1370.56", "withdraw": "1390.56" }
+```
+
+Naira per USDC right now, as decimal strings: Paycrest's live rate less Stark's
+spread for a deposit, plus it for a withdrawal. Refreshed at most once a minute. A
+crypto deposit locks its own rate when it is quoted, so this is a guide, not a promise.
+`provider_failed` (502) when no rate is known.
+
 ### `GET /v1/wallet/banks`, `POST /v1/wallet/bank-accounts/resolve`
 
 ```json
@@ -987,7 +1017,7 @@ artboard seed so smoke runs are repeatable: the three seed bills, limits
 | Piece | Stub today | Real in |
 |---|---|---|
 | Auth | none | M4 |
-| Balances | per account, starts at ₦0. **Flutterwave** (bank transfer, card, USSD) and **NEAR Intents** (any chain) deposits credit it; test money only while neither is configured | live once `FLW_SECRET_KEY` + `STARK_APP_URL` / `STARK_USDC_NGN_RATE` are set — **no real deposit has run yet** |
+| Balances | per account, starts at ₦0. **Flutterwave** (bank transfer, card, USSD) and **NEAR Intents** (any chain) deposits credit it; test money only while neither is configured | live once `FLW_SECRET_KEY` + `STARK_APP_URL` / `STARK_TREASURY_NEAR_ACCOUNT` are set — **no real deposit has run yet** |
 | Withdrawals | Flutterwave transfers, money held at request | live once Flutterwave is keyed and the server IP is whitelisted — **never run against Flutterwave** |
 | Payments | every path checks Stark's Flutterwave balance, then signs `pay` on the user's own vault (`tx_hash`); a vendor failure refunds the vault | dry-signed by default; broadcast with `STARK_BROADCAST=1` — **per-user vaults have never been created on testnet** |
 | Token | **vended through Flutterwave bills**; a `FLWSECK_TEST-` key uses Flutterwave's test environment | **blocked on IP whitelisting, so no bill has been bought yet** |
@@ -1022,3 +1052,5 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | **Money flow.** Deposits: `GET /v1/wallet/methods`, `POST`/`GET /v1/wallet/deposits`, `GET /v1/wallet/deposits/{id}`, `POST /v1/wallet/deposits/{id}/tx`, `GET /v1/wallet/crypto-assets`. Withdrawals: `GET /v1/wallet/banks`, `POST /v1/wallet/bank-accounts/resolve`, `GET /v1/wallet/withdrawals`; `POST /v1/wallet/withdraw` now takes `bank_code` + `account_number` and returns a `Withdrawal` instead of 501. `POST /v1/bachs/webhook`. `POST /v1/wallet/topup` answers 501 once Bachs is configured. Payments gain `float_low` (503) and `authorisation_failed` (502); `tx_hash` is set on every path when a chain is configured. New codes `unknown_deposit`, `bad_method`, `bad_asset`, `bad_tx`, `bad_account`, `provider_failed`. |
 | 2026-11-03 | **One provider: Flutterwave.** Bachs and VTpass are gone. Deposits are Flutterwave checkout, bills are Flutterwave bill payments, withdrawals are Flutterwave transfers, all from one NGN balance. `POST /v1/bachs/webhook` → `POST /v1/flutterwave/webhook` (`verif-hash`). Plan codes are Flutterwave item codes (`MD107`, `CB141`) and `GET /v1/plans` providers are network names (`MTN`, `DSTV`). A bank `Withdrawal` starts `sending` instead of `reviewing`. Showmax is no longer sold. |
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
+| 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
+| 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |

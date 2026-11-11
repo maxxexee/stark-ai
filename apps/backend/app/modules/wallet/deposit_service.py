@@ -24,9 +24,9 @@ missed, so each deposit in flight carries its own `next_check_at`, half its age 
 now (one minute at least, fifteen at most). One thread sleeps until the earliest of
 those, so with nothing in flight it makes no calls at all. `/tx` pulls the check in.
 
-A crypto deposit is credited at the rate locked when it was quoted
-(`STARK_USDC_NGN_RATE`, naira per USDC — Stark's buying rate), and never for more
-than the naira the user asked for.
+A crypto deposit is credited at the rate locked when it was quoted (Stark's
+buying rate: Paycrest's market rate less the spread, see `usdc_rate`), and never
+for more than the naira the user asked for.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 from typing import Any, Optional
 
 from app.common.api_error import ApiError
@@ -47,6 +47,7 @@ from app.database import neon
 from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError, whole_naira
 from app.modules.intents import one_click
 from app.modules.intents.one_click import OneClickClient, OneClickError
+from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.vault.vault_service import VaultService
 
@@ -65,7 +66,7 @@ UNIQUE_VIOLATION = "23505"
 class FundingSettings:
     app_url: Optional[str]
     treasury_account: Optional[str]
-    usdc_ngn_rate: Optional[Decimal]
+    usdc_rate: UsdcRate
 
 
 class DepositService:
@@ -105,9 +106,7 @@ class DepositService:
 
     def start(self, account_id: str, amount_ngn: int, method: str,
               asset_id: Optional[str]) -> dict[str, Any]:
-        if not MIN_DEPOSIT_NGN <= amount_ngn <= MAX_DEPOSIT_NGN:
-            raise ApiError(400, "bad_amount",
-                           f"Add between ₦{MIN_DEPOSIT_NGN:,} and ₦{MAX_DEPOSIT_NGN:,}.")
+        _check_amount(amount_ngn)
         if method == "bank":
             return self._start_bank(account_id, amount_ngn)
         if method == "crypto":
@@ -145,29 +144,34 @@ class DepositService:
         self._wake.set()
         return shape(row)
 
+    def preview(self, asset_id: str, amount_ngn: Optional[int],
+                amount_in: Optional[Decimal]) -> dict[str, Any]:
+        """What a crypto deposit would take and credit, from either side, without
+        reserving a deposit address. Exactly one of `amount_ngn` / `amount_in` is set."""
+        token, rate = self._crypto_terms(asset_id)
+        if amount_in is None:
+            assert amount_ngn is not None
+            _check_amount(amount_ngn)
+            quote = self._quote(asset_id, "EXACT_OUTPUT", _usdc_for(amount_ngn, rate), rate,
+                                _deadline(), dry=True)
+            send = _payable(quote["amountIn"], token)
+        else:
+            units = int(amount_in * 10 ** token["decimals"])
+            quote = self._quote(asset_id, "EXACT_INPUT", units, rate, _deadline(), dry=True)
+            # The slippage floor, not the expected output: a deposit for that much USDC
+            # quotes back to the amount typed, since EXACT_OUTPUT adds the same 1% on top.
+            usdc = Decimal(quote["minAmountOut"]) / 10 ** one_click.USDC_DECIMALS
+            amount_ngn = int(usdc * rate)
+            _check_amount(amount_ngn)
+            send = quote["amountInFormatted"]
+        return {"asset_id": asset_id, "amount_ngn": amount_ngn, "amount_in": send,
+                "rate": str(rate)}
+
     def _start_crypto(self, account_id: str, amount_ngn: int, asset_id: str) -> dict[str, Any]:
-        if not self._crypto_ready():
-            raise ApiError(501, "not_available",
-                           "Adding money with crypto isn't set up yet. Nothing was taken.")
-        token = self.crypto_token(asset_id)
-        if token is None:
-            raise ApiError(400, "bad_asset", "That isn't something Stark accepts.")
-        rate = self.settings.usdc_ngn_rate
-        assert rate is not None and self.settings.treasury_account
-        # Round the USDC up, so the credit at the locked rate covers the naira asked.
-        usdc_out = math.ceil(Decimal(amount_ngn) / rate * 10 ** one_click.USDC_DECIMALS)
-        deadline = (datetime.now(timezone.utc) + timedelta(minutes=WINDOW_MINUTES)) \
-            .strftime("%Y-%m-%dT%H:%M:%SZ")
-        try:
-            quoted = self.one_click.quote(
-                origin_asset=asset_id, usdc_out=usdc_out,
-                recipient=self.settings.treasury_account, deadline=deadline,
-            )
-        except OneClickError as err:
-            raise ApiError(502, "provider_failed",
-                           "Couldn't get a price for that right now. Nothing was taken.") \
-                from err
-        quote = quoted["quote"]
+        token, rate = self._crypto_terms(asset_id)
+        usdc_out = _usdc_for(amount_ngn, rate)
+        deadline = _deadline()
+        quote = self._quote(asset_id, "EXACT_OUTPUT", usdc_out, rate, deadline, dry=False)
         deposit_id = f"dep_{uuid.uuid4().hex[:16]}"
         row = self.db.one(
             "INSERT INTO deposits (id, user_id, method, amount_ngn, status, provider_ref,"
@@ -178,12 +182,46 @@ class DepositService:
             " $12, $13, $14, $15, $15) RETURNING *",
             [deposit_id, account_id, amount_ngn, quote["depositAddress"],
              quote.get("depositMemo"), asset_id, token["symbol"], token["blockchain"],
-             quote["amountIn"], quote["amountInFormatted"], str(usdc_out), str(rate),
+             quote["amountIn"], _payable(quote["amountIn"], token), str(usdc_out), str(rate),
              quote.get("deadline") or deadline, _in_seconds(MIN_CHECK_SECONDS),
              Clock.now_iso()],
         )
         self._wake.set()
         return shape(row)
+
+    def _crypto_terms(self, asset_id: str) -> tuple[dict[str, Any], Decimal]:
+        """The listed token and Stark's buying rate, or the reason there is no price."""
+        if not self._crypto_ready():
+            raise ApiError(501, "not_available",
+                           "Adding money with crypto isn't set up yet. Nothing was taken.")
+        token = self.crypto_token(asset_id)
+        if token is None:
+            raise ApiError(400, "bad_asset", "That isn't something Stark accepts.")
+        try:
+            return token, self.settings.usdc_rate.buying()
+        except RateUnavailable as err:
+            raise ApiError(502, "provider_failed",
+                           "Couldn't get a price for that right now. Nothing was taken.") \
+                from err
+
+    def _quote(self, asset_id: str, swap_type: one_click.SwapType, amount: int,
+               rate: Decimal, deadline: str, *, dry: bool) -> dict[str, Any]:
+        assert self.settings.treasury_account
+        try:
+            return self.one_click.quote(
+                origin_asset=asset_id, swap_type=swap_type, amount=amount,
+                recipient=self.settings.treasury_account, deadline=deadline, dry=dry,
+            )["quote"]
+        except OneClickError as err:
+            floor_usd = err.minimum_usd()
+            if floor_usd is not None:
+                # 1Click's floor is in dollars; USDC is the dollar here.
+                floor_ngn = math.ceil(floor_usd * rate / 1000) * 1000
+                raise ApiError(400, "below_minimum",
+                               f"Paying with this starts at ₦{floor_ngn:,} right now.") from err
+            raise ApiError(502, "provider_failed",
+                           "Couldn't get a price for that right now. Nothing was taken.") \
+                from err
 
     # --- reading ----------------------------------------------------------------
 
@@ -316,6 +354,10 @@ class DepositService:
             reason = report["swapDetails"].get("refundReason") or status.lower()
             self._set_status(row["id"], "refunded" if status == "REFUNDED" else "failed",
                              reason)
+        elif status in ("KNOWN_DEPOSIT_TX", "PROCESSING") and row["status"] == "open":
+            # The transfer is seen and the swap is running: the user can stop waiting on
+            # their wallet, and the app can say so.
+            self._set_status(row["id"], "confirming", None)
         elif status == "PENDING_DEPOSIT" and _past(row["expires_at"]):
             self._set_status(row["id"], "expired", None)
 
@@ -363,7 +405,7 @@ class DepositService:
     # --- plumbing -----------------------------------------------------------------
 
     def _crypto_ready(self) -> bool:
-        return bool(self.settings.treasury_account and self.settings.usdc_ngn_rate)
+        return self.settings.treasury_account is not None
 
     def _token_list(self) -> list[dict[str, Any]]:
         """1Click's token list, kept for ten minutes."""
@@ -378,6 +420,37 @@ class DepositService:
         with self._tokens_lock:
             self._tokens = (time.monotonic(), tokens)
         return tokens
+
+
+def _check_amount(amount_ngn: int) -> None:
+    if not MIN_DEPOSIT_NGN <= amount_ngn <= MAX_DEPOSIT_NGN:
+        raise ApiError(400, "bad_amount",
+                       f"Add between ₦{MIN_DEPOSIT_NGN:,} and ₦{MAX_DEPOSIT_NGN:,}.")
+
+
+def _payable(amount_in: str, token: dict[str, Any]) -> str:
+    """What the user is told to send: 1Click's exact `amountIn` rounded **up** to the
+    coarsest step worth at most a cent (4 places for SOL, 7 for BTC, 2 for USDT), so a
+    copied amount is never short and over by at most a cent; the credit stays capped at
+    the naira asked. A token 1Click lists without a price keeps every decimal."""
+    decimals = token["decimals"]
+    exact = Decimal(amount_in).scaleb(-decimals)
+    price = Decimal(str(token.get("price") or 0))
+    places = decimals
+    if price > 0:
+        places = min(decimals, max(0, math.ceil((price * 100).log10())))
+    rounded = exact.quantize(Decimal(1).scaleb(-places), rounding=ROUND_CEILING)
+    return format(rounded.normalize(), "f")
+
+
+def _deadline() -> str:
+    return (datetime.now(timezone.utc) + timedelta(minutes=WINDOW_MINUTES)) \
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _usdc_for(amount_ngn: int, rate: Decimal) -> int:
+    """Rounded up, so a credit at the locked rate covers the naira asked."""
+    return math.ceil(Decimal(amount_ngn) / rate * 10 ** one_click.USDC_DECIMALS)
 
 
 def shape(row: dict[str, Any]) -> dict[str, Any]:
