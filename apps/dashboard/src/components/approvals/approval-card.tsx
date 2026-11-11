@@ -14,7 +14,7 @@ export function ApprovalCard({ request }: { request: PaymentRequest }) {
   const handleDecline = () => decide.mutate({ id: request.id, approve: false });
 
   return (
-    <Card className="gap-3 border-brand-warm/40">
+    <Card className="gap-4 border-brand-line">
       <ApprovalSummary request={request} />
       <div className="flex flex-wrap gap-2">
         <Button variant="brand" onClick={handleApprove} disabled={decide.isPending}>

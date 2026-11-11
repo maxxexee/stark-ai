@@ -1,15 +1,7 @@
 import { cn } from "@stark/ui/utils/cn";
 import type { HTMLAttributes } from "react";
 
-/** Small uppercase label above a number or a group. */
+/** The small grey label above a number. Sentence case, never shouted. */
 export function Eyebrow({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
-  return (
-    <span
-      className={cn(
-        "tabular text-[11px] tracking-[0.08em] text-muted-foreground uppercase",
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <span className={cn("text-xs font-medium text-muted-foreground", className)} {...props} />;
 }

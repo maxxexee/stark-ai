@@ -7,7 +7,7 @@ export function ListeningCard() {
   return (
     <Card className="gap-2">
       <span className="font-medium">Telegram and the wall phone</span>
-      <p className="m-0 text-[13px] text-fg-2">
+      <p className="m-0 text-sm text-fg-2">
         Voice notes only count when they include the word “Stark”, so everyday talk in the room
         never triggers a payment.
       </p>
@@ -15,7 +15,7 @@ export function ListeningCard() {
         variant="secondary"
         nativeButton={false}
         render={<Link to="/connect" />}
-        className="min-h-10 self-start"
+        className="self-start"
       >
         <Icons.Telegram size={16} />
         Connect a chat

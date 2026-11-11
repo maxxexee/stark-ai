@@ -33,16 +33,11 @@ export function SignOut() {
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Button
-        variant="secondary"
-        onClick={handleSignOut}
-        disabled={pending}
-        className="min-h-10 self-start"
-      >
+      <Button variant="secondary" onClick={handleSignOut} disabled={pending} className="self-start">
         {pending ? <Spinner /> : null}
         Log out
       </Button>
-      {error ? <FieldError className="text-[13px]">{error}</FieldError> : null}
+      {error ? <FieldError className="text-sm">{error}</FieldError> : null}
     </div>
   );
 }

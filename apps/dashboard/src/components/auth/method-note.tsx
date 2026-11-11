@@ -7,11 +7,11 @@ const COPY: Record<Exclude<Method, "email">, string> = {
 
 export function MethodNote({ method }: { method: Exclude<Method, "email"> }) {
   return (
-    <div className="flex flex-1 flex-col justify-center gap-4 rounded-xl border border-line-2 bg-white/2 px-5 py-6">
-      <span className="grid size-10 place-items-center rounded-xl bg-brand-wash text-brand-warm">
+    <div className="flex flex-1 flex-col justify-center gap-4 rounded-card border border-border bg-surface-2 p-4">
+      <span className="grid size-8 place-items-center rounded-lg border border-border bg-card">
         <MethodIcon method={method} />
       </span>
-      <p className="m-0 max-w-[26ch] text-[14px] leading-relaxed text-fg-2">{COPY[method]}</p>
+      <p className="m-0 max-w-[26ch] text-base text-fg-2">{COPY[method]}</p>
     </div>
   );
 }

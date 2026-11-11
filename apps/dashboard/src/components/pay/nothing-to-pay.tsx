@@ -12,7 +12,7 @@ import { Link } from "@tanstack/react-router";
 
 export function NothingToPay() {
   return (
-    <Empty className="rounded-card border border-dashed border-white/12">
+    <Empty className="rounded-card border border-dashed border-border">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <Icons.Bills size={16} />

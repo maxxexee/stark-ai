@@ -21,8 +21,8 @@ export function MicButton({
       className={cn(
         "relative z-10 size-50 rounded-full lg:size-64",
         live
-          ? "border-0 bg-brand-warm text-canvas-deep shadow-[0_0_0_16px_rgba(194,65,12,0.18),0_0_0_36px_rgba(194,65,12,0.08)] hover:bg-brand-warm hover:text-canvas-deep"
-          : "border-white/16 bg-[#1a1b1a] text-fg shadow-[0_0_0_16px_rgba(255,255,255,0.03)] hover:bg-[#1f201f] hover:text-fg",
+          ? "border-0 bg-brand-warm text-canvas-deep shadow-[0_0_0_16px_var(--color-brand-tint),0_0_0_36px_var(--color-brand-wash)] hover:bg-brand-warm hover:text-canvas-deep"
+          : "border-line-2 bg-surface text-fg shadow-[0_0_0_16px_var(--color-line)] hover:bg-surface-2 hover:text-fg",
       )}
     >
       <Icons.Mic className="size-14 lg:size-18" />

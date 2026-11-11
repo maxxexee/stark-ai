@@ -6,8 +6,8 @@ export function PaymentHeadline({ bill }: { bill: Bill }) {
   return (
     <>
       <Eyebrow>{bill.plan_price_ngn ? "Plan" : "Last paid"}</Eyebrow>
-      <div className="flex flex-wrap items-baseline gap-2.5">
-        <span className="font-serif text-5xl leading-none">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="tabular text-3xl font-semibold tracking-tight">
           {bill.plan_price_ngn
             ? formatNaira(bill.plan_price_ngn)
             : bill.last_amount_ngn
@@ -15,7 +15,7 @@ export function PaymentHeadline({ bill }: { bill: Bill }) {
               : "Not yet"}
         </span>
         {bill.last_paid_at ? (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-sm text-muted-foreground">
             on {formatShortDate(bill.last_paid_at)}
           </span>
         ) : null}

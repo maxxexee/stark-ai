@@ -1,6 +1,5 @@
 import { LogoMark } from "@stark/ui/components/logo";
 import { Link } from "@tanstack/react-router";
-import { AUTH_CARD } from "@/components/auth/methods";
 
 export function AuthHeader({ step }: { step?: string }) {
   return (
@@ -8,12 +7,12 @@ export function AuthHeader({ step }: { step?: string }) {
       <Link
         to="/"
         aria-label="Stark home"
-        className="flex items-center gap-2 text-fg no-underline hover:text-fg"
+        className="flex items-center gap-2.5 text-fg no-underline hover:text-fg"
       >
-        <LogoMark size={26} cutout={AUTH_CARD} />
-        <span className="text-[15px] font-semibold">Stark</span>
+        <LogoMark size={20} cutout="#ffffff" />
+        <span className="text-base font-semibold">Stark</span>
       </Link>
-      {step ? <span className="tabular text-[12px] text-faint">{step}</span> : null}
+      {step ? <span className="tabular text-sm text-muted-foreground">{step}</span> : null}
     </header>
   );
 }

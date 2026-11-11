@@ -37,7 +37,7 @@ export function ChangePlanForm({
         </DialogDescription>
       </DialogHeader>
       <Field>
-        <FieldLabel htmlFor={id} className="font-normal text-fg-2">
+        <FieldLabel htmlFor={id} className="text-sm font-medium text-fg-2">
           Plan
         </FieldLabel>
         <PlanSelect

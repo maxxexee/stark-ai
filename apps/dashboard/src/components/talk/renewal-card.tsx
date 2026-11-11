@@ -15,18 +15,21 @@ export function RenewalCard({ due }: { due: DueBill }) {
         Bills.isPayable(due) ? { bill: due.id, amount: due.price_ngn ?? undefined } : undefined
       }
       params={Bills.isPayable(due) ? undefined : { billId: due.id }}
-      className="col-span-2 rounded-row no-underline lg:col-span-1"
+      className="col-span-2 rounded-card no-underline lg:col-span-1"
     >
       <Card
         size="sm"
         className={cn(
-          "h-full gap-0 rounded-row border-white/8 bg-white/5 transition-colors hover:border-white/25",
-          due.days_until <= 0 && "border-brand-warm/40 bg-brand-warm/10",
+          "h-full gap-0.5 transition-colors hover:border-line-2",
+          due.days_until <= 0 && "border-brand-line bg-brand-wash",
         )}
       >
         <span className="text-xs text-muted-foreground">{due.label} renews</span>
         <span
-          className={cn("font-serif text-xl", due.days_until <= 0 ? "text-brand-warm" : "text-fg")}
+          className={cn(
+            "text-xl font-semibold",
+            due.days_until <= 0 ? "text-brand-warm" : "text-fg",
+          )}
         >
           {Renewals.when(due.days_until)}
         </span>

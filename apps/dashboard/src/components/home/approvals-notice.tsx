@@ -10,7 +10,7 @@ export function ApprovalsNotice({ waiting }: { waiting: PaymentRequest[] }) {
     <section className="flex flex-col gap-2">
       <ApprovalCard request={first} />
       {rest.length ? (
-        <Link to="/approvals" className="self-start text-[13px] text-brand-warm">
+        <Link to="/approvals" className="self-start text-sm">
           {rest.length === 1 ? "One more is waiting" : `${rest.length} more are waiting`}
         </Link>
       ) : null}

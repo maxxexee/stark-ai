@@ -7,8 +7,8 @@ import { Link } from "@tanstack/react-router";
 export function AsksBeforePayingNote() {
   const { data: limits } = useQuery(limitsQuery());
   return (
-    <p className="m-0 flex items-start gap-2 text-[13px] text-fg-2">
-      <Icons.Shield size={16} className="flex-none text-brand-warm" />
+    <p className="m-0 flex items-start gap-2 text-sm text-fg-2">
+      <Icons.Shield size={16} className="flex-none text-muted-foreground" />
       <span>
         Stark always asks before paying
         {limits ? ` and won’t spend more than ${formatNaira(limits.monthly_cap_ngn)} a month` : ""}.{" "}

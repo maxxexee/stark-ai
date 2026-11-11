@@ -5,7 +5,7 @@ export function CallbackError({ error }: { error: string }) {
   const navigate = useNavigate();
   return (
     <>
-      <p role="alert" className="m-0 mt-2.5 text-[14px] leading-relaxed text-fg-2">
+      <p role="alert" className="m-0 mt-1.5 text-base text-muted-foreground">
         {error}
       </p>
       <Button
@@ -13,14 +13,14 @@ export function CallbackError({ error }: { error: string }) {
         variant="brand"
         size="lg"
         block
-        className="mt-6 h-12 text-[15px] font-semibold"
+        className="mt-6"
         onClick={() => navigate({ to: "/start" })}
       >
         Start again
       </Button>
-      <p className="m-0 mt-3 text-[13px] text-faint">
+      <p className="m-0 mt-3 text-sm text-muted-foreground">
         Or{" "}
-        <Link to="/login" className="font-medium text-brand no-underline hover:text-brand-warm">
+        <Link to="/login" className="font-medium text-brand no-underline hover:text-brand-soft">
           log in with your email
         </Link>
         .

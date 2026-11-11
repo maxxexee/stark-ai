@@ -1,6 +1,6 @@
 export function CallbackPending({ pending }: { pending: boolean }) {
   return (
-    <p className="m-0 mt-2.5 text-[14px] text-fg-2">
+    <p className="m-0 mt-1.5 text-base text-muted-foreground">
       {pending ? "One moment — finishing the handshake with Google." : "Taking you in…"}
     </p>
   );

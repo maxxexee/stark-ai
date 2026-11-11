@@ -17,7 +17,7 @@ export function OnboardingShell({
   return (
     <div className="flex min-h-dvh flex-col">
       <OnboardingHeader step={step} />
-      <main className="mx-auto flex w-full max-w-120 flex-col gap-6 px-5 pt-8 pb-16 sm:pt-12">
+      <main className="mx-auto flex w-full max-w-120 flex-col gap-6 px-4 pt-8 pb-16 sm:px-6 sm:pt-12">
         <Steps current={step} />
         <OnboardingHeading title={title} lead={lead} />
         {children}

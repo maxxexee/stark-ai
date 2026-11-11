@@ -7,7 +7,7 @@ export function Steps({ current, total = 3 }: { current: number; total?: number 
       aria-valuemin={1}
       aria-valuemax={total}
       aria-valuenow={current}
-      className="flex gap-1.5"
+      className="flex gap-1"
     >
       {Array.from({ length: total }, (_, i) => (
         <span

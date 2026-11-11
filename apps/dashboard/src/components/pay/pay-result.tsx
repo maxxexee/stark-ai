@@ -34,10 +34,10 @@ export function PayResult({
     <Card aria-live="polite">
       <div className="flex items-center gap-3">
         <IconTile>{delivered ? <Icons.Check size={16} /> : <Icons.Clock size={16} />}</IconTile>
-        <span className="font-serif text-2xl">{title}</span>
+        <span className="text-lg font-semibold">{title}</span>
       </div>
       {receipt.token ? <TokenLine token={receipt.token} /> : null}
-      {body ? <span className="text-xs text-muted-foreground">{body}</span> : null}
+      {body ? <span className="text-sm text-muted-foreground">{body}</span> : null}
       <PayResultActions onAgain={onAgain} />
     </Card>
   );

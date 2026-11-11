@@ -23,7 +23,7 @@ export function PauseCard() {
             : "Turn this off to stop every payment at once."
         }
       />
-      <p className="m-0 text-[13px] text-fg-2">
+      <p className="m-0 text-sm text-fg-2">
         Pausing stops payments from the app, Telegram and the wall phone. Stark still answers
         questions. In Telegram, send /pause or /resume.
       </p>

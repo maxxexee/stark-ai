@@ -19,7 +19,7 @@ export function RadioList<T extends string>({
       aria-label={label}
       value={value ?? null}
       onValueChange={(v) => onValueChange(v as T)}
-      className="flex flex-col gap-2"
+      className="flex flex-col divide-y divide-border overflow-hidden rounded-card border border-border bg-card shadow-card"
     >
       {children}
     </RadioGroup>
@@ -41,19 +41,19 @@ export function RadioRow({
   return (
     <label
       className={cn(
-        "flex min-h-[60px] w-full cursor-pointer items-center gap-3 rounded-row border border-border bg-card px-4 py-2.5 text-left text-sm transition-colors",
-        "has-data-checked:border-brand-warm/60 has-data-checked:bg-surface-selected",
+        "flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-surface-2",
+        "has-data-checked:bg-surface-selected",
         "has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50",
       )}
     >
       <span className="flex flex-1 flex-col">
         <span className="font-medium">{title}</span>
-        {subtitle ? <span className="text-xs text-muted-foreground">{subtitle}</span> : null}
+        {subtitle ? <span className="text-sm text-muted-foreground">{subtitle}</span> : null}
       </span>
       <RadioGroupItem
         value={value}
         disabled={disabled}
-        className="size-[18px] border-2 border-faint data-checked:border-[5px] data-checked:border-brand-warm data-checked:bg-transparent dark:data-checked:bg-transparent [&_[data-slot=radio-group-indicator]]:hidden"
+        className="size-4.5 border-2 border-faint data-checked:border-[5px] data-checked:border-brand data-checked:bg-transparent dark:data-checked:bg-transparent [&_[data-slot=radio-group-indicator]]:hidden"
       />
     </label>
   );

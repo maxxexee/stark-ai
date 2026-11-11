@@ -12,7 +12,7 @@ export function BillRow({ bill, state }: { bill: Bill; state: State }) {
     <Link to="/bills/$billId" params={{ billId: bill.id }} className={listRowClass}>
       <BillIcon bill={bill} />
       <RowText title={bill.label} subtitle={Bills.subtitle(bill)} />
-      <span className={cn("text-xs", status.attention ? "text-brand-warm" : "text-fg-2")}>
+      <span className={cn("text-sm", status.attention ? "text-brand" : "text-muted-foreground")}>
         {status.text}
       </span>
       <Icons.ChevronRight size={16} className="text-muted-foreground" />

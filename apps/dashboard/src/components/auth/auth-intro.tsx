@@ -15,13 +15,13 @@ export function AuthIntro({
   return (
     <div className="mt-10 sm:mt-12">
       <Eyebrow>{eyebrow}</Eyebrow>
-      <h1 className="m-0 mt-2 font-serif text-[34px] leading-[1.06] font-medium tracking-[-0.015em] text-fg sm:text-[42px]">
+      <h1 className="m-0 mt-1.5 text-2xl font-semibold tracking-tight text-fg">
         {title}
         <span className="text-brand">.</span>
       </h1>
-      <p className="m-0 mt-2.5 text-[14px] text-fg-2">
+      <p className="m-0 mt-1.5 text-base text-muted-foreground">
         {prompt}{" "}
-        <Link to={link.to} className="font-medium text-brand no-underline hover:text-brand-warm">
+        <Link to={link.to} className="font-medium text-brand no-underline hover:text-brand-soft">
           {link.label}
         </Link>
       </p>

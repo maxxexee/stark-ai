@@ -24,7 +24,7 @@ export function RenameBillForm({ bill, onDone }: { bill: Bill; onDone: () => voi
         <DialogDescription>This is the name Stark uses when it talks about it.</DialogDescription>
       </DialogHeader>
       <Field>
-        <FieldLabel htmlFor={id} className="font-normal text-fg-2">
+        <FieldLabel htmlFor={id} className="text-sm font-medium text-fg-2">
           Bill name
         </FieldLabel>
         <Input id={id} value={label} onChange={(e) => setLabel(e.target.value)} autoFocus />

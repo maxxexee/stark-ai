@@ -1,7 +1,6 @@
 import { usePayBill } from "@stark/api/mutations";
 import { limitsQuery, stateQuery } from "@stark/api/queries";
 import { AmountField } from "@stark/ui/components/amount-field";
-import { Card } from "@stark/ui/components/card";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
@@ -72,7 +71,7 @@ function Pay() {
   const handlePay = () => bill && pay.mutate({ bill_id: bill.id, amount_ngn: amount });
 
   return (
-    <div className="flex w-full max-w-140 flex-col gap-5 self-center">
+    <div className="flex w-full flex-col gap-6">
       <BackLink to="/">Home</BackLink>
       <PageTitle>Pay a bill</PageTitle>
 
@@ -87,7 +86,7 @@ function Pay() {
       {pay.data ? (
         <PayResult receipt={pay.data} bill={bill} onAgain={() => pay.reset()} />
       ) : (
-        <Card>
+        <div className="flex flex-col gap-4 border-t border-border pt-5">
           <PayStats remaining={limits.remaining_cap_ngn} amount={amount} />
           {pay.error ? (
             <Refused error={pay.error} onPay={handlePayOffer} />
@@ -100,7 +99,7 @@ function Pay() {
             disabled={!bill || amount <= 0 || pay.isPending}
             onClick={handlePay}
           />
-        </Card>
+        </div>
       )}
     </div>
   );

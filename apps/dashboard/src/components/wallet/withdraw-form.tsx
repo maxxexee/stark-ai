@@ -67,7 +67,7 @@ export function WithdrawForm({
         hint={resolve.data ? resolve.data.account_name : "10 digits"}
       />
       <AmountField label="Amount" value={amount} onChange={setAmount} />
-      {error ? <FieldError className="text-[13px]">{errorCopy(error)}</FieldError> : null}
+      {error ? <FieldError className="text-sm">{errorCopy(error)}</FieldError> : null}
       <Button
         size="lg"
         block

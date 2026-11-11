@@ -5,7 +5,6 @@ import { CallbackBrand } from "@/components/auth/callback-brand";
 import { CallbackError } from "@/components/auth/callback-error";
 import { CallbackPending } from "@/components/auth/callback-pending";
 import { CallbackTitle } from "@/components/auth/callback-title";
-import { AUTH_CARD } from "@/components/auth/methods";
 import { authClient } from "@/lib/auth/auth-client";
 
 /**
@@ -58,10 +57,7 @@ function AuthCallback() {
   }, [navigate]);
 
   return (
-    <div
-      className="grid min-h-dvh w-full place-items-center px-6"
-      style={{ backgroundColor: AUTH_CARD }}
-    >
+    <div className="grid min-h-dvh w-full place-items-center bg-canvas px-4">
       <div className="w-full max-w-100">
         <CallbackBrand />
         <CallbackTitle error={error} />

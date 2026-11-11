@@ -6,7 +6,7 @@ import { usePath } from "@/components/shell/use-path";
 import { NavMatch } from "@/lib/navigation/nav-match";
 
 export function DockTab({ tab: { to, label, icon: Icon, exact } }: { tab: (typeof tabs)[number] }) {
-  const path = usePath();
+  const active = NavMatch.isActive(usePath(), to, exact);
   return (
     <TooltipTrigger
       content={label}
@@ -14,10 +14,12 @@ export function DockTab({ tab: { to, label, icon: Icon, exact } }: { tab: (typeo
         <Link
           to={to}
           aria-label={label}
-          aria-current={NavMatch.isActive(path, to, exact) ? "page" : undefined}
+          aria-current={active ? "page" : undefined}
           className={cn(
-            "flex size-10.5 items-center justify-center rounded-full text-fg",
-            NavMatch.isActive(path, to, exact) && "bg-brand/25",
+            "flex size-10 items-center justify-center rounded-lg transition-colors",
+            active
+              ? "bg-brand-tint text-brand hover:text-brand"
+              : "text-fg-2 hover:bg-surface-2 hover:text-fg",
           )}
         />
       }

@@ -3,19 +3,19 @@ import { cn } from "@stark/ui/utils/cn";
 
 export function NoticedItem({ suggestion }: { suggestion: Suggestion }) {
   return (
-    <div className="flex items-start gap-2.5">
+    <div className="flex items-start gap-2">
       <span
         aria-hidden="true"
         className={cn(
-          "mt-1.5 size-1.5 shrink-0 rounded-full",
+          "mt-[7px] size-1.5 shrink-0 rounded-full",
           suggestion.severity === "alert"
             ? "bg-destructive"
             : suggestion.severity === "warn"
-              ? "bg-brand-warm"
+              ? "bg-brand"
               : "bg-faint",
         )}
       />
-      <span className="text-sm leading-relaxed">{suggestion.text}</span>
+      <span className="text-base">{suggestion.text}</span>
     </div>
   );
 }

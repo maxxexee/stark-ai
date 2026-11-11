@@ -1,9 +1,9 @@
 export function OrDivider() {
   return (
-    <div className="my-1 flex items-center gap-3 text-[12px] text-faint">
-      <span className="h-px flex-1 bg-line" />
+    <div className="my-1 flex items-center gap-3 text-xs text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
       or
-      <span className="h-px flex-1 bg-line" />
+      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }

@@ -1,8 +1,7 @@
-import { Eyebrow } from "@stark/ui/components/eyebrow";
 import { cn } from "@stark/ui/utils/cn";
 import type { ReactNode } from "react";
 
-/** Eyebrow, a hairline rule, and an optional trailing action or count. */
+/** A section title with an optional trailing action or count, on one 32px line. */
 export function SectionHeading({
   children,
   action,
@@ -13,10 +12,9 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div className={cn("mt-2 flex items-center gap-3", className)}>
-      <Eyebrow>{children}</Eyebrow>
-      <span aria-hidden="true" className="h-px flex-1 bg-white/8" />
-      {action ? <span className="text-xs text-muted-foreground">{action}</span> : null}
+    <div className={cn("flex min-h-8 items-center gap-3", className)}>
+      <h2 className="m-0 text-base font-semibold text-foreground">{children}</h2>
+      {action ? <span className="ml-auto text-sm text-muted-foreground">{action}</span> : null}
     </div>
   );
 }
