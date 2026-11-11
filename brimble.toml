@@ -38,16 +38,10 @@ health = "/"
 
 [services.stark-api.env]
 PUBLIC_URL = "https://geddon.hellostark.xyz"
-HOST = "0.0.0.0"
-# Where Flutterwave checkout sends the user back after a bank or card deposit.
-STARK_APP_URL = "https://dash.hellostark.xyz"
-# One JSON line per turn — heard, said, replied, timings, and the whole
-# exchange with the model — read back with `GET /v1/turnlog`. On only here:
-# tests, smoke runs and local demos stay silent unless they ask for it.
-STARK_TURN_LOG = "1"
-# Every secret (DATABASE_URL, NEAR_AI_API_KEY, FLW_*, TELEGRAM_*, STARK_FUNDER_*, ...)
-# lives in Infisical, project `stark`, environment `prod`, folder `/backend`.
-# apps/backend/start.sh pulls them at boot. See apps/backend/.env.example for the keys.
+# Everything the app reads — secrets and settings alike (DATABASE_URL, HOST,
+# STARK_APP_URL, STARK_TURN_LOG, FLW_*, ...) — lives in Infisical, project `stark`,
+# environment `prod`, folder `/backend`. apps/backend/start.sh pulls it at boot.
+# See apps/backend/.env.example for the keys.
 INFISICAL_PROJECT_ID = "1274ebdc-b5c0-4fe2-bfd3-a74d27f44819"
 
 # The machine identity start.sh logs in with (Infisical > Access Control > Machine
