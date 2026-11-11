@@ -27,8 +27,10 @@ bun dev                       # website, dashboard and backend together
 The backend needs one thing before it starts: `DATABASE_URL`, the pooler URL of a Neon
 Postgres branch (the schema creates itself on first boot). Sign-in needs
 `NEON_AUTH_BASE_URL`, the same branch's Auth URL — without it every `/v1` call answers
-401. Both are documented in [`apps/backend/.env.example`](apps/backend/.env.example);
-copy it to `apps/backend/.env` and fill them in. Everything else runs offline:
+401. Both are documented in [`apps/backend/.env.example`](apps/backend/.env.example)
+and stored in Infisical (`dev`, folder `/backend`): install the CLI
+(`brew install infisical/get-cli/infisical`) and run `infisical login` once, and the
+`dev` scripts pull them in. Everything else runs offline:
 payments are dry-run, nothing touches a chain, and a deterministic model stands in for
 the LLM.
 
@@ -47,10 +49,12 @@ bun smoke                     # 68 end-to-end checks (70 with the TTS sidecar up
 - **Dashboard shows no data.** The backend is not running, or is on a different port;
   the dashboard only proxies `/v1` to `127.0.0.1:8000`.
 - **Every request says 401.** You are not signed in (the dashboard routes you to
-  `/login`), or `NEON_AUTH_BASE_URL` is missing/wrong in `apps/backend/.env` — it must
+  `/login`), or `NEON_AUTH_BASE_URL` is missing/wrong in Infisical (`dev`, `/backend`) — it must
   be the Auth URL of the same Neon branch as `DATABASE_URL`.
 - **`DATABASE_URL is not set`.** The backend will not start without a Neon Postgres
-  URL; copy `apps/backend/.env.example` to `.env` and paste the pooler URL.
+  URL; set it in Infisical (`dev`, `/backend`) to the pooler URL.
+- **`infisical: command not found` / not logged in.** `brew install
+  infisical/get-cli/infisical`, then `infisical login` (pick Infisical Cloud, US).
 - **`bun: command not found`.** Install it with `curl -fsSL https://bun.sh/install | bash`.
 - **Demo numbers drifted.** `curl -X POST http://127.0.0.1:8000/v1/_stub/reset`.
 

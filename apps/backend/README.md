@@ -16,7 +16,7 @@ backend state, environment traps and what to do next, read
 
 ```sh
 cd apps/backend && bun run setup   # once: .venv with FastAPI, uvicorn, httpx
-cp .env.example .env               # then set DATABASE_URL — the server will not start without it
+infisical login                    # once: secrets come from Infisical (dev, /backend)
 bun dev:backend                    # from the repo root → http://127.0.0.1:8000, docs at /docs
 bun smoke                          # in another shell: 69 checks
 ```
@@ -32,7 +32,7 @@ variable in [`.env.example`](.env.example) switches one piece on.
 
 | Command (from `apps/backend`) | What it does |
 |---|---|
-| `.venv/bin/python -m app` | API on `HOST:PORT` (127.0.0.1:8000; no `.env` loading) |
+| `.venv/bin/python -m app` | API on `HOST:PORT` (127.0.0.1:8000; no secrets unless you wrap it in `infisical secrets-manager run`) |
 | `.venv/bin/python -m tests.smoke_test` | 69 end-to-end checks (sign-up, auth, every endpoint) against a running server; `STARK_SMOKE_BASE` points it elsewhere |
 | `.venv/bin/python -m unittest discover -s tests -t .` | the unit tests, no server needed (`bun run test` from the root) |
 | `bun tts` | the local Kokoro voice sidecar on :8010 (needs `.venv-tts`, see Voice output) |
@@ -90,8 +90,8 @@ never pass through a serializer that could change them.
 ## Running it
 
 ```sh
-bun dev:backend              # from the repo root, loads .env if present
-.venv/bin/python -m app      # or directly, from apps/backend, without .env
+bun dev:backend              # from the repo root, with secrets from Infisical (dev, /backend)
+.venv/bin/python -m app      # or directly, from apps/backend, with no secrets
 ```
 
 Both serve http://127.0.0.1:8000, with the API documented at
@@ -164,7 +164,7 @@ until you give it secrets — an unauthenticated webhook is a wallet anyone on t
 internet could talk to:
 
 ```sh
-# apps/backend/.env
+# Infisical, folder /backend
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token     # from @BotFather
 TELEGRAM_WEBHOOK_SECRET=...                  # openssl rand -hex 32
 ```
@@ -313,7 +313,7 @@ uv pip install --python .venv-tts/bin/python -r apps/backend/tts-requirements.tx
 cd apps/backend && ../../.venv-tts/bin/python tts_server.py
 ```
 
-Then set `STARK_TTS_URL=http://127.0.0.1:8010` in `.env` (see `.env.example`).
+Then set `STARK_TTS_URL=http://127.0.0.1:8010` in Infisical (see `.env.example`).
 Measured 2026-10-23 on an M1 Pro: ~2s for a typical reply on MPS and on CPU
 (RTF ~0.25–0.3, so speech arrives faster than it plays on both). `STARK_TTS_VOICE`
 picks the voice — `af_heart` (US female, default), `bf_emma` (UK female),
@@ -344,7 +344,7 @@ To judge Stark on a real conversation rather than on a test, turn the log on
 and every exchange appends one JSON line:
 
 ```sh
-STARK_TURN_LOG=1 bun dev:backend     # or add it to .env; a path works too
+STARK_TURN_LOG=1 bun dev:backend     # or set it in Infisical; a path works too
 tail -f apps/backend/logs/turns/turns.jsonl
 ```
 

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Marketing site for hellostark.xyz. React Router framework mode, pre-rendered to static HTML in build/client.",
   "scripts": {
-    "dev": "react-router dev --port 5173",
+    "dev": "infisical secrets-manager run --env=dev --path=/website --silent -- react-router dev --port 5173",
     "build": "react-router build",
     "start": "vite preview --outDir build/client --port 5173",
     "clean": "git clean -xdf .react-router .turbo build node_modules",
