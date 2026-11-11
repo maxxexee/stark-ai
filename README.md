@@ -109,8 +109,8 @@ broadcast and no contract deployed. The NEAR AI model and Whisper were called li
 | API contract | **frozen** — see [`docs/API.md`](docs/API.md) |
 | Stub server | working, 68/68 smoke checks (70 with the sidecar up), 367 unit tests |
 | App routes | **built** — plans, bill add/edit/delete, limits and wallet, additive to `/v1` |
-| VTpass client | **live auth + meter verify confirmed 2026-10-22** (33 tests) — purchases blocked by VTpass `028` product not whitelisted, **live token still unproven** |
-| Vending (M3) | **wired** — electricity, airtime, data and TV. Dry-run by default, 44 tests |
+| Flutterwave | **one provider for deposits, bills and withdrawals** (2026-11-03). Test key works for the catalogue, checkout, banks and account lookup; bills and transfers wait on IP whitelisting, so **no bill or transfer has run yet** |
+| Vending (M3) | **wired** — electricity, airtime, data and TV through Flutterwave bills, 45 tests |
 | Storage | **Neon Postgres** — accounts, wallets, receipts, channel identities; created on first boot, survives restart. Bills, limits and `units_left` stay in memory |
 | Auth | **live** — sign-up/sign-in against Neon Auth, the backend verifies sessions from its JWKS and gives every account its own wallet and receipts; `/v1` answers **401** without a bearer token |
 | Receipts | **persisted** in Neon Postgres: token ↔ tx hash ↔ request_id, per account, survives restart |

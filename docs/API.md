@@ -145,7 +145,7 @@ or `failed` payment changes none of them.
 - `kind` is one of `electricity`, `airtime`, `data`, `tv`, `internet`, `water`.
 - `reference` is the meter / phone / smartcard number. **Never a wallet address.**
 - `plan` and `plan_price_ngn` are **additive** (2026-10-22). Data and TV are sold as
-  a *plan* (a VTpass variation code such as `dstv79`), not as a free amount, so those
+  a *plan* (a Flutterwave item code such as `MD107`), not as a free amount, so those
   bills carry the plan and its vendor price. `amount_ngn` must equal
   `plan_price_ngn` or the payment is refused — a plan is not discountable. Electricity
   and airtime have no plan and take any amount inside the owner's limits.
@@ -158,7 +158,7 @@ or `failed` payment changes none of them.
 
 ### `GET /v1/plans?kind=data&provider=mtn`
 
-Every priced plan for **data** and **TV**, read from the captured VTpass catalogue.
+Every priced plan for **data** and **TV**, read from Flutterwave's live bill catalogue.
 This is the list behind the plan picker — never hardcode prices in the app, they
 change at the vendor.
 
@@ -166,25 +166,26 @@ change at the vendor.
 [
   {
     "kind": "data",
-    "provider": "mtn-data",
-    "service_name": "MTN Data",
-    "plan": "mtn-100mb-1000",
-    "label": "N1000 1.5GB - 30 days",
+    "provider": "MTN",
+    "service_name": "MTN",
+    "plan": "MD107",
+    "label": "MTN 1.5 GB",
     "price_ngn": 1000
   },
   {
     "kind": "tv",
-    "provider": "dstv",
-    "service_name": "DSTV Subscription",
-    "plan": "dstv-padi",
-    "label": "DStv Padi N1,850",
-    "price_ngn": 1850
+    "provider": "DSTV",
+    "service_name": "DSTV",
+    "plan": "CB141",
+    "label": "DSTV Access",
+    "price_ngn": 1800
   }
 ]
 ```
 
 Both query params are optional. `kind` must be `data` or `tv` (else `bad_kind`);
-`provider` loosely matches a service id or name, so `mtn` finds `mtn-data`.
+`provider` loosely matches a network name or biller code, so `mtn` finds MTN's data
+biller (`BIL104`).
 Sorted by `kind`, `provider`, then `price_ngn` ascending. `label` is the vendor's own
 string — render it as-is.
 
@@ -198,13 +199,13 @@ Add a bill. Returns **201** with the `Bill` object.
   "provider": "MTN",
   "label": "My line",
   "reference": "08031234567",
-  "plan": "mtn-100mb-1000"
+  "plan": "MD107"
 }
 ```
 
 - `kind` — `electricity`, `airtime`, `data`, `tv`, `internet`, `water`.
-- `provider` — required. For `data`/`tv`/`airtime` it must resolve to a VTpass service
-  (`MTN`, `mtn`, `Glo` all work); for `electricity` only **Ikeja Electric** is
+- `provider` — required. For `data`/`tv`/`airtime` it must resolve to a Flutterwave
+  biller (`MTN`, `mtn`, `Glo`, `9mobile` all work); for `electricity` only **Ikeja Electric** is
   confirmed today, anything else is `unsupported_product`. `internet` and `water`
   can be saved, but paying them refuses and charges nothing.
 - `reference` — meter / phone / smartcard number; whitespace is stripped, 4–32 chars.
@@ -297,7 +298,7 @@ other kinds return `null` for both.
 | `status` | Meaning | Charged? |
 |---|---|---|
 | `delivered` | The vendor confirmed; electricity also carries a `token` | yes |
-| `pending` | Still processing at the vendor — **not** paid | no, and no token |
+| `pending` | Still processing at the vendor — **not** paid | held: out of `balance_ngn`, not in `spent_ngn`; no token |
 | `failed` | The vendor refused, or the amount was wrong; nothing was charged | no |
 | `declined` | The policy gate refused it before the vendor call | no |
 | `received` | Money in (a deposit), not a payment | n/a |
@@ -306,7 +307,11 @@ other kinds return `null` for both.
 Do not render a payment as complete unless `status` is `delivered`. Only electricity
 returns a `token` — airtime, data and TV are delivered without one.
 A `pending` receipt keeps its `request_id`; sending the same intent again re-queries
-that purchase instead of buying a second time.
+that purchase instead of buying a second time. Its amount is held (2026-11-11): it
+leaves `balance_ngn` when the purchase is recorded, so it cannot be spent twice, and it
+moves to `spent_ngn` on delivery or back to `balance_ngn` on failure. The server
+re-reads pending purchases in the background, so a receipt can turn `delivered` or
+`failed` without a retry; poll `/v1/activity` to see it change.
 
 Errors: `over_per_payment_cap` (409), `over_cap` (409), `insufficient_balance` (409),
 `unknown_bill` (404), `bad_amount` (400), and `vendor_failed` (502) when the bill
@@ -319,8 +324,8 @@ delivery).
 
 Two more refusals happen before anything is recorded or bought (2026-11-03):
 
-- `float_low` (**503**): Stark's VTpass float cannot cover the purchase right now. A
-  refill has started; show `message` and offer to try again in a few minutes.
+- `float_low` (**503**): Stark's Flutterwave balance cannot cover the purchase right
+  now. Show `message` and offer to try again in a few minutes.
 - `authorisation_failed` (**502**): the user's vault did not sign the payment — its
   onchain caps refused it, or the chain could not be reached. `message` is plain
   English and ends "Nothing was charged."
@@ -487,7 +492,7 @@ payment rail is configured. `withdraw` says which ways of taking it out are on.
 ```
 
 **Test money**: nothing is collected. The entry's `source` is always `"Test money"`.
-Refused with **501** `not_available` once Bachs is configured, so a deployed app
+Refused with **501** `not_available` once Flutterwave is configured, so a deployed app
 cannot mint balance.
 
 Returns **201** with `{ "wallet": { /* GET /v1/wallet */ }, "entry": { /* Receipt */ } }`.
@@ -524,7 +529,7 @@ Returns **201**. Nothing moves yet: the balance changes when the deposit reads
 
 | `method` | `pay` | What the user does |
 |---|---|---|
-| `bank` | `{ "checkout_url" }` | open it: bank transfer, card, or USDT/USDC on Bachs's page; it returns to `/wallet/add?deposit=<id>` |
+| `bank` | `{ "checkout_url" }` | go to it in the same tab: bank transfer, card or USSD on Flutterwave's page; it returns to `/wallet/add?deposit=<id>` |
 | `crypto` | `{ asset, chain, amount, address, memo }` | send exactly `amount` of `asset` on `chain` to `address`, with `memo` when set |
 
 `status`: `open` → `confirming` (bank only) → `credited`, or `expired`, `failed`,
@@ -537,8 +542,12 @@ Errors: `bad_amount` (₦100–₦5,000,000), `bad_method`, `bad_asset` (400),
 
 ### `GET /v1/wallet/deposits/{id}` → `Deposit`, `GET /v1/wallet/deposits` → `Deposit[]`
 
-Reading an open deposit checks it with its rail first, so polling every few
-seconds is how the app sees it settle. `404 unknown_deposit` for another account's id.
+Reading an open deposit checks it with its rail first, so read it when something
+happens (the redirect lands, the user comes back) and never on a timer. Between
+reads, the `charge.completed` webhook settles a bank deposit, and Stark checks every
+open deposit itself: half its age apart, one to fifteen minutes. 1Click has no
+webhook, so that is what settles a crypto deposit. `404 unknown_deposit` for another
+account's id.
 
 ### `POST /v1/wallet/deposits/{id}/tx`
 
@@ -581,12 +590,12 @@ Returns **201**. The money leaves the balance at once (an activity entry with
 `type: "withdrawal"`, `status: "processing"`), so it cannot be spent twice.
 
 ```json
-{ "id": "wd_…", "method": "bank", "amount_ngn": 10000, "status": "reviewing",
+{ "id": "wd_…", "method": "bank", "amount_ngn": 10000, "status": "processing",
   "note": null, "crypto": null, "created_at": "…", "updated_at": "…" }
 ```
 
-`status`: `reviewing` (the payout provider is checking a new bank account) →
-`processing` → `paid`, or `returned` — the money is back in the balance and `note`
+`status`: `sending` (Flutterwave has not taken the transfer yet; it is retried with the
+same reference) → `processing` → `paid`, or `returned` — the money is back in the balance and `note`
 says why. The activity entry becomes `sent` or `failed` to match.
 
 Errors: `bad_amount` (below ₦100), `bad_account`, `insufficient_balance` (409),
@@ -621,11 +630,13 @@ over the per-withdrawal cap), `daily_limit` (409, Stark's daily crypto total is 
 `insufficient_balance` (409), `not_available` (501, no treasury key),
 `provider_failed` (502). Nothing is taken on any refusal.
 
-### `POST /v1/bachs/webhook`
+### `POST /v1/flutterwave/webhook`
 
-Bachs calls this, not the app. No bearer token: `X-Bachs-Signature-V2` (HMAC-SHA256
-of `"<t>.<raw body>"`) is checked before the body is parsed; **401**
-`webhook_unverified` otherwise, `webhook_unconfigured` while no secret is set.
+Flutterwave calls this, not the app. No bearer token: the `verif-hash` header must equal
+the secret hash set in Flutterwave's dashboard (`FLW_SECRET_HASH`); **401**
+`webhook_unverified` otherwise, `webhook_unconfigured` while it is unset. A
+`charge.completed` is never credited from its body: the deposit is verified with
+Flutterwave first. `transfer.completed` settles a withdrawal.
 
 ### `GET /v1/suggestions`
 
@@ -976,10 +987,10 @@ artboard seed so smoke runs are repeatable: the three seed bills, limits
 | Piece | Stub today | Real in |
 |---|---|---|
 | Auth | none | M4 |
-| Balances | per account, starts at ₦0. **Bachs** (bank, card, stablecoins) and **NEAR Intents** (any chain) deposits credit it; test money only while neither is configured | live once `BACHS_SECRET_KEY` / `STARK_USDC_NGN_RATE` are set — **no real deposit has run yet** |
-| Withdrawals | Bachs payouts, money held at request | live once Bachs is keyed — **never run against Bachs** |
-| Payments | every path checks the VTpass float, then signs `pay` on the user's own vault (`tx_hash`); a vendor failure refunds the vault | dry-signed by default; broadcast with `STARK_BROADCAST=1` — **per-user vaults have never been created on testnet** |
-| Token | **vended through VTpass**, fixtures in dry-run, real when `STARK_VENDING=live` | M3 — **live credentials still missing, so no real token has ever been bought** |
+| Balances | per account, starts at ₦0. **Flutterwave** (bank transfer, card, USSD) and **NEAR Intents** (any chain) deposits credit it; test money only while neither is configured | live once `FLW_SECRET_KEY` + `STARK_APP_URL` / `STARK_USDC_NGN_RATE` are set — **no real deposit has run yet** |
+| Withdrawals | Flutterwave transfers, money held at request | live once Flutterwave is keyed and the server IP is whitelisted — **never run against Flutterwave** |
+| Payments | every path checks Stark's Flutterwave balance, then signs `pay` on the user's own vault (`tx_hash`); a vendor failure refunds the vault | dry-signed by default; broadcast with `STARK_BROADCAST=1` — **per-user vaults have never been created on testnet** |
+| Token | **vended through Flutterwave bills**; a `FLWSECK_TEST-` key uses Flutterwave's test environment | **blocked on IP whitelisting, so no bill has been bought yet** |
 | Voice | **real** — Whisper hears the clip; `transcript_hint` remains a probe | M4a done. Voice notes in Telegram and the browser both work |
 | Suggestions | **computed** from meter, telemetry, delivered receipts and renewals; empty when the data is not there | M6 (the AC sensor makes `load_imbalance` routine rather than demo data) |
 | Persistence | **Neon Postgres**: accounts, wallets, receipts, bills, limits, readings and channel identities, scoped per account, consistent across restarts | M3 + auth |
@@ -1009,4 +1020,5 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | `GET /v1/demo`: a public, read-only sample account (no auth). Additive only. |
 | 2026-11-03 | `GET /v1/payees`: each saved bill with its delivered totals (this month, all time, count). Additive only. |
 | 2026-11-03 | **Money flow.** Deposits: `GET /v1/wallet/methods`, `POST`/`GET /v1/wallet/deposits`, `GET /v1/wallet/deposits/{id}`, `POST /v1/wallet/deposits/{id}/tx`, `GET /v1/wallet/crypto-assets`. Withdrawals: `GET /v1/wallet/banks`, `POST /v1/wallet/bank-accounts/resolve`, `GET /v1/wallet/withdrawals`; `POST /v1/wallet/withdraw` now takes `bank_code` + `account_number` and returns a `Withdrawal` instead of 501. `POST /v1/bachs/webhook`. `POST /v1/wallet/topup` answers 501 once Bachs is configured. Payments gain `float_low` (503) and `authorisation_failed` (502); `tx_hash` is set on every path when a chain is configured. New codes `unknown_deposit`, `bad_method`, `bad_asset`, `bad_tx`, `bad_account`, `provider_failed`. |
+| 2026-11-03 | **One provider: Flutterwave.** Bachs and VTpass are gone. Deposits are Flutterwave checkout, bills are Flutterwave bill payments, withdrawals are Flutterwave transfers, all from one NGN balance. `POST /v1/bachs/webhook` → `POST /v1/flutterwave/webhook` (`verif-hash`). Plan codes are Flutterwave item codes (`MD107`, `CB141`) and `GET /v1/plans` providers are network names (`MTN`, `DSTV`). A bank `Withdrawal` starts `sending` instead of `reviewing`. Showmax is no longer sold. |
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
