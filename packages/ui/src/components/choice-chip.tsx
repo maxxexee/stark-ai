@@ -13,13 +13,9 @@ export function ChoiceChip({ selected, size = "lg", className, ...props }: Choic
     <Toggle
       pressed={selected}
       className={cn(
-        "h-auto cursor-pointer border font-normal",
-        size === "lg"
-          ? "min-h-12 rounded-xl text-[15px]"
-          : "min-h-9 rounded-full px-3.5 text-[13px]",
-        "border-border text-foreground hover:border-white/16 hover:bg-card",
-        size === "lg" ? "bg-card" : "bg-secondary",
-        "aria-pressed:border-brand-warm/60 aria-pressed:bg-brand-tint aria-pressed:text-brand-soft",
+        "cursor-pointer rounded-lg border border-border bg-card font-medium text-foreground shadow-control hover:bg-muted",
+        size === "lg" ? "h-10 text-base" : "h-8 px-3 text-sm",
+        "aria-pressed:border-brand-line aria-pressed:bg-brand-wash aria-pressed:text-brand aria-pressed:hover:bg-brand-tint",
         className,
       )}
       {...props}

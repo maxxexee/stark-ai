@@ -20,15 +20,17 @@ export function Notice({
   return (
     <section
       className={cn(
-        "flex flex-wrap items-center gap-3 rounded-card border p-4",
-        tone === "brand" ? "border-brand-warm/40 bg-brand-wash" : "border-line bg-surface",
+        "flex flex-wrap items-center gap-3 rounded-card border px-4 py-3",
+        tone === "brand" ? "border-brand-line bg-brand-wash" : "border-border bg-card",
         className,
       )}
     >
-      {icon}
-      <span className="flex flex-[1_1_240px] flex-col">
+      {icon ? (
+        <span className="flex size-5 flex-none items-center justify-center text-brand">{icon}</span>
+      ) : null}
+      <span className="flex flex-[1_1_240px] flex-col gap-0.5">
         <span className="font-medium">{title}</span>
-        {children ? <span className="text-[13px] text-fg-2">{children}</span> : null}
+        {children ? <span className="text-sm text-fg-2">{children}</span> : null}
       </span>
       {actions}
     </section>

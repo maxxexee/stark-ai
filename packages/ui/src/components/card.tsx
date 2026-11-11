@@ -11,7 +11,7 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-3.5 overflow-hidden rounded-card border border-border bg-card p-(--card-spacing) text-card-foreground [--card-spacing:--spacing(5)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 ",
+        "group/card flex flex-col gap-4 overflow-hidden rounded-card border border-border bg-card p-(--card-spacing) text-card-foreground shadow-card [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 ",
         className,
       )}
       {...props}
@@ -24,7 +24,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
+        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
         className,
       )}
       {...props}
@@ -36,10 +36,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn(
-        "font-serif text-xl leading-snug font-medium group-data-[size=sm]/card:text-lg",
-        className,
-      )}
+      className={cn("text-lg font-semibold group-data-[size=sm]/card:text-base", className)}
       {...props}
     />
   );
@@ -74,7 +71,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-footer"
       className={cn(
-        "-mx-(--card-spacing) flex items-center rounded-b-xl border-t bg-muted/50 p-(--card-spacing)",
+        "-mx-(--card-spacing) flex items-center border-t bg-muted/50 p-(--card-spacing)",
         className,
       )}
       {...props}

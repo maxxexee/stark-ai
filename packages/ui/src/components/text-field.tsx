@@ -14,11 +14,11 @@ export function TextField({
   const inputId = id ?? autoId;
   return (
     <Field className={className}>
-      <FieldLabel htmlFor={inputId} className="text-fg-2 font-normal">
+      <FieldLabel htmlFor={inputId} className="text-sm font-medium text-fg-2">
         {label}
       </FieldLabel>
       <Input id={inputId} {...props} />
-      {hint ? <FieldDescription className="text-xs">{hint}</FieldDescription> : null}
+      {hint ? <FieldDescription className="text-sm">{hint}</FieldDescription> : null}
     </Field>
   );
 }
