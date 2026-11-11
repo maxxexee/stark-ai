@@ -10,7 +10,7 @@ export function MoneyMoves({ moves }: { moves: Receipt[] }) {
         <ActivityRow key={r.id} receipt={r} />
       ))}
       {!moves.length ? (
-        <Empty className="rounded-row border border-dashed border-white/12 p-6">
+        <Empty className="rounded-card border border-dashed border-border p-6">
           <EmptyDescription>No money in or out yet.</EmptyDescription>
         </Empty>
       ) : null}

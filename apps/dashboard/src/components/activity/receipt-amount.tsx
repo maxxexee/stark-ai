@@ -8,7 +8,7 @@ export function ReceiptAmount({ receipt }: { receipt: Receipt }) {
     <div className="flex flex-col gap-1">
       <span
         className={cn(
-          "font-serif text-5xl leading-none",
+          "tabular text-3xl font-semibold tracking-tight",
           receipt.status === "declined" && "text-muted-foreground",
         )}
       >
@@ -16,7 +16,7 @@ export function ReceiptAmount({ receipt }: { receipt: Receipt }) {
           sign: receipt.type === "deposit",
         })}
       </span>
-      <span className="text-xs text-muted-foreground">
+      <span className="text-sm text-muted-foreground">
         {receipt.bill_label} · {formatDateTime(receipt.created_at)}
       </span>
     </div>

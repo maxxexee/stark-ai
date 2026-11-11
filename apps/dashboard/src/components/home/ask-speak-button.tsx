@@ -10,9 +10,8 @@ export function AskSpeakButton() {
       aria-label="Speak instead"
       nativeButton={false}
       render={<Link to="/talk" />}
-      className="size-10 rounded-full"
     >
-      <Icons.Mic className="size-4.5" />
+      <Icons.Mic className="size-4" />
     </InputGroupButton>
   );
 }

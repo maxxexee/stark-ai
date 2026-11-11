@@ -35,9 +35,9 @@ function Withdraw() {
   const [sent, setSent] = useState<Withdrawal | null>(null);
 
   return (
-    <div className="flex w-full max-w-120 flex-col gap-6 self-center">
+    <div className="flex w-full flex-col gap-6">
       <BackLink to="/wallet">Wallet</BackLink>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5">
         <PageTitle>Withdraw</PageTitle>
         <p className="m-0 text-fg-2">
           Send money out of your balance. You have {formatNaira(wallet.balance_ngn)}.

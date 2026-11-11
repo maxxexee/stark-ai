@@ -17,9 +17,8 @@ export function Refused({ error, onPay }: { error: Error; onPay: (amount: number
   return (
     <div role="alert">
       <Notice
-        icon={<Icons.Warning size={16} className="text-brand-warm" />}
+        icon={<Icons.Warning size={16} />}
         title={errorCopy(error)}
-        className="rounded-row p-3.5"
         actions={
           offer ? (
             <Button variant="secondary" onClick={() => onPay(offer)}>

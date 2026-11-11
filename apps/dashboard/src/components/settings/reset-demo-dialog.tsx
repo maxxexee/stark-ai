@@ -28,9 +28,7 @@ export function ResetDemoDialog() {
             The seeded bills, balance and history come back. Bills you added are removed.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {reset.error ? (
-          <FieldError className="text-[13px]">{errorCopy(reset.error)}</FieldError>
-        ) : null}
+        {reset.error ? <FieldError className="text-sm">{errorCopy(reset.error)}</FieldError> : null}
         <AlertDialogFooter>
           <AlertDialogCancel variant="secondary">Keep my data</AlertDialogCancel>
           <Button

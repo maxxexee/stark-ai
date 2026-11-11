@@ -12,7 +12,7 @@ export function BillHeader({
   firstPaid: string | undefined;
 }) {
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2">
       <BillTitle bill={bill} attention={attention} />
       <BillFacts bill={bill} firstPaid={firstPaid} />
     </div>

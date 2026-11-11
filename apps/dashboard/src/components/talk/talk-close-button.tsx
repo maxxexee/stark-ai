@@ -6,13 +6,12 @@ export function TalkCloseButton() {
   return (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size="icon"
       aria-label="Close"
       nativeButton={false}
       render={<Link to="/" />}
-      className="size-9"
     >
-      <Icons.Close className="size-5" />
+      <Icons.Close />
     </Button>
   );
 }

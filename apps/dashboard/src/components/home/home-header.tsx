@@ -12,14 +12,12 @@ export function HomeHeader({
   paused: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[13px] text-muted-foreground">
+    <div className="flex flex-col gap-1">
+      <span className="text-sm text-muted-foreground">
         {greeting()}, {firstName}
       </span>
-      <div className="flex flex-wrap items-center gap-2.5">
-        <h1 className="m-0 font-serif text-[34px] leading-[1.1] font-medium tracking-[-0.01em]">
-          {HomeHeadline.text(needing)}
-        </h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="m-0 text-2xl font-semibold tracking-tight">{HomeHeadline.text(needing)}</h1>
         <StatusPill tone={paused ? "muted" : "brand"}>
           {paused ? "Stark is paused" : "Stark is on"}
         </StatusPill>

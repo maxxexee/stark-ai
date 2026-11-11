@@ -78,7 +78,7 @@ export function BillForm({
           required
           value={reference}
           onChange={(e) => setReference(e.target.value)}
-          className="[&_input]:tabular [&_input]:tracking-[0.04em]"
+          className="[&_input]:tabular"
         />
 
         {sellsPlans ? (

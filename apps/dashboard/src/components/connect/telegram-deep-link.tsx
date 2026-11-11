@@ -14,7 +14,7 @@ export function TelegramDeepLink({
       href={href}
       target="_blank"
       rel="noreferrer"
-      className={cn(buttonVariants(), "min-h-10 self-start")}
+      className={cn(buttonVariants(), "self-start text-white hover:text-white")}
     >
       <Icons.Telegram size={16} />
       Open @{botUsername} in Telegram

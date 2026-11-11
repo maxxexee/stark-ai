@@ -15,13 +15,13 @@ export function AskStark() {
 
   return (
     <form className="m-0" onSubmit={handleAskStark}>
-      <InputGroup className="h-auto rounded-full border-white/10 bg-surface py-1.5 pr-1.5 pl-4.5 dark:bg-surface">
+      <InputGroup className="h-10 pr-1 pl-3">
         <InputGroupInput
           aria-label="Ask Stark"
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Ask Stark: “buy 2GB for my line”"
-          className="h-auto px-0 py-2 text-[15px]"
+          className="h-full px-0 py-0 text-base shadow-none"
         />
         <InputGroupAddon align="inline-end" className="py-0">
           {text.trim() ? <AskSendButton /> : <AskSpeakButton />}

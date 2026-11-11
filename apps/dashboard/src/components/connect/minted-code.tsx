@@ -5,13 +5,13 @@ export function MintedCode({ minted }: { minted: LinkCode }) {
   return (
     <div
       aria-live="polite"
-      className="flex flex-col items-start gap-2 rounded-row bg-surface-3 px-4 py-3.5"
+      className="flex flex-col items-start gap-2 rounded-lg bg-muted px-4 py-3"
     >
-      <span className="text-[13px] text-fg-2">Send this to the bot</span>
-      <span className="tabular font-mono text-[28px] leading-none tracking-[0.3em]">
+      <span className="text-sm text-fg-2">Send this to the bot</span>
+      <span className="tabular font-mono text-2xl font-semibold tracking-widest">
         {minted.code}
       </span>
-      <span className="text-[12px] text-muted-foreground">
+      <span className="text-xs text-muted-foreground">
         Expires in {Math.round(minted.expires_in / 60)} minutes.{" "}
         {minted.deep_link
           ? "One chat only, and /unlink ends it."
