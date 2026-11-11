@@ -16,7 +16,7 @@
     "dev": {
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["NEAR_AI_*", "VTPASS_*", "TELEGRAM_*", "STARK_*", "VITE_STARK_*"]
+      "passThroughEnv": ["NEAR_AI_*", "FLW_*", "TELEGRAM_*", "STARK_*", "VITE_STARK_*"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],

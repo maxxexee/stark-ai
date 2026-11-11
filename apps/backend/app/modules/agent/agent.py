@@ -1592,7 +1592,7 @@ def build_agent(toolbox: ToolBox, limits: Limits) -> Agent:
     """Real model when a key is configured, deterministic model otherwise.
 
     The server calls this, so the key stays a config value and a checkout with no
-    key still runs — the same way `vtpass.py` is dry-run by default.
+    key still runs.
     """
     if os.environ.get("NEAR_AI_API_KEY"):
         return Agent(model=NearAiModel(), toolbox=toolbox, limits=limits)

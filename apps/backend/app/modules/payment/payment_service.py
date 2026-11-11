@@ -4,22 +4,24 @@
 
 Inside "this", in order:
 
-0. **Can it be paid at all?** The VTpass float must cover it (`FloatService`), and
+0. **Can it be paid at all?** Stark's Flutterwave balance must cover it (`FloatService`), and
    the user's vault must authorise it (`VaultService` signs `pay`, or `pay_approved`
-   for an amount the owner approved over the caps). Either refusal happens before
-   anything is recorded or bought. A retry of a pending purchase skips this: it
+   for an amount the owner approved over the caps). Either refusal leaves nothing
+   recorded or bought. A retry of a pending purchase skips this: it
    was authorised the first time, and signing again would spend twice onchain.
-1. **Record it before buying.** The receipt exists with a `request_id` and status
-   `pending` *before* the vendor is called. If the process dies mid-purchase, the id
-   survives and the purchase can be re-queried instead of duplicated — which is the
-   only way to survive VTpass's duplicate rule (`019`).
-2. **Charge only on delivery.** `pending` and `failed` never move money. A retry of
-   the same intent re-queries the same `request_id` and settles it if the vendor
-   delivered in the meantime. A `failed` purchase gives the vault its money and
-   allowance back (`refund`).
+1. **Hold the money and record it before buying.** One statement takes the amount
+   out of the balance and writes the receipt with a `request_id` and status
+   `pending`, *before* the vendor is called — or refuses if the balance is short. So
+   two payments at the same moment cannot both spend the same naira, and if the
+   process dies mid-purchase the id survives and the purchase can be re-queried
+   instead of duplicated (Flutterwave refuses a reused bill `reference`).
+2. **Settle on the vendor's answer.** `delivered` turns the hold into spend; `failed`
+   puts it back in the balance and gives the vault its money and allowance back
+   (`refund`). Both are one statement that only moves a receipt still `pending`, so
+   a retry and the background check (`settle`, from the money loop) can race on the
+   same purchase and only one of them settles it.
 
-Charging moves the balance and writes the receipt in one statement, so the balance
-and the history cannot disagree after a restart.
+A held amount is not spend: the monthly cap counts only delivered payments.
 """
 
 from __future__ import annotations
@@ -28,10 +30,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable
 
+from app.common.clock import Clock
 from app.modules.liquidity.float_service import FloatService
 from app.modules.receipt import receipt_repository as receipts_mod
 from app.modules.vault.vault_service import AuthorisationFailed, VaultService
-from app.modules.vending import vtpass
 from app.modules.vending import vending as vending_mod
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.vending.vending import VendingGateway, VendingOutcome
@@ -40,6 +42,9 @@ from app.modules.vending.vending import VendingGateway, VendingOutcome
 VENDOR_FAILED = "vendor_failed"
 INSUFFICIENT_BALANCE = "insufficient_balance"
 AUTHORISATION_FAILED = "authorisation_failed"
+# A purchase Flutterwave never answered is given up after this long. It leaves the
+# user uncharged whichever way it went; if it did land, Stark paid for it.
+NO_ANSWER_MINUTES = 30
 
 
 class SpendError(Exception):
@@ -76,113 +81,98 @@ class PaymentService:
     def pay(self, user_id: str, bill: dict, amount_ngn: int, *,
             approved: bool = False) -> dict:
         """Book a payment for one account. Returns the stored receipt row."""
+        token_required = bill["kind"] == "electricity"
         pending = self.store.find_pending(user_id, bill["id"], amount_ngn)
         if pending is not None:
-            return self._settle_retry(user_id, pending, amount_ngn)
+            return self.settle(user_id, pending, token_required=token_required)
 
         if self.floats is not None:
             self.floats.ensure_can_cover(amount_ngn)
-        authorisation = None
-        if self.vaults is not None:
-            try:
-                authorisation = self.vaults.authorise_payment(
-                    user_id, str(bill.get("reference") or ""), amount_ngn, approved=approved
-                )
-            except AuthorisationFailed as err:
-                raise SpendError(AUTHORISATION_FAILED, err.message) from err
-
-        receipt = self.store.create(
-            user_id,
-            {
+        try:
+            receipt, _ = self.store.record_debit(user_id, {
                 "id": f"rcpt_{uuid.uuid4().hex[:6]}",
-                "request_id": vtpass.new_request_id(),
+                "request_id": f"bill_{uuid.uuid4().hex[:20]}",
                 "bill_id": bill["id"],
                 "bill_label": bill["label"],
                 "meter": str(bill.get("reference") or ""),
                 "amount_ngn": amount_ngn,
                 "units": None,
                 "token": None,
-                "tx_hash": authorisation.tx_hash if authorisation else None,
+                "tx_hash": None,
                 "status": vending_mod.PENDING,
                 "vendor": None,
                 "vendor_code": None,
                 "vendor_message": None,
                 "created_at": self.clock(),
-            }
-        )
+            }, amount_ngn)
+        except ValueError:
+            raise SpendError(INSUFFICIENT_BALANCE,
+                             "There isn't enough in your balance for that.",
+                             {"amount_ngn": amount_ngn}) from None
 
-        if authorisation is not None and authorisation.payment_id is not None:
-            self.vaults.record_payment(user_id, receipt["id"], authorisation.payment_id)
+        if self.vaults is not None:
+            try:
+                authorisation = self.vaults.authorise_payment(
+                    user_id, str(bill.get("reference") or ""), amount_ngn, approved=approved
+                )
+            except AuthorisationFailed as err:
+                self.store.drop_hold(user_id, receipt["id"])
+                raise SpendError(AUTHORISATION_FAILED, err.message) from err
+            if authorisation is not None:  # None: no chain configured
+                receipt = self.store.update(user_id, receipt["id"],
+                                            tx_hash=authorisation.tx_hash)
+                if authorisation.payment_id is not None:
+                    self.vaults.record_payment(user_id, receipt["id"],
+                                               authorisation.payment_id)
 
         outcome = self.gateway.buy(bill, amount_ngn, receipt["request_id"])
-        return self._apply(user_id, receipt, outcome, amount_ngn)
+        return self._apply(user_id, receipt, outcome)
 
-    def _settle_retry(self, user_id: str, pending: dict, amount_ngn: int) -> dict:
-        outcome = self.gateway.requery(pending["request_id"], amount_ngn)
-        if outcome.status == vending_mod.FAILED:
-            self.store.update(
-                user_id,
-                pending["id"],
-                status=vending_mod.FAILED,
-                vendor_code=outcome.code,
-                vendor_message=outcome.message,
-            )
-            self._give_back(user_id, pending["id"])
-            raise SpendError(VENDOR_FAILED, outcome.message, {"code": outcome.code})
-        return self._apply(user_id, pending, outcome, amount_ngn)
+    def settle(self, user_id: str, pending: dict, *, token_required: bool) -> dict:
+        """Ask the vendor about a pending purchase and settle it if it has an answer.
 
-    def _apply(
-        self, user_id: str, receipt: dict, outcome: VendingOutcome, amount_ngn: int
-    ) -> dict:
+        Called by a retry of the same intent and by the money loop. A purchase the
+        vendor never acknowledged is given up after `NO_ANSWER_MINUTES`.
+        """
+        if pending["vendor_ref"] is not None:
+            outcome = self.gateway.requery(pending["vendor_ref"], pending["amount_ngn"],
+                                           token_required=token_required)
+        elif pending["created_at"] > Clock.ago(minutes=NO_ANSWER_MINUTES):
+            return pending
+        else:
+            outcome = VendingOutcome(status=vending_mod.FAILED, code="no_answer",
+                                     message="That payment didn't go through. "
+                                             "Nothing was charged.")
+        return self._apply(user_id, pending, outcome)
+
+    def _apply(self, user_id: str, receipt: dict, outcome: VendingOutcome) -> dict:
         common = {
             "vendor": outcome.vendor,
             "vendor_code": outcome.code,
+            "vendor_ref": outcome.vendor_ref,
             "vendor_message": outcome.message,
         }
 
         if outcome.status == vending_mod.FAILED:
-            self.store.update(user_id, receipt["id"], status=vending_mod.FAILED, **common)
-            self._give_back(user_id, receipt["id"])
+            if self.store.finish(user_id, receipt["id"], vending_mod.FAILED,
+                                 **common) is not None:
+                self._give_back(user_id, receipt["id"])
             raise SpendError(VENDOR_FAILED, outcome.message, {"code": outcome.code})
 
-        if (
-            outcome.status == vending_mod.DELIVERED
-            and outcome.token_required
-            and not outcome.token
-        ):
-            # A metered product that reports delivered with no token is not something
-            # to charge for. Treat it as still in flight and let the retry settle it.
-            # Airtime and TV legitimately have no token, so they skip this.
-            self.store.update(user_id, receipt["id"], status=vending_mod.PENDING, **common)
+        # A metered product that reports delivered with no token is not something to
+        # charge for: it stays in flight for the next check. Airtime and TV
+        # legitimately have no token, so they skip this.
+        missing_token = outcome.token_required and not outcome.token
+        if not outcome.ok or missing_token:
+            return self.store.update(user_id, receipt["id"], **common)  # type: ignore[return-value]
+
+        settled = self.store.finish(user_id, receipt["id"], vending_mod.DELIVERED,
+                                    token=outcome.token, units=outcome.units, **common)
+        if settled is None:  # the other caller settled it first
             return self.store.get(user_id, receipt["id"])  # type: ignore[return-value]
-
-        if not outcome.ok:
-            self.store.update(user_id, receipt["id"], status=vending_mod.PENDING, **common)
-            return self.store.get(user_id, receipt["id"])  # type: ignore[return-value]
-
-        try:
-            self.store.charge(user_id, amount_ngn)
-        except ValueError:
-            failure = dict(common)
-            failure["vendor_message"] = "insufficient balance at settlement"
-            self.store.update(user_id, receipt["id"], status=vending_mod.FAILED, **failure)
-            raise SpendError(
-                INSUFFICIENT_BALANCE,
-                "There isn't enough in your balance for that.",
-                {"amount_ngn": amount_ngn},
-            ) from None
-
-        settled = self.store.update(
-            user_id,
-            receipt["id"],
-            status=outcome.status,
-            token=outcome.token,
-            units=outcome.units,
-            **common,
-        )
         if self.floats is not None:
             self.floats.check_level()
-        return settled  # type: ignore[return-value]
+        return settled
 
     def _give_back(self, user_id: str, receipt_id: str) -> None:
         """The vendor did not deliver: return the vault's money and allowance."""

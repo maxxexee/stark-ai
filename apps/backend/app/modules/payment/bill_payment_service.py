@@ -8,6 +8,7 @@ The purchase itself, and the charge that only follows a delivery, happen in
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -20,6 +21,10 @@ from app.modules.payment import payment_service
 from app.modules.payment.payment_service import PaymentService
 from app.modules.receipt import receipt_repository
 from app.modules.wallet.wallet_service import WalletService
+
+log = logging.getLogger("stark.payments")
+# A purchase that came back pending is first re-read this long after it was made.
+SETTLE_AFTER_MINUTES = 1
 
 
 class BillPaymentService:
@@ -69,6 +74,28 @@ class BillPaymentService:
         if receipt.get("status") == "delivered":
             self.bills.apply_delivery(account_id, receipt)
         return receipt_repository.api_shape(receipt)
+
+    def settle_pending(self) -> None:
+        """Settle purchases that came back pending, without waiting for a retry.
+
+        Run by the money loop. Each one is settled exactly as a retry would settle
+        it; a delivery also updates its bill. One account failing does not stop the
+        rest.
+        """
+        for receipt in self.payments.store.pending_purchases(
+                Clock.ago(minutes=SETTLE_AFTER_MINUTES)):
+            account_id = receipt["user_id"]
+            try:
+                bill = self.bills.get(account_id, receipt["bill_id"])
+                settled = self.payments.settle(
+                    account_id, receipt, token_required=bill["kind"] == "electricity")
+            except payment_service.SpendError:
+                continue  # failed at the vendor: the hold is back in the balance
+            except Exception:
+                log.exception("settling %s for %s failed", receipt["id"], account_id)
+                continue
+            if settled["status"] == "delivered":
+                self.bills.apply_delivery(account_id, settled)
 
     def record_declined(self, account_id: str, bill_id: str, bill_label: str,
                         amount: int, reason: str) -> dict[str, Any]:

@@ -2,8 +2,8 @@
 
 Two things live here that matter more than the storage itself:
 
-1. **`request_id` is the idempotency key.** VTpass books a second sale if the same
-   purchase is retried with a new id (code `019`). A receipt therefore stores its
+1. **`request_id` is the idempotency key.** It is the bill's `reference` at
+   Flutterwave, which refuses a reused one. A receipt therefore stores its
    `request_id` from the moment it is created, and a retry of the same intent finds
    that row and reuses the id. `find_pending()` is how the payment path does it.
 2. **The wallet is persisted next to the receipts.** Otherwise a restart would keep
@@ -34,11 +34,12 @@ from app.database import neon
 RECEIPT_COLUMNS = (
     "id", "user_id", "request_id", "bill_id", "bill_label", "meter", "amount_ngn",
     "units", "token", "tx_hash", "status", "entry_type", "source",
-    "vendor", "vendor_code", "vendor_message", "created_at",
+    "vendor", "vendor_code", "vendor_ref", "vendor_message", "created_at",
 )
 
 UPDATABLE = frozenset({
-    "units", "token", "tx_hash", "status", "vendor", "vendor_code", "vendor_message",
+    "units", "token", "tx_hash", "status", "vendor", "vendor_code", "vendor_ref",
+    "vendor_message",
 })
 
 
@@ -125,7 +126,7 @@ class ReceiptRepository:
     ) -> dict[str, Any] | None:
         """The newest unfinished purchase for this exact intent.
 
-        A retry must reuse its `request_id`, or VTpass books a duplicate sale.
+        A retry must settle this one, by its `vendor_ref`, rather than buy again.
         """
         return _typed(self.db.one(
             "SELECT * FROM receipts WHERE user_id = $1 AND bill_id = $2"
@@ -203,10 +204,14 @@ class ReceiptRepository:
             "spent_ngn": int(row["wallet"]["spent_ngn"]),
         }
 
-    def record_withdrawal(
+    def record_debit(
         self, user_id: str, receipt: dict[str, Any], amount_ngn: int
     ) -> tuple[dict[str, Any], dict[str, int]]:
-        """Insert the activity entry and debit the wallet, or raise if short."""
+        """Insert the activity entry and debit the wallet, or raise if short.
+
+        This is how money is held before it goes anywhere: a withdrawal before it is
+        sent, a bill purchase before the vendor is called (closed by `finish`).
+        """
         head, user_index, amount_index = _insert_sql(from_wallet=True)
         values = _values(receipt, user_id)
         amount = int(amount_ngn)
@@ -253,22 +258,57 @@ class ReceiptRepository:
         )
         return float(row["units"]), row["first_at"]
 
-    def charge(self, user_id: str, amount_ngn: int) -> dict[str, int]:
-        """Move money from balance to spend, atomically.
+    def pending_purchases(self, created_before: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Bill purchases still in flight, across every account, oldest first."""
+        return [
+            _typed(row) or {}
+            for row in self.db.query(
+                "SELECT * FROM receipts WHERE status = 'pending' AND created_at <= $1"
+                " AND COALESCE(entry_type, 'bill') IN ('bill', 'autotopup')"
+                " ORDER BY created_at, seq LIMIT $2",
+                [created_before, int(limit)],
+            )
+        ]
 
-        Raises `ValueError` if the balance can no longer cover it — the caller must
-        not book a delivery it cannot pay for.
+    def finish(self, user_id: str, receipt_id: str, status: str,
+               **fields: Any) -> dict[str, Any] | None:
+        """Close a pending purchase and settle the money it held, in one statement.
+
+        The amount left the balance when the purchase was recorded (`record_debit`).
+        `delivered` turns it into spend; `failed` puts it back in the balance. Only a
+        receipt that is still `pending` moves, so when a retry and the background
+        check settle the same purchase at once, exactly one of them does and the
+        other gets None.
         """
-        amount = int(amount_ngn)
-        row = self.db.one(
-            "UPDATE wallets SET balance_ngn = balance_ngn - $2, spent_ngn = spent_ngn + $2"
-            " WHERE user_id = $1 AND balance_ngn >= $2"
-            " RETURNING balance_ngn, spent_ngn",
-            [user_id, amount],
+        wallet = {
+            "delivered": "spent_ngn = spent_ngn + r.amount_ngn",
+            "failed": "balance_ngn = balance_ngn + r.amount_ngn",
+        }[status]
+        unknown = set(fields) - UPDATABLE
+        if unknown:
+            raise ValueError(f"cannot update {sorted(unknown)}")
+        assignments = "".join(
+            f", {name} = ${index + 4}" for index, name in enumerate(fields)
         )
-        if row is None:
-            raise ValueError("insufficient_balance")
-        return {"balance_ngn": int(row["balance_ngn"]), "spent_ngn": int(row["spent_ngn"])}
+        return _typed(self.db.one(
+            f"WITH r AS (UPDATE receipts SET status = $3{assignments}"
+            " WHERE id = $1 AND user_id = $2 AND status = 'pending' RETURNING *)"
+            f", w AS (UPDATE wallets SET {wallet} FROM r WHERE wallets.user_id = r.user_id)"
+            " SELECT * FROM r",
+            [receipt_id, user_id, status, *fields.values()],
+        ))
+
+    def drop_hold(self, user_id: str, receipt_id: str) -> None:
+        """Undo a purchase that was refused before anything was bought: the pending
+        entry goes and its amount returns to the balance, in one statement."""
+        self.db.query(
+            "WITH r AS (DELETE FROM receipts"
+            " WHERE id = $1 AND user_id = $2 AND status = 'pending'"
+            " RETURNING user_id, amount_ngn)"
+            " UPDATE wallets SET balance_ngn = balance_ngn + r.amount_ngn"
+            " FROM r WHERE wallets.user_id = r.user_id",
+            [receipt_id, user_id],
+        )
 
     # --- test / demo seam ----------------------------------------------------
 

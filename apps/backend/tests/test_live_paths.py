@@ -2,12 +2,13 @@
 
 The rest of the suite mocks `_http` and `urlopen`, so the wire is never
 exercised — auth headers, JSON bodies, multipart encoding and JSON-RPC framing
-are only proven against fixtures. These tests start a real `http.server` on
+are only proven against fakes. These tests start a real `http.server` on
 127.0.0.1 and point each client at it, so the code that will run with
 credentials is tested without any credentials and without leaving the machine.
 
 Covered:
-  * VTpass      GET /service-variations, POST /merchant-verify, /pay, /requery
+  * Flutterwave POST /payments, /billers/{b}/items/{i}/payment, /transfers;
+                GET /bills/{ref}, /transactions/verify_by_reference, /balances/NGN
   * NEAR AI     POST /v1/chat/completions (tool calls) and /v1/audio/transcriptions
   * NEAR RPC    block, view_access_key, broadcast_tx_commit, plus a borsh
                 round-trip of the signed `pay()` envelope
@@ -33,7 +34,7 @@ from app.modules.chain import near_tx
 from app.modules.voice import stt
 from app.modules.agent.agent import NEAR_AI_MODEL, NearAiModel
 from app.modules.chain.vault_chain import VaultChain
-from app.modules.vending.vtpass import VtpassClient, VtpassError
+from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError
 
 # --- harness ----------------------------------------------------------------
 
@@ -153,300 +154,106 @@ class ServerTest(unittest.TestCase):
         self.server = FakeServer(responder)
 
 
-# --- VTpass live transport --------------------------------------------------
+# --- Flutterwave live transport ---------------------------------------------
 
 
-def vtpass_responder():
-    """One responder that routes on path, so a test can assert each call."""
+def flutterwave_responder():
+    """Routes on path, answering in Flutterwave's v3 envelope."""
 
     def respond(req: Recorded):
-        path = req.path.split("?", 1)[0]
-        if path == "/service-variations":
-            return json_response(
-                {
-                    "code": "000",
-                    "content": {
-                        # VTpass misspells this; the client accepts both.
-                        "varations": [
-                            {"variation_code": "prepaid", "name": "Prepaid"},
-                            {"variation_code": "postpaid", "name": "Postpaid"},
-                        ]
-                    },
-                }
-            )
-        if path == "/merchant-verify":
-            return json_response(
-                {
-                    "code": "000",
-                    "content": {"Customer_Name": "TUNDE ADEYEMI", "Meter_Number": "04512345678"},
-                }
-            )
-        if path == "/pay":
-            return json_response(
-                {
-                    "code": "000",
-                    "response_description": "TRANSACTION SUCCESSFUL",
-                    "requestId": req.json.get("request_id"),
-                    "amount": req.json.get("amount"),
-                    "content": {
-                        "transactions": {
-                            "status": "delivered",
-                            "token": "4821 0937 5512 8846 3019",
-                            "units": "23.92",
-                        }
-                    },
-                }
-            )
-        if path == "/requery":
-            return json_response(
-                {
-                    "code": "000",
-                    "requestId": req.json.get("request_id"),
-                    "content": {
-                        "transactions": {
-                            "status": "delivered",
-                            "token": "1111 2222 3333 4444 5555",
-                        }
-                    },
-                }
-            )
-        return json_response({"code": "012", "response_description": "no such route"}, 404)
+        path = req.path
+        if path == "/payments":
+            return json_response({"status": "success", "message": "Hosted Link",
+                                  "data": {"link": "https://checkout.flutterwave.com/pay/x"}})
+        if path.startswith("/transactions/verify_by_reference"):
+            return json_response({"status": "error",
+                                  "message": "No transaction was found for this id",
+                                  "data": None}, 400)
+        if path.startswith("/billers/"):
+            return json_response({"status": "success", "message": "Bill payment successful",
+                                  "data": {"tx_ref": "CF-FLYAPI-1", "reference": "2478",
+                                           "amount": 5000, "code": "200"}})
+        if path.startswith("/bills/"):
+            return json_response({"status": "success", "data": {
+                "status": "successful", "code": "200", "extra": "TOKEN1147"}})
+        if path.startswith("/transfers?"):
+            return json_response({"status": "success", "data": [
+                {"id": 1, "reference": "someone-else"}, {"id": 2, "reference": "wd_1"}]})
+        if path == "/balances/NGN":
+            return json_response({"status": "success", "data": {
+                "currency": "NGN", "available_balance": 2168880.75,
+                "ledger_balance": 253125.82}})
+        if path == "/broken":
+            return raw_response(b"<html>gateway</html>", 502)
+        return json_response({"status": "error", "message": "Url not found", "data": None},
+                             400)
 
     return respond
 
 
-class TestVtpassLiveTransport(ServerTest):
-    responder = staticmethod(vtpass_responder)
+class TestFlutterwaveLiveTransport(ServerTest):
+    responder = staticmethod(flutterwave_responder)
 
-    def client(self, **kwargs) -> VtpassClient:
-        client = VtpassClient(
-            env="sandbox",
-            dry_run=False,
-            username="stark-user",
-            password="stark-pass",
-            **kwargs,
-        )
-        client.base = self.server.base
-        return client
+    def client(self) -> FlutterwaveClient:
+        return FlutterwaveClient("FLWSECK_TEST-abc-X", base_url=self.server.base)
 
-    def test_verify_posts_expected_body_and_basic_auth(self):
-        info = self.client().verify_meter("04512345678")
-
-        self.assertEqual(info["Customer_Name"], "TUNDE ADEYEMI")
-        self.assertEqual(len(self.server.requests), 1)
+    def test_checkout_sends_the_documented_body_and_bearer_key(self):
+        link = self.client().create_checkout(
+            tx_ref="dep_1", amount_ngn=20_000, email="ada@example.com", name="Ada",
+            redirect_url="http://localhost:5174/wallet/add?deposit=dep_1",
+            meta={"deposit_id": "dep_1"})
+        self.assertEqual(link, "https://checkout.flutterwave.com/pay/x")
         req = self.server.requests[0]
-        self.assertEqual(req.method, "POST")
-        self.assertEqual(req.path, "/merchant-verify")
-        self.assertEqual(
-            req.json,
-            {"billersCode": "04512345678", "serviceID": "ikeja-electric", "type": "prepaid"},
-        )
-        expected = base64.b64encode(b"stark-user:stark-pass").decode()
-        self.assertEqual(req.header("Authorization"), f"Basic {expected}")
-        self.assertEqual(req.header("Accept"), "application/json")
+        self.assertEqual((req.method, req.path), ("POST", "/payments"))
+        self.assertEqual(req.header("Authorization"), "Bearer FLWSECK_TEST-abc-X")
+        self.assertEqual(req.json["tx_ref"], "dep_1")
+        self.assertEqual(req.json["amount"], 20_000)  # an integer, never a string
+        self.assertEqual(req.json["currency"], "NGN")
+        self.assertEqual(req.json["customer"], {"email": "ada@example.com", "name": "Ada"})
 
-    def test_a_code_000_wrong_meter_is_a_refusal(self):
-        """The live sandbox returns code 000 with WrongBillersCode: true."""
-        self.restart(
-            lambda req: json_response(
-                {
-                    "code": "000",
-                    "content": {
-                        "WrongBillersCode": True,
-                        "error": "This meter is not correct or is not a valid "
-                        "Ikeja Electric prepaid meter. Please check and try again",
-                    },
-                }
-            )
-        )
+    def test_verify_by_reference_is_a_query_string(self):
+        with self.assertRaises(FlutterwaveError) as caught:
+            self.client().verify_by_reference("dep_1")
+        self.assertEqual(self.server.requests[0].path,
+                         "/transactions/verify_by_reference?tx_ref=dep_1")
+        self.assertEqual(caught.exception.status, 400)
+        self.assertFalse(caught.exception.transient)
 
-        with self.assertRaises(VtpassError) as caught:
-            self.client().verify_meter("04512345678")
-        self.assertEqual(caught.exception.code, "016")
-
-    def test_variations_is_a_get_with_a_query_string(self):
-        variations = self.client().list_variations("ikeja-electric")
-
-        self.assertEqual([v["variation_code"] for v in variations], ["prepaid", "postpaid"])
+    def test_a_bill_posts_to_its_biller_and_item(self):
+        placed = self.client().pay_bill(biller_code="BIL113", item_code="UB159",
+                                        customer_id="04512345678", amount_ngn=5_000,
+                                        reference="bill_1")
+        self.assertEqual(placed["tx_ref"], "CF-FLYAPI-1")
         req = self.server.requests[0]
-        self.assertEqual(req.method, "GET")
-        self.assertEqual(req.path, "/service-variations?serviceID=ikeja-electric")
-        self.assertEqual(req.body, b"")
+        self.assertEqual(req.path, "/billers/BIL113/items/UB159/payment")
+        self.assertEqual(req.json, {"country": "NG", "customer_id": "04512345678",
+                                    "amount": 5_000, "reference": "bill_1"})
 
-    def test_buy_sends_the_documented_payload_and_reads_the_token(self):
-        result = self.client().buy(
-            service_id="ikeja-electric",
-            reference="04512345678",
-            amount_ngn=5000,
-            phone="08031234567",
-            variation_code="prepaid",
-            request_id="202610221200abcdef12",
-        )
+    def test_bill_status_is_verbose(self):
+        self.assertEqual(self.client().bill_status("CF-FLYAPI-1")["extra"], "TOKEN1147")
+        self.assertEqual(self.server.requests[0].path, "/bills/CF-FLYAPI-1?verbose=1")
 
-        self.assertTrue(result.delivered)
-        self.assertEqual(result.token, "48210937551288463019")
-        self.assertEqual(result.units, "23.92")
-        self.assertEqual(result.amount_ngn, 5000)
-
-        req = self.server.requests[0]
-        self.assertEqual(req.path, "/pay")
-        self.assertEqual(
-            req.json,
-            {
-                "request_id": "202610221200abcdef12",
-                "serviceID": "ikeja-electric",
-                "billersCode": "04512345678",
-                "amount": 5000,
-                "phone": "08031234567",
-                "variation_code": "prepaid",
-            },
-        )
-        # Money is an integer on the wire, never a string or a float.
-        self.assertIsInstance(req.json["amount"], int)
-
-    def test_airtime_omits_variation_code_entirely(self):
-        self.client().buy(
-            service_id="mtn",
-            reference="08031234567",
-            amount_ngn=1000,
-            phone="08031234567",
-        )
-        self.assertNotIn("variation_code", self.server.requests[0].json)
-
-    def test_retry_reuses_the_same_request_id_on_the_wire(self):
+    def test_a_transfer_is_found_only_by_its_exact_reference(self):
         client = self.client()
-        client.buy(
-            service_id="ikeja-electric",
-            reference="04512345678",
-            amount_ngn=5000,
-            phone="08031234567",
-            request_id="same-intent-0001",
-        )
-        client.buy(
-            service_id="ikeja-electric",
-            reference="04512345678",
-            amount_ngn=5000,
-            phone="08031234567",
-            request_id="same-intent-0001",
-        )
+        self.assertEqual(client.find_transfer("wd_1")["id"], 2)
+        self.assertEqual(self.server.requests[0].path, "/transfers?reference=wd_1")
+        self.assertIsNone(client.find_transfer("wd_9"))
 
-        sent = [r.json["request_id"] for r in self.server.requests]
-        self.assertEqual(sent, ["same-intent-0001", "same-intent-0001"])
+    def test_the_balance_is_whole_naira(self):
+        self.assertEqual(self.client().ngn_balance(), 2_168_880)
 
-    def test_requery_posts_the_request_id(self):
-        result = self.client().query_transaction("202610221200abcdef12")
+    def test_a_non_json_gateway_error_is_transient(self):
+        with self.assertRaises(FlutterwaveError) as caught:
+            self.client()._request("GET", "/broken")
+        self.assertEqual(caught.exception.status, 502)
+        self.assertTrue(caught.exception.transient)
 
-        self.assertTrue(result.delivered)
-        self.assertEqual(result.token, "11112222333344445555")
-        req = self.server.requests[0]
-        self.assertEqual(req.path, "/requery")
-        self.assertEqual(req.json, {"request_id": "202610221200abcdef12"})
-
-    def test_api_key_headers_are_sent_when_configured(self):
-        client = VtpassClient(
-            env="sandbox",
-            dry_run=False,
-            api_key="api",
-            public_key="pub",
-            secret_key="sec",
-        )
-        client.base = self.server.base
-        client.verify_meter("04512345678")
-
-        req = self.server.requests[0]
-        self.assertEqual(req.header("api-key"), "api")
-        self.assertEqual(req.header("public-key"), "pub")
-        self.assertEqual(req.header("secret-key"), "sec")
-
-
-class TestVtpassLiveFailures(ServerTest):
-    def test_pending_is_not_success_and_does_not_raise(self):
-        self.restart(
-            lambda req: json_response(
-                {
-                    "code": "099",
-                    "response_description": "TRANSACTION PROCESSING",
-                    "requestId": req.json.get("request_id"),
-                    "content": {"transactions": {"status": "pending"}},
-                }
-            )
-        )
-
-        client = VtpassClient(dry_run=False, username="u", password="p")
-        client.base = self.server.base
-        result = client.buy(
-            service_id="ikeja-electric",
-            reference="04512345678",
-            amount_ngn=5000,
-            phone="08031234567",
-            request_id="pending-0001",
-        )
-
-        self.assertFalse(result.delivered)
-        self.assertTrue(result.pending)
-        self.assertIsNone(result.token)
-
-    def test_bad_meter_code_raises_with_speakable_copy(self):
-        self.restart(
-            lambda req: json_response(
-                {"code": "016", "response_description": "INVALID METER NUMBER"}
-            )
-        )
-
-        client = VtpassClient(dry_run=False, username="u", password="p")
-        client.base = self.server.base
-        with self.assertRaises(VtpassError) as caught:
-            client.buy(
-                service_id="ikeja-electric",
-                reference="00000000000",
-                amount_ngn=5000,
-                phone="08031234567",
-            )
-
-        self.assertEqual(caught.exception.code, "016")
-        self.assertIn("meter", caught.exception.user_message)
-        self.assertFalse(caught.exception.retryable)
-
-    def test_unreachable_biller_is_retryable(self):
-        self.restart(
-            lambda req: json_response({"code": "030", "response_description": "UNREACHABLE"})
-        )
-
-        client = VtpassClient(dry_run=False, username="u", password="p")
-        client.base = self.server.base
-        with self.assertRaises(VtpassError) as caught:
-            client.buy(
-                service_id="ikeja-electric",
-                reference="04512345678",
-                amount_ngn=5000,
-                phone="08031234567",
-            )
-        self.assertTrue(caught.exception.retryable)
-
-    def test_a_bare_string_401_is_invalid_credentials(self):
-        self.restart(lambda req: raw_response(b'"Invalid Credentials."', 401))
-
-        client = VtpassClient(dry_run=False, username="u", password="wrong")
-        client.base = self.server.base
-        with self.assertRaises(VtpassError) as caught:
-            client.verify_meter("04512345678")
-
-        self.assertEqual(caught.exception.code, "invalid_credentials")
-        self.assertEqual(caught.exception.http_status, 401)
-
-    def test_non_json_body_does_not_crash(self):
-        self.restart(lambda req: raw_response(b"<html>gateway</html>", 502))
-
-        client = VtpassClient(dry_run=False, username="u", password="p")
-        client.base = self.server.base
-        with self.assertRaises(VtpassError) as caught:
-            client.verify_meter("04512345678")
-
-        self.assertEqual(caught.exception.code, "invalid_response")
-        self.assertEqual(caught.exception.http_status, 502)
-
-
-# --- NEAR AI model ----------------------------------------------------------
+    def test_an_unreachable_host_is_transient(self):
+        client = FlutterwaveClient("FLWSECK_TEST-abc-X", base_url="http://127.0.0.1:9")
+        with self.assertRaises(FlutterwaveError) as caught:
+            client.ngn_balance()
+        self.assertEqual(caught.exception.status, 0)
+        self.assertTrue(caught.exception.transient)
 
 
 class TestNearAiModelLive(ServerTest):

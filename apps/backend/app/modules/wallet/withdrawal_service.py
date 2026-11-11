@@ -1,17 +1,18 @@
-"""Withdrawing to a bank, through Bachs payouts.
+"""Withdrawing to a bank, through Flutterwave transfers.
 
-    resolve the account name → hold the money → Bachs reviews the destination
-    → payout → `payout.paid` (done) or `payout.failed` (money comes back)
+    resolve the account name → hold the money → transfer
+    → `transfer.completed` SUCCESSFUL (done) or FAILED (money comes back)
 
 The money leaves the balance the moment the withdrawal is asked for (one
 statement: debit plus the activity entry), and the vault is debited with the same
 reference. Holding it first is what stops a user spending money that is already on
 its way to their bank.
 
-Bachs pays only destinations that have passed its review (`is_usable`). A new bank
-account starts `pending_review`, so a first withdrawal to it waits as `reviewing`
-until the money loop sees it approved; a rejected destination returns the money.
-A saved account is reused, so later withdrawals to it go straight out.
+The withdrawal id is the transfer's `reference`. A transfer that timed out may still
+have gone through, so every send first asks Flutterwave whether it holds that
+reference, and a refusal only returns the money once Flutterwave confirms it doesn't.
+Until Flutterwave has taken it, the withdrawal is `sending`; the money loop retries
+those, and re-reads `processing` ones in case a webhook was missed.
 
 Returning money is the mirror image of taking it: a credit keyed `<withdrawal>-r`,
 and a vault `fund` with the same reference, so a repeated failure event returns it
@@ -24,15 +25,20 @@ take and return money by exactly the same rules.
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
 import uuid
 from typing import Any, Optional
 
 from app.common.api_error import ApiError
 from app.common.clock import Clock
 from app.database import neon
-from app.modules.bachs.bachs import BachsClient, BachsError
+from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.vault.vault_service import VaultService
+
+log = logging.getLogger("stark.withdrawals")
 
 MIN_WITHDRAWAL_NGN = 100
 UNIQUE_VIOLATION = "23505"
@@ -40,26 +46,42 @@ UNIQUE_VIOLATION = "23505"
 
 class WithdrawalService:
     def __init__(self, db: neon.Database, receipts: ReceiptRepository, vaults: VaultService,
-                 bachs: Optional[BachsClient]) -> None:
+                 flutterwave: Optional[FlutterwaveClient]) -> None:
         self.db = db
         self.receipts = receipts
         self.vaults = vaults
-        self.bachs = bachs
+        self.flutterwave = flutterwave
+        self._banks: Optional[tuple[float, list[dict[str, str]]]] = None
+        self._banks_lock = threading.Lock()
 
     # --- helping the user fill the form -----------------------------------------
 
     def banks(self) -> list[dict[str, str]]:
-        return self._bachs().banks()
+        """Flutterwave's Nigerian banks, kept for an hour."""
+        with self._banks_lock:
+            if self._banks is not None and time.monotonic() - self._banks[0] < 3600:
+                return self._banks[1]
+        try:
+            banks = [{"name": bank["name"], "code": bank["code"]}
+                     for bank in self._flutterwave().banks()]
+        except FlutterwaveError as err:
+            raise ApiError(502, "provider_failed", "Couldn't load the banks right now.") \
+                from err
+        banks.sort(key=lambda bank: bank["name"])
+        with self._banks_lock:
+            self._banks = (time.monotonic(), banks)
+        return banks
 
     def resolve(self, bank_code: str, account_number: str) -> dict[str, Any]:
         _check_account_number(account_number)
         try:
-            resolved = self._bachs().resolve_account(bank_code, account_number)
-        except BachsError as err:
-            raise ApiError(502, "provider_failed", "Couldn't check that account.") from err
-        if not resolved.get("resolved"):
+            resolved = self._flutterwave().resolve_account(bank_code, account_number)
+        except FlutterwaveError as err:
+            if err.transient:
+                raise ApiError(502, "provider_failed", "Couldn't check that account.") \
+                    from err
             raise ApiError(400, "bad_account",
-                           "That account number doesn't match the bank you picked.")
+                           "That account number doesn't match the bank you picked.") from err
         return {"account_name": resolved["account_name"], "account_number": account_number,
                 "bank_code": bank_code}
 
@@ -67,28 +89,30 @@ class WithdrawalService:
 
     def request(self, account_id: str, amount_ngn: int, bank_code: str,
                 account_number: str) -> dict[str, Any]:
-        bachs = self._bachs()
+        self._flutterwave()
         if amount_ngn < MIN_WITHDRAWAL_NGN:
             raise ApiError(400, "bad_amount",
                            f"Withdraw at least ₦{MIN_WITHDRAWAL_NGN:,}.")
         account = self.resolve(bank_code, account_number)
-        destination = self._destination(account_id, bachs, account)
+        bank_name = next((bank["name"] for bank in self.banks() if bank["code"] == bank_code),
+                         bank_code)
 
         withdrawal_id = f"wd_{uuid.uuid4().hex[:16]}"
         receipt_id = self.hold(
             account_id, withdrawal_id, amount_ngn, label=f"To {account['account_name']}",
-            source=f"{destination['bank_name']} ····{account_number[-4:]}", vendor="bachs",
+            source=f"{bank_name} ····{account_number[-4:]}", vendor="flutterwave",
         )
         now = Clock.now_iso()
         self.db.query(
-            "INSERT INTO withdrawals (id, user_id, method, amount_ngn, destination_id,"
-            " receipt_id, status, created_at, updated_at)"
-            " VALUES ($1, $2, 'bank', $3, $4, $5, 'reviewing', $6, $6)",
-            [withdrawal_id, account_id, amount_ngn, destination["destination_id"],
-             receipt_id, now],
+            "INSERT INTO withdrawals (id, user_id, method, amount_ngn, bank_code,"
+            " account_number, account_name, bank_name, receipt_id, status, created_at,"
+            " updated_at)"
+            " VALUES ($1, $2, 'bank', $3, $4, $5, $6, $7, $8, 'sending', $9, $9)",
+            [withdrawal_id, account_id, amount_ngn, bank_code, account_number,
+             account["account_name"], bank_name, receipt_id, now],
         )
         self.vaults.debit(account_id, amount_ngn, withdrawal_id)
-        self._advance(self._row(withdrawal_id))
+        self._send(self._row(withdrawal_id))
         return shape(self._row(withdrawal_id))
 
     def hold(self, account_id: str, withdrawal_id: str, amount_ngn: int, *, label: str,
@@ -100,7 +124,7 @@ class WithdrawalService:
         debit into the vault with the withdrawal id as the reference.
         """
         try:
-            receipt, _ = self.receipts.record_withdrawal(account_id, {
+            receipt, _ = self.receipts.record_debit(account_id, {
                 "id": f"rcpt_{uuid.uuid4().hex[:6]}",
                 "request_id": withdrawal_id,
                 "bill_id": "wallet",
@@ -131,48 +155,58 @@ class WithdrawalService:
 
     # --- moving it along ------------------------------------------------------------
 
-    def advance_reviewing(self) -> None:
-        """The money loop's pass: send what Bachs has approved, return what it refused."""
+    def advance(self) -> None:
+        """The money loop's pass: send what has not gone out yet, and re-read what has."""
         for row in self.db.query(
-            "SELECT * FROM withdrawals WHERE method = 'bank' AND status = 'reviewing'"
-            " ORDER BY created_at LIMIT 50"
+            "SELECT * FROM withdrawals WHERE method = 'bank'"
+            " AND status IN ('sending', 'processing') ORDER BY created_at LIMIT 50"
         ):
-            self._advance(row)
+            if row["status"] == "sending":
+                self._send(row)
+            else:
+                self._reread(row)
 
-    def _advance(self, row: dict[str, Any]) -> None:
-        assert self.bachs is not None
+    def _send(self, row: dict[str, Any]) -> None:
+        assert self.flutterwave is not None
         try:
-            destination = self.bachs.get_destination(row["destination_id"])
-        except BachsError:
-            return
-        if destination["status"] == "rejected":
-            self.give_back(row, destination.get("status_reason") or "bank account refused")
-            return
-        if not destination.get("is_usable"):
-            return
-        try:
-            payout = self.bachs.create_payout(
-                destination=row["destination_id"], amount_ngn=int(row["amount_ngn"]),
-                reference=row["id"], narration="Stark",
-            )
-        except BachsError as err:
-            if err.status in (0, 429) or err.status >= 500:
-                return  # transient: the next pass sends it with the same reference
-            self.give_back(row, err.message)
-            return
-        self._set(row["id"], "processing", payout["id"], None)
+            transfer = self.flutterwave.find_transfer(row["id"]) \
+                or self.flutterwave.create_transfer(
+                    bank_code=row["bank_code"], account_number=row["account_number"],
+                    amount_ngn=int(row["amount_ngn"]), reference=row["id"], narration="Stark",
+                )
+        except FlutterwaveError as err:
+            if err.transient:
+                return  # the next pass asks again
+            try:
+                transfer = self.flutterwave.find_transfer(row["id"])
+            except FlutterwaveError:
+                return  # returning money that may be on its way would pay it twice
+            if transfer is None:
+                self.give_back(row, err.message)
+                return
+        self._set(row["id"], "processing", str(transfer["id"]), None)
 
-    def on_payout(self, reference: str, paid: bool) -> bool:
-        """A payout webhook for one of ours. False if it isn't a withdrawal."""
+    def _reread(self, row: dict[str, Any]) -> None:
+        assert self.flutterwave is not None
+        try:
+            transfer = self.flutterwave.get_transfer(row["payout_id"])
+        except FlutterwaveError:
+            return
+        self.on_transfer(row["id"], transfer["status"], transfer.get("complete_message"))
+
+    def on_transfer(self, reference: str, status: str, message: Optional[str]) -> bool:
+        """A transfer's outcome, from the webhook or a re-read. False if it isn't ours."""
         row = self.db.one("SELECT * FROM withdrawals WHERE id = $1 AND method = 'bank'",
                           [reference])
         if row is None:
             return False
-        if paid:
-            if row["status"] != "paid":
+        if status == "SUCCESSFUL":
+            if row["status"] == "returned":
+                log.critical("withdrawal %s was paid after its money was returned", reference)
+            elif row["status"] != "paid":
                 self.mark_paid(row)
-        else:
-            self.give_back(row, "the bank transfer failed")
+        elif status == "FAILED":
+            self.give_back(row, message or "the bank transfer failed")
         return True
 
     def mark_paid(self, row: dict[str, Any]) -> None:
@@ -200,7 +234,7 @@ class WithdrawalService:
                 "entry_type": "deposit",
                 "source": "Returned from bank" if row["method"] == "bank"
                 else f"Returned, not sent as {row['asset_symbol']}",
-                "vendor": "bachs" if row["method"] == "bank" else "near-intents",
+                "vendor": "flutterwave" if row["method"] == "bank" else "near-intents",
                 "vendor_code": None,
                 "vendor_message": reason[:200],
                 "created_at": Clock.now_iso(),
@@ -215,40 +249,11 @@ class WithdrawalService:
 
     # --- plumbing -----------------------------------------------------------------------
 
-    def _destination(self, account_id: str, bachs: BachsClient,
-                     account: dict[str, Any]) -> dict[str, Any]:
-        """The Bachs destination for this bank account, saved after the first use."""
-        saved = self.db.one(
-            "SELECT * FROM payout_destinations WHERE user_id = $1 AND bank_code = $2"
-            " AND account_number = $3",
-            [account_id, account["bank_code"], account["account_number"]],
-        )
-        if saved is not None:
-            return saved
-        try:
-            created = bachs.create_destination(
-                bank_code=account["bank_code"], account_number=account["account_number"],
-                name=account["account_name"], metadata={"account_id": account_id},
-            )
-        except BachsError as err:
-            raise ApiError(502, "provider_failed",
-                           "Couldn't save that bank account. Nothing was taken.") from err
-        return self.db.one(
-            "INSERT INTO payout_destinations (user_id, bank_code, account_number,"
-            " destination_id, account_name, bank_name, created_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7)"
-            " ON CONFLICT (user_id, bank_code, account_number)"
-            " DO UPDATE SET destination_id = EXCLUDED.destination_id RETURNING *",
-            [account_id, account["bank_code"], account["account_number"], created["id"],
-             created.get("account_name") or account["account_name"],
-             created.get("bank_name") or account["bank_code"], Clock.now_iso()],
-        )  # type: ignore[return-value]
-
-    def _bachs(self) -> BachsClient:
-        if self.bachs is None:
+    def _flutterwave(self) -> FlutterwaveClient:
+        if self.flutterwave is None:
             raise ApiError(501, "not_available",
                            "Withdrawing to a bank isn't set up yet. Nothing was taken.")
-        return self.bachs
+        return self.flutterwave
 
     def _row(self, withdrawal_id: str) -> dict[str, Any]:
         return self.db.one("SELECT * FROM withdrawals WHERE id = $1",

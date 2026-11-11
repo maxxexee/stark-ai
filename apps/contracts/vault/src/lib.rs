@@ -20,7 +20,7 @@
 //!   `predecessor == current_account_id`, and it may only `pay`.
 //!
 //! What this does **not** do: hold tokens. `balance_ngn` is a naira ledger that
-//! mirrors money Stark holds (the VTpass float, the Bachs balance, treasury USDC).
+//! mirrors money Stark holds (the Flutterwave NGN balance, treasury USDC).
 //! Deposits are credited here by the funder after they are confirmed off-chain.
 //!
 //! `policy.rs` holds the cap rules with no `near-sdk` import, so the logic that

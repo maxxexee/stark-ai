@@ -21,5 +21,5 @@ def list_plans(
     provider: str = Query("", description="Loosely matches a service id or name",
                           examples=["mtn"]),
 ) -> JSONResponse:
-    """Read from the captured VTpass catalogue. Never hardcode prices in the app."""
+    """Read from Flutterwave's live catalogue. Never hardcode prices in the app."""
     return JSONResponse(module.plans.plans(kind, provider))

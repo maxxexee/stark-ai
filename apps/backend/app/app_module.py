@@ -15,8 +15,8 @@ from app.modules.agent.account_toolbox import AccountToolbox
 from app.modules.approval.approval_repository import ApprovalRepository
 from app.modules.approval.approval_service import ApprovalService
 from app.modules.auth.auth_service import AuthService
-from app.modules.bachs import bachs
-from app.modules.bachs.bachs_webhook_service import BachsWebhookService
+from app.modules.flutterwave import flutterwave
+from app.modules.flutterwave.flutterwave_webhook_service import FlutterwaveWebhookService
 from app.modules.bill.bill_service import BillService
 from app.modules.chain import near_tx, treasury_chain, vault_chain
 from app.modules.control.control_service import ControlService
@@ -42,7 +42,8 @@ from app.modules.telemetry.telemetry_repository import TelemetryRepository
 from app.modules.telemetry.telemetry_service import TelemetryService
 from app.modules.treasury.treasury_service import TreasuryService
 from app.modules.vault.vault_service import VaultService
-from app.modules.vending import vending
+from app.modules.vending.catalog import CATALOG
+from app.modules.vending.vending import VendingGateway
 from app.modules.voice.voice_service import VoiceService
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.wallet_service import WalletService
@@ -71,20 +72,22 @@ class AppModule:
 
         # Money: each user's vault, the rails that fill and empty it, the float.
         money = config.money
-        self.bachs = bachs.client_from_env()
+        self.flutterwave = flutterwave.client_from_env()
+        if self.flutterwave is not None:
+            CATALOG.use(self.flutterwave.bill_categories)
         self.vaults = VaultService(db, vault_chain.chain_from_env(), self.accounts)
-        gateway = vending.gateway_from_env()
-        self.floats = FloatService(db, gateway.client, self.bachs, money.float_settings)
+        gateway = VendingGateway(self.flutterwave)
+        self.floats = FloatService(db, self.flutterwave, money.float_settings)
         one_click_client = one_click.client_from_env()
         self.deposits = DepositService(
             db,
             self.receipts,
             self.vaults,
-            self.bachs,
+            self.flutterwave,
             one_click_client,
             money.funding,
         )
-        self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.bachs)
+        self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.flutterwave)
         self.crypto_withdrawals = CryptoWithdrawalService(
             db,
             self.withdrawals,
@@ -94,29 +97,16 @@ class AppModule:
             treasury_chain.treasury_from_env(),
             money.crypto_payouts,
         )
-        self.bachs_webhooks = BachsWebhookService(
-            db, money.bachs_webhook_secret, self.deposits, self.withdrawals, self.floats
+        self.flutterwave_webhooks = FlutterwaveWebhookService(
+            db, money.flutterwave_secret_hash, self.deposits, self.withdrawals
         )
-        self.treasury = TreasuryService(
-            db,
-            self.vaults,
-            self.deposits,
-            self.withdrawals,
-            self.crypto_withdrawals,
-            self.floats,
-            self.bachs,
-            money.funding.treasury_account,
-            money.funding.usdc_ngn_rate,
-            near_tx.NearRpc(near_tx.MAINNET_RPC),
-        )
-
         self.controls = ControlService(
             self.accounts, self.account_repository, self.vaults
         )
         self.bills = BillService(self.accounts, self.account_repository, self.receipts)
         self.plans = PlanService()
         self.wallet = WalletService(
-            self.accounts, self.receipts, self.vaults, test_money=self.bachs is None
+            self.accounts, self.receipts, self.vaults, test_money=self.flutterwave is None
         )
         self.telemetry = TelemetryService(self.readings, self.receipts)
         # One TV (or Shelly, or the stub) for the whole server: the plug is a
@@ -129,6 +119,18 @@ class AppModule:
             PaymentService(
                 self.receipts, gateway, vaults=self.vaults, floats=self.floats
             ),
+        )
+        self.treasury = TreasuryService(
+            db,
+            self.vaults,
+            self.deposits,
+            self.bill_payments,
+            self.withdrawals,
+            self.crypto_withdrawals,
+            self.floats,
+            money.funding.treasury_account,
+            money.funding.usdc_ngn_rate,
+            near_tx.NearRpc(near_tx.MAINNET_RPC),
         )
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)

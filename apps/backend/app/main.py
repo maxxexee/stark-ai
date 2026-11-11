@@ -15,7 +15,7 @@ from app.app_module import AppModule
 from app.filters.http_exception_filter import HttpExceptionFilter
 from app.modules.approval import approval_controller
 from app.modules.auth import auth_controller
-from app.modules.bachs import bachs_controller
+from app.modules.flutterwave import flutterwave_controller
 from app.modules.bill import bill_controller, payee_controller
 from app.modules.control import control_controller
 from app.modules.demo import demo_controller
@@ -56,7 +56,7 @@ CONTROLLERS = (
     approval_controller,
     demo_controller,
     payee_controller,
-    bachs_controller,
+    flutterwave_controller,
     whatsapp_controller,
     sms_controller,
 )
@@ -77,11 +77,16 @@ def create_app(module: Optional[AppModule] = None) -> FastAPI:
         money_stop = (
             module.treasury.start(module.config.money.money_tick_seconds)
             if module.vaults.enabled
-            or module.bachs is not None
+            or module.flutterwave is not None
             or module.deposits.methods()["crypto"]
             else None
         )
+        watching = any(module.deposits.methods().values())
+        if watching:
+            module.deposits.start_watching()
         yield
+        if watching:
+            module.deposits.stop_watching()
         for event in (stop, money_stop):
             if event is not None:
                 event.set()

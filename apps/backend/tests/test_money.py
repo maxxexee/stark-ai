@@ -1,6 +1,6 @@
 """The money flow end to end: deposit → vault → float → purchase → withdrawal.
 
-Rails are faked at their HTTP clients (chain, Bachs, 1Click, VTpass), so every
+Rails are faked at their HTTP clients (chain, Flutterwave, 1Click), so every
 state transition runs against the real Postgres schema without a network. What
 these do NOT prove: that the live services answer in the modeled shapes. That is
 recorded in docs/HANDOFF.md.
@@ -9,17 +9,16 @@ recorded in docs/HANDOFF.md.
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import json
-import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.common.api_error import ApiError
-from app.modules.bachs import bachs
-from app.modules.bachs.bachs import BachsError
-from app.modules.bachs.bachs_webhook_service import BachsWebhookService
+from app.common.clock import Clock
+from app.modules.flutterwave import flutterwave
+from app.modules.flutterwave.flutterwave import FlutterwaveError
+from app.modules.flutterwave.flutterwave_webhook_service import FlutterwaveWebhookService
 from app.modules.chain import near_tx, vault_chain
 from app.modules.chain.treasury_chain import SignedTransfer
 from app.modules.chain.vault_chain import ChainResult, VaultChain
@@ -32,7 +31,14 @@ from app.modules.wallet.crypto_withdrawal_service import (
     CryptoPayoutSettings,
     CryptoWithdrawalService,
 )
-from app.modules.wallet.deposit_service import DepositService, FundingSettings
+from app.modules.wallet.deposit_service import (
+    MAX_CHECK_SECONDS,
+    MIN_CHECK_SECONDS,
+    SOON_SECONDS,
+    DepositService,
+    FundingSettings,
+    _check_delay,
+)
 from app.modules.wallet.withdrawal_service import WithdrawalService
 from tests import support
 
@@ -99,59 +105,64 @@ class FakeChain:
         return [c[0] for c in self.calls]
 
 
-class FakeVtpass:
+class FakeFlutterwave:
+    """Flutterwave's checkout, verify, banks, resolve, transfers and balance."""
+
+    test_mode = True
+
     def __init__(self, balance=500_000):
         self.value = balance
         self.reads = 0
+        self.checkouts: dict[str, dict] = {}
+        self.charges: dict[str, dict] = {}
+        self.transfers: list[dict] = []
+        self.transfer_status: dict[str, str] = {}
+        self.resolved = True
+        self.transfer_error: FlutterwaveError | None = None
 
-    def balance(self):
+    def ngn_balance(self):
         self.reads += 1
         return self.value
 
+    def create_checkout(self, *, tx_ref, amount_ngn, email, name, redirect_url, meta):
+        self.checkouts[tx_ref] = {"amount": amount_ngn, "email": email,
+                                  "redirect_url": redirect_url, "meta": meta}
+        return f"https://checkout.flutterwave.com/v3/hosted/pay/{tx_ref[-6:]}"
 
-class FakeBachs:
-    def __init__(self):
-        self.checkouts: dict[str, dict] = {}
-        self.payouts: list[dict] = []
-        self.destination_status = {"status": "approved", "is_usable": True}
-        self.resolved = True
-        self.payout_error: BachsError | None = None
+    def pay(self, tx_ref, amount, *, status="successful", currency="NGN"):
+        """The customer finishes the checkout."""
+        self.charges[tx_ref] = {"id": 4_000_000 + len(self.charges), "tx_ref": tx_ref,
+                                "amount": amount, "currency": currency, "status": status}
 
-    def create_checkout(self, *, amount_ngn, reference, metadata, success_url,
-                        expires_in_minutes):
-        checkout = {"checkout_id": f"chk_{reference[-6:]}", "status": "open",
-                    "checkout_url": f"https://checkout.bachs.io/c/{reference[-6:]}",
-                    "expires_at": "2099-01-01T00:00:00.000Z", "amount": amount_ngn,
-                    "metadata": metadata}
-        self.checkouts[checkout["checkout_id"]] = checkout
-        return checkout
-
-    def get_checkout(self, checkout_id):
-        return self.checkouts[checkout_id]
+    def verify_by_reference(self, tx_ref):
+        if tx_ref not in self.charges:
+            raise FlutterwaveError(400, "No transaction was found for this id")
+        return self.charges[tx_ref]
 
     def banks(self):
-        return [{"name": "Guaranty Trust Bank", "code": "058"}]
+        return [{"id": 1, "name": "Guaranty Trust Bank", "code": "058"}]
 
     def resolve_account(self, bank_code, account_number):
         if not self.resolved:
-            return {"resolved": False, "account_name": None}
-        return {"resolved": True, "account_name": "ADA OKAFOR",
-                "account_number": account_number}
+            raise FlutterwaveError(400, "Sorry, that account number is invalid")
+        return {"account_name": "ADA OKAFOR", "account_number": account_number}
 
-    def create_destination(self, *, bank_code, account_number, name, metadata):
-        return {"id": f"pd_{account_number}", "status": "pending_review",
-                "is_usable": False, "account_name": name, "bank_name": "Guaranty Trust Bank"}
+    def create_transfer(self, *, bank_code, account_number, amount_ngn, reference,
+                        narration):
+        if self.transfer_error is not None:
+            raise self.transfer_error
+        transfer = {"id": 26_000 + len(self.transfers), "status": "NEW",
+                    "reference": reference, "amount": amount_ngn, "bank_code": bank_code}
+        self.transfers.append(transfer)
+        return transfer
 
-    def get_destination(self, destination_id):
-        return {"id": destination_id, **self.destination_status}
+    def find_transfer(self, reference):
+        return next((t for t in self.transfers if t["reference"] == reference), None)
 
-    def create_payout(self, *, destination, amount_ngn, reference, narration):
-        if self.payout_error is not None:
-            raise self.payout_error
-        payout = {"id": f"pay_{reference[-6:]}", "status": "pending",
-                  "reference": reference, "amount": amount_ngn, "destination": destination}
-        self.payouts.append(payout)
-        return payout
+    def get_transfer(self, transfer_id):
+        transfer = next(t for t in self.transfers if str(t["id"]) == transfer_id)
+        return {**transfer, "status": self.transfer_status.get(transfer["reference"], "PENDING"),
+                "complete_message": "Account is invalid"}
 
 
 class FakeOneClick:
@@ -424,36 +435,24 @@ class VaultServiceTests(MoneyCase):
 
 
 class FloatServiceTests(MoneyCase):
-    def floats(self, balance=500_000, bachs_client=None, destination=None):
-        self.vtpass = FakeVtpass(balance)
-        return FloatService(self.db, self.vtpass, bachs_client,
-                            FloatSettings(low_water_ngn=100_000, target_ngn=500_000,
-                                          funding_destination=destination))
-
-    def tearDown(self):
-        self.db.query("DELETE FROM float_refills WHERE id LIKE 'refill_%'"
-                      " AND created_at >= $1", [self.started])
-        super().tearDown()
-
-    def setUp(self):
-        super().setUp()
-        self.started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 1))
-        # Refills are Stark-wide; start each test with none open.
-        self.db.query("UPDATE float_refills SET status = 'paid'"
-                      " WHERE status IN ('requested', 'sent', 'manual')")
+    def floats(self, balance=500_000):
+        self.flutterwave = FakeFlutterwave(balance)
+        return FloatService(self.db, self.flutterwave, FloatSettings(low_water_ngn=100_000))
 
     def test_covers_a_purchase_that_fits(self):
         self.floats().ensure_can_cover(5000)
 
-    def test_refuses_and_refills_when_it_cannot_cover(self):
+    def test_refuses_when_it_cannot_cover(self):
         floats = self.floats(balance=1000)
         with self.assertRaises(ApiError) as caught:
             floats.ensure_can_cover(5000)
         self.assertEqual(caught.exception.code, "float_low")
         self.assertIn("nothing was charged", caught.exception.message)
-        refill = self.db.one("SELECT * FROM float_refills WHERE status = 'manual'"
-                             " ORDER BY created_at DESC LIMIT 1")
-        self.assertEqual(int(refill["amount_ngn"]), 500_000, "rounded up to ₦10,000")
+
+    def test_an_unreadable_balance_refuses_too(self):
+        with self.assertRaises(ApiError) as caught:
+            FloatService(self.db, None, FloatSettings(1)).ensure_can_cover(5000)
+        self.assertEqual(caught.exception.code, "float_low")
 
     def test_pending_purchases_count_as_spent(self):
         floats = self.floats(balance=10_000)
@@ -465,25 +464,13 @@ class FloatServiceTests(MoneyCase):
         with self.assertRaises(ApiError):
             floats.ensure_can_cover(5000)
 
-    def test_an_automatic_refill_is_a_bachs_payout_and_only_one_is_open(self):
-        fake = FakeBachs()
-        floats = self.floats(balance=50_000, bachs_client=fake, destination="pd_vtpass")
-        first = floats.request_refill()
-        second = floats.request_refill()
-        self.assertEqual(first["status"], "sent")
-        self.assertEqual(second["id"], first["id"])
-        self.assertEqual(len(fake.payouts), 1)
-        self.assertEqual(fake.payouts[0]["amount"], 450_000)
-        self.assertTrue(floats.on_payout(first["id"], paid=True))
-        self.assertFalse(floats.on_payout("wd_other", paid=True))
-
     def test_balance_reads_are_cached(self):
         floats = self.floats()
         floats.balance()
         floats.balance()
-        self.assertEqual(self.vtpass.reads, 1)
+        self.assertEqual(self.flutterwave.reads, 1)
         floats.balance(fresh=True)
-        self.assertEqual(self.vtpass.reads, 2)
+        self.assertEqual(self.flutterwave.reads, 2)
 
 
 # --- a purchase: float, vault, vendor, refund ------------------------------------------
@@ -498,7 +485,7 @@ class ScriptedGateway:
         self.bought += 1
         return self.outcomes.pop(0)
 
-    def requery(self, request_id, amount):
+    def requery(self, request_id, amount, *, token_required):
         return self.outcomes.pop(0)
 
 
@@ -506,8 +493,8 @@ class PaymentPathTests(MoneyCase):
     balance = 64_200
 
     def service(self, gateway, *, float_balance=500_000):
-        floats = FloatService(self.db, FakeVtpass(float_balance), None,
-                              FloatSettings(100_000, 500_000, None))
+        floats = FloatService(self.db, FakeFlutterwave(float_balance),
+                              FloatSettings(100_000))
         return payment_service.PaymentService(self.receipts, gateway, vaults=self.vaults,
                                               floats=floats)
 
@@ -544,10 +531,11 @@ class PaymentPathTests(MoneyCase):
         self.assertEqual(caught.exception.code, payment_service.AUTHORISATION_FAILED)
         self.assertEqual(gateway.bought, 0)
         self.assertEqual(self.receipts.count(self.account.id), 0)
+        self.assertEqual(self.wallet()["balance_ngn"], 64_200)
 
     def test_a_retry_of_a_pending_purchase_does_not_sign_again(self):
         gateway = ScriptedGateway(
-            vending.VendingOutcome(status=vending.PENDING),
+            vending.VendingOutcome(status=vending.PENDING, vendor_ref="CF-1"),
             vending.VendingOutcome(status=vending.DELIVERED, token="1234"),
         )
         service = self.service(gateway)
@@ -561,46 +549,93 @@ class PaymentPathTests(MoneyCase):
 
 
 class DepositTests(MoneyCase):
-    def deposits(self, *, bachs_client=None, crypto=True):
-        self.bachs = bachs_client or FakeBachs()
+    def deposits(self, *, crypto=True):
+        self.flutterwave = FakeFlutterwave()
         self.one_click = FakeOneClick()
         settings = FundingSettings(app_url="https://app.test",
                                    treasury_account="stark-treasury.near" if crypto else None,
                                    usdc_ngn_rate=Decimal("1500") if crypto else None)
-        return DepositService(self.db, self.receipts, self.vaults, self.bachs,
+        return DepositService(self.db, self.receipts, self.vaults, self.flutterwave,
                               self.one_click, settings)
 
     def test_a_bank_deposit_is_a_checkout_with_our_reference(self):
         deposit = self.deposits().start(self.account.id, 20_000, "bank", None)
         self.assertEqual(deposit["status"], "open")
         self.assertTrue(deposit["pay"]["checkout_url"].startswith("https://checkout"))
-        checkout = next(iter(self.bachs.checkouts.values()))
-        self.assertEqual(checkout["metadata"]["deposit_id"], deposit["id"])
+        checkout = self.flutterwave.checkouts[deposit["id"]]
+        self.assertEqual(checkout["meta"]["deposit_id"], deposit["id"])
+        self.assertEqual(checkout["redirect_url"],
+                         f"https://app.test/wallet/add?deposit={deposit['id']}")
+        self.assertEqual(checkout["email"], f"{self.account.id}@test.invalid")
 
-    def test_the_webhook_credits_once_and_mirrors_to_the_vault(self):
+    def test_the_webhook_credits_once_after_verifying(self):
         service = self.deposits()
         deposit = service.start(self.account.id, 20_000, "bank", None)
-        event = {"reference": deposit["id"], "status": "SUCCEEDED"}
-        service.on_collection("collection.succeeded", event)
-        service.on_collection("collection.succeeded", event)
+        service.on_charge(deposit["id"])  # not paid yet: verify finds nothing
+        self.assertEqual(self.wallet()["balance_ngn"], 0)
+        self.flutterwave.pay(deposit["id"], 20_000)
+        service.on_charge(deposit["id"])
+        service.on_charge(deposit["id"])
         self.assertEqual(self.wallet()["balance_ngn"], 20_000)
         self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "credited")
         self.assertEqual([c[0] for c in self.chain.calls].count("fund"), 1)
 
-    def test_a_missed_webhook_is_caught_by_the_poll(self):
+    def make_due(self, *deposits):
+        for deposit in deposits:
+            self.db.query("UPDATE deposits SET next_check_at = '2000-01-01T00:00:00Z'"
+                          " WHERE id = $1", [deposit["id"]])
+
+    def test_a_missed_webhook_is_caught_when_the_check_comes_due(self):
         service = self.deposits()
         deposit = service.start(self.account.id, 20_000, "bank", None)
-        next(iter(self.bachs.checkouts.values()))["status"] = "completed"
-        service.poll_open()
-        service.on_collection("collection.succeeded",
-                              {"reference": deposit["id"], "status": "SUCCEEDED"})
+        self.flutterwave.pay(deposit["id"], 20_000)
+        service.check_due()
+        self.assertEqual(self.wallet()["balance_ngn"], 0, "not due yet")
+        self.make_due(deposit)
+        service.check_due()
+        service.on_charge(deposit["id"])
         self.assertEqual(self.wallet()["balance_ngn"], 20_000)
 
-    def test_accepted_waits_for_confirmation(self):
+    def test_an_unpaid_deposit_is_checked_less_often_as_it_ages(self):
+        self.assertEqual(_check_delay(Clock.now_iso()), MIN_CHECK_SECONDS)
+        hour_old = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        self.assertEqual(_check_delay(hour_old), MAX_CHECK_SECONDS)
+
+    def test_a_settled_deposit_leaves_nothing_due(self):
         service = self.deposits()
         deposit = service.start(self.account.id, 20_000, "bank", None)
-        service.on_collection("collection.succeeded",
-                              {"reference": deposit["id"], "status": "ACCEPTED"})
+        self.assertLessEqual(service.check_due(), MIN_CHECK_SECONDS)
+        self.flutterwave.pay(deposit["id"], 20_000)
+        service.on_charge(deposit["id"])
+        self.make_due(deposit)
+        due = self.db.one("SELECT 1 AS due FROM deposits WHERE id = $1"
+                          " AND status IN ('open', 'confirming')", [deposit["id"]])
+        self.assertIsNone(due)
+
+    def test_sending_the_tx_brings_the_check_forward(self):
+        service = self.deposits()
+        deposit = service.start(self.account.id, 20_000, "crypto", "nep141:tron-usdt")
+        self.make_due(deposit)
+        service.check_due()
+        service.submit_tx(self.account.id, deposit["id"], "0xabc")
+        self.assertLessEqual(service.check_due(), SOON_SECONDS)
+
+    def test_a_short_or_foreign_charge_is_not_credited(self):
+        service = self.deposits()
+        short = service.start(self.account.id, 20_000, "bank", None)
+        self.flutterwave.pay(short["id"], 19_999)
+        foreign = service.start(self.account.id, 20_000, "bank", None)
+        self.flutterwave.pay(foreign["id"], 20_000, currency="USD")
+        self.make_due(short, foreign)
+        service.check_due()
+        self.assertEqual(self.wallet()["balance_ngn"], 0)
+
+    def test_a_failed_charge_marks_the_deposit_failed(self):
+        service = self.deposits()
+        deposit = service.start(self.account.id, 20_000, "bank", None)
+        self.flutterwave.pay(deposit["id"], 20_000, status="failed")
+        self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "failed")
         self.assertEqual(self.wallet()["balance_ngn"], 0)
 
     def test_a_crypto_quote_covers_the_naira_at_the_locked_rate(self):
@@ -649,10 +684,10 @@ class DepositTests(MoneyCase):
         with self.assertRaises(ApiError) as caught:
             self.deposits().start(self.account.id, 20_000, "crypto", "nep141:unknown")
         self.assertEqual(caught.exception.code, "bad_asset")
-        no_bachs = DepositService(self.db, self.receipts, self.vaults, None, FakeOneClick(),
-                                  FundingSettings(None, None, None))
+        no_flutterwave = DepositService(self.db, self.receipts, self.vaults, None,
+                                        FakeOneClick(), FundingSettings(None, None, None))
         with self.assertRaises(ApiError) as caught:
-            no_bachs.start(self.account.id, 20_000, "bank", None)
+            no_flutterwave.start(self.account.id, 20_000, "bank", None)
         self.assertEqual(caught.exception.code, "not_available")
 
 
@@ -663,45 +698,109 @@ class WithdrawalTests(MoneyCase):
     balance = 50_000
 
     def withdrawals(self):
-        self.bachs = FakeBachs()
-        return WithdrawalService(self.db, self.receipts, self.vaults, self.bachs)
+        self.flutterwave = FakeFlutterwave()
+        return WithdrawalService(self.db, self.receipts, self.vaults, self.flutterwave)
 
-    def test_money_is_held_at_once_and_waits_for_review(self):
+    def test_money_is_held_at_once_and_sent_with_our_reference(self):
         service = self.withdrawals()
-        self.bachs.destination_status = {"status": "pending_review", "is_usable": False}
         result = service.request(self.account.id, 10_000, "058", "0123456789")
-        self.assertEqual(result["status"], "reviewing")
+        self.assertEqual(result["status"], "processing")
         self.assertEqual(self.wallet()["balance_ngn"], 40_000)
         self.assertIn(("debit", {"amount_ngn": "10000", "reference": result["id"]}),
                       self.chain.calls)
-        self.bachs.destination_status = {"status": "approved", "is_usable": True}
-        service.advance_reviewing()
-        self.assertEqual(service.recent(self.account.id)[0]["status"], "processing")
-        self.assertEqual(self.bachs.payouts[0]["reference"], result["id"])
+        self.assertEqual(self.flutterwave.transfers[0]["reference"], result["id"])
+        entry = self.receipts.recent(self.account.id, 1)[0]
+        self.assertEqual(entry["source"], "Guaranty Trust Bank ····6789")
 
-    def test_a_failed_payout_returns_the_money_once(self):
+    def test_a_timeout_is_resent_with_the_same_reference(self):
+        service = self.withdrawals()
+        self.flutterwave.transfer_error = FlutterwaveError(0, "unreachable")
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        self.assertEqual(result["status"], "sending")
+        self.flutterwave.transfer_error = None
+        service.advance()
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "processing")
+        self.assertEqual([t["reference"] for t in self.flutterwave.transfers], [result["id"]])
+
+    def test_a_transfer_that_went_through_is_never_sent_again(self):
+        service = self.withdrawals()
+        self.flutterwave.transfer_error = FlutterwaveError(0, "timed out")
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        self.flutterwave.transfer_error = None
+        self.flutterwave.transfers.append({"id": 77, "status": "NEW",
+                                           "reference": result["id"]})
+        service.advance()
+        self.assertEqual(len(self.flutterwave.transfers), 1)
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "processing")
+        self.flutterwave.transfer_status[result["id"]] = "SUCCESSFUL"
+        service.advance()
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "paid")
+
+    def test_a_refusal_for_a_transfer_flutterwave_holds_keeps_the_money_out(self):
+        service = self.withdrawals()
+        self.flutterwave.transfer_error = FlutterwaveError(400, "Wording we have not seen")
+        answers = iter([None, {"id": 77, "status": "NEW"}])
+        self.flutterwave.find_transfer = lambda _reference: next(answers)
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        self.assertEqual(result["status"], "processing")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+
+    def test_a_refusal_keeps_the_money_out_when_flutterwave_cannot_say(self):
+        service = self.withdrawals()
+        self.flutterwave.transfer_error = FlutterwaveError(400, "Refused")
+        calls = []
+
+        def find(_reference):
+            calls.append(1)
+            if len(calls) > 1:
+                raise FlutterwaveError(0, "unreachable")
+
+        self.flutterwave.find_transfer = find
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        self.assertEqual(result["status"], "sending")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+
+    def test_a_success_after_the_money_came_back_is_flagged_and_not_marked_paid(self):
         service = self.withdrawals()
         result = service.request(self.account.id, 10_000, "058", "0123456789")
-        service.on_payout(result["id"], paid=False)
-        service.on_payout(result["id"], paid=False)
-        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+        service.on_transfer(result["id"], "FAILED", "Account is invalid")
+        with self.assertLogs("stark.withdrawals", "CRITICAL"):
+            service.on_transfer(result["id"], "SUCCESSFUL", None)
         self.assertEqual(service.recent(self.account.id)[0]["status"], "returned")
-        self.assertEqual([c[0] for c in self.chain.calls].count("fund"), 1)
 
-    def test_a_rejected_bank_account_returns_the_money(self):
+    def test_a_refused_transfer_returns_the_money(self):
         service = self.withdrawals()
-        self.bachs.destination_status = {"status": "rejected", "is_usable": False,
-                                         "status_reason": "name mismatch"}
+        self.flutterwave.transfer_error = FlutterwaveError(400, "Insufficient funds")
         result = service.request(self.account.id, 10_000, "058", "0123456789")
         self.assertEqual(result["status"], "returned")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
-    def test_a_paid_payout_is_final(self):
+    def test_a_failed_transfer_returns_the_money_once(self):
         service = self.withdrawals()
         result = service.request(self.account.id, 10_000, "058", "0123456789")
-        self.assertTrue(service.on_payout(result["id"], paid=True))
+        service.on_transfer(result["id"], "FAILED", "Account is invalid")
+        service.on_transfer(result["id"], "FAILED", "Account is invalid")
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+        returned = service.recent(self.account.id)[0]
+        self.assertEqual((returned["status"], returned["note"]),
+                         ("returned", "Account is invalid"))
+        self.assertEqual([c[0] for c in self.chain.calls].count("fund"), 1)
+
+    def test_a_missed_webhook_is_caught_by_the_poll(self):
+        service = self.withdrawals()
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        service.advance()
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "processing")
+        self.flutterwave.transfer_status[result["id"]] = "SUCCESSFUL"
+        service.advance()
         self.assertEqual(service.recent(self.account.id)[0]["status"], "paid")
-        self.assertFalse(service.on_payout("refill_x", paid=True))
+
+    def test_a_paid_transfer_is_final(self):
+        service = self.withdrawals()
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        self.assertTrue(service.on_transfer(result["id"], "SUCCESSFUL", None))
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "paid")
+        self.assertFalse(service.on_transfer("wd_not_ours", "SUCCESSFUL", None))
 
     def test_refusals_take_nothing(self):
         service = self.withdrawals()
@@ -713,7 +812,7 @@ class WithdrawalTests(MoneyCase):
             with self.assertRaises(ApiError) as caught:
                 service.request(self.account.id, *args)
             self.assertEqual(caught.exception.code, code)
-        self.bachs.resolved = False
+        self.flutterwave.resolved = False
         with self.assertRaises(ApiError) as caught:
             service.request(self.account.id, 10_000, "058", "0123456789")
         self.assertEqual(caught.exception.code, "bad_account")
@@ -912,73 +1011,72 @@ class CryptoWithdrawalTests(MoneyCase):
 # --- the webhook ---------------------------------------------------------------------------
 
 
-def signed(body: bytes, secret: str, *, at: int | None = None, v2: bool = True) -> dict:
-    timestamp = str(at or int(time.time()))
-    sig = hmac.new(secret.encode(), f"{timestamp}.".encode() + body,
-                   hashlib.sha256).hexdigest()
-    if v2:
-        return {"x-bachs-signature-v2": f"t={timestamp},v1=deadbeef,v1={sig}"}
-    return {"x-bachs-signature": sig, "x-bachs-timestamp": timestamp}
+class FlutterwaveClientTests(unittest.TestCase):
+    def test_the_verif_hash_must_match(self):
+        self.assertTrue(flutterwave.verify_webhook({"verif-hash": "s3cret"}, "s3cret"))
+        self.assertFalse(flutterwave.verify_webhook({"verif-hash": "other"}, "s3cret"))
+        self.assertFalse(flutterwave.verify_webhook({}, "s3cret"))
+        self.assertFalse(flutterwave.verify_webhook({"verif-hash": ""}, ""))
 
+    def test_amounts_become_whole_naira(self):
+        self.assertEqual(flutterwave.whole_naira("11.0000"), 11)
+        self.assertEqual(flutterwave.whole_naira(249_700.99), 249_700)
 
-class SignatureTests(unittest.TestCase):
-    def test_v2_with_a_rotated_secret_and_v1(self):
-        body = b'{"id":"evt_1"}'
-        self.assertTrue(bachs.verify_signature(body, signed(body, "s"), "s"))
-        self.assertTrue(bachs.verify_signature(body, signed(body, "s", v2=False), "s"))
-
-    def test_tampered_stale_or_unsigned_bodies_are_refused(self):
-        body = b'{"id":"evt_1"}'
-        self.assertFalse(bachs.verify_signature(b'{"id":"evt_2"}', signed(body, "s"), "s"))
-        self.assertFalse(bachs.verify_signature(body, signed(body, "other"), "s"))
-        self.assertFalse(bachs.verify_signature(body, signed(body, "s",
-                                                             at=int(time.time()) - 301), "s"))
-        self.assertFalse(bachs.verify_signature(body, {}, "s"))
-        self.assertFalse(bachs.verify_signature(body, signed(body, "s"), ""))
-
-    def test_amounts_are_naira_strings(self):
-        self.assertEqual(bachs.naira(5000), "5000.00")
-        self.assertEqual(bachs.whole_naira("249700.99"), 249_700)
-
-    def test_key_prefix_picks_the_host(self):
-        self.assertIsNone(bachs.client_from_env({}))
-        self.assertEqual(bachs.client_from_env({"BACHS_SECRET_KEY": "sk_sandbox_x"}).base_url,
-                         bachs.SANDBOX_URL)
-        self.assertEqual(bachs.client_from_env({"BACHS_SECRET_KEY": "sk_live_x"}).base_url,
-                         bachs.LIVE_URL)
+    def test_the_key_is_checked_at_boot(self):
+        self.assertIsNone(flutterwave.client_from_env({}))
+        self.assertTrue(flutterwave.client_from_env(
+            {"FLW_SECRET_KEY": "FLWSECK_TEST-abc-X"}).test_mode)
+        self.assertFalse(flutterwave.client_from_env({"FLW_SECRET_KEY": "FLWSECK-abc-X"})
+                         .test_mode)
         with self.assertRaises(ValueError):
-            bachs.client_from_env({"BACHS_SECRET_KEY": "pk_x"})
+            flutterwave.client_from_env({"FLW_SECRET_KEY": "sk_live_x"})
 
 
 class WebhookTests(DepositTests):
     def webhooks(self, deposits):
-        floats = FloatService(self.db, FakeVtpass(), None, FloatSettings(1, 2, None))
-        withdrawals = WithdrawalService(self.db, self.receipts, self.vaults, self.bachs)
-        return BachsWebhookService(self.db, "whsec", deposits, withdrawals, floats)
+        withdrawals = WithdrawalService(self.db, self.receipts, self.vaults, self.flutterwave)
+        return FlutterwaveWebhookService(self.db, "whsec", deposits, withdrawals)
 
-    def test_a_signed_collection_credits_and_a_redelivery_does_not(self):
+    def test_a_charge_credits_and_a_redelivery_does_not(self):
         deposits = self.deposits()
         deposit = deposits.start(self.account.id, 20_000, "bank", None)
-        event_id = f"evt_{deposit['id']}"
-        body = json.dumps({"id": event_id, "type": "collection.succeeded",
-                           "data": {"reference": deposit["id"], "status": "SUCCEEDED"}}).encode()
+        self.flutterwave.pay(deposit["id"], 20_000)
+        charge_id = self.flutterwave.charges[deposit["id"]]["id"]
+        body = json.dumps({"event": "charge.completed",
+                           "data": {"id": charge_id, "tx_ref": deposit["id"],
+                                    "status": "successful", "amount": 20_000}}).encode()
         hook = self.webhooks(deposits)
         try:
-            self.assertFalse(hook.handle(body, signed(body, "whsec"))["duplicate"])
-            self.assertTrue(hook.handle(body, signed(body, "whsec"))["duplicate"])
+            self.assertFalse(hook.handle(body, {"verif-hash": "whsec"})["duplicate"])
+            self.assertTrue(hook.handle(body, {"verif-hash": "whsec"})["duplicate"])
         finally:
-            self.db.query("DELETE FROM processed_messages WHERE message_id = $1", [event_id])
+            self.db.query("DELETE FROM processed_messages WHERE message_id = $1",
+                          [f"charge.completed:{charge_id}"])
         self.assertEqual(self.wallet()["balance_ngn"], 20_000)
 
+    def test_the_body_alone_never_credits(self):
+        deposits = self.deposits()
+        deposit = deposits.start(self.account.id, 20_000, "bank", None)
+        # Says successful, but Flutterwave's verify has no such charge.
+        body = json.dumps({"event": "charge.completed",
+                           "data": {"id": 1, "tx_ref": deposit["id"],
+                                    "status": "successful", "amount": 20_000}}).encode()
+        try:
+            self.webhooks(deposits).handle(body, {"verif-hash": "whsec"})
+        finally:
+            self.db.query("DELETE FROM processed_messages WHERE message_id = $1",
+                          ["charge.completed:1"])
+        self.assertEqual(self.wallet()["balance_ngn"], 0)
+
     def test_an_unsigned_or_unconfigured_webhook_is_refused(self):
-        body = b'{"id":"evt_x","type":"collection.succeeded","data":{}}'
+        body = b'{"event":"charge.completed","data":{}}'
         hook = self.webhooks(self.deposits())
         with self.assertRaises(ApiError) as caught:
             hook.handle(body, {})
         self.assertEqual(caught.exception.code, "webhook_unverified")
-        hook.secret = None
+        hook.secret_hash = None
         with self.assertRaises(ApiError) as caught:
-            hook.handle(body, signed(body, "whsec"))
+            hook.handle(body, {"verif-hash": "whsec"})
         self.assertEqual(caught.exception.code, "webhook_unconfigured")
 
 
@@ -1004,15 +1102,15 @@ class WalletRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json()["code"], "not_available")
 
-    def test_withdraw_without_bachs_is_not_available_and_takes_nothing(self):
-        self.api.module.withdrawals.bachs = None
+    def test_withdraw_without_flutterwave_is_not_available_and_takes_nothing(self):
+        self.api.module.withdrawals.flutterwave = None
         response = self.api.client.post("/v1/wallet/withdraw", json={
             "amount_ngn": 5000, "bank_code": "058", "account_number": "0123456789"})
         self.assertEqual(response.status_code, 501)
 
-    def test_the_bachs_webhook_refuses_unsigned_requests(self):
-        self.api.module.bachs_webhooks.secret = "whsec"
-        response = self.api.client.post("/v1/bachs/webhook", content=b"{}")
+    def test_the_flutterwave_webhook_refuses_unsigned_requests(self):
+        self.api.module.flutterwave_webhooks.secret_hash = "whsec"
+        response = self.api.client.post("/v1/flutterwave/webhook", content=b"{}")
         self.assertEqual(response.status_code, 401)
 
 

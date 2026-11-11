@@ -34,7 +34,7 @@ from app.shared.services.api_config_service import ApiConfigService
 _ACCOUNT_SCOPED = frozenset({
     "create", "update", "get", "by_request_id", "has_pending", "find_pending",
     "recent", "count", "wallet", "set_wallet", "record_deposit",
-    "record_withdrawal", "added_this_month", "charge", "replace_all",
+    "record_debit", "added_this_month", "finish", "drop_hold", "replace_all",
 })
 
 
@@ -134,3 +134,85 @@ class ApiHarness:
     def restart(self) -> None:
         """Forget the in-process copy, as a fresh server process would."""
         self.module.accounts.forget(self.account.id)
+
+    def sell_with(self, bills: "FakeBills") -> None:
+        """Buy through a fake Flutterwave, as a keyed app would through the real one."""
+        self.module.floats.flutterwave = bills
+        self.module.bill_payments.payments.gateway.client = bills
+
+
+# --- Flutterwave, faked at its client ------------------------------------------------
+
+
+def catalogue_row(biller_code: str, name: str, item_code: str, item_name: str, amount: int,
+                  *, airtime: bool = False) -> dict[str, Any]:
+    """One `GET /v3/bill-categories` row, in the shape Flutterwave answers with."""
+    return {"biller_code": biller_code, "name": name, "item_code": item_code,
+            "biller_name": item_name, "short_name": item_name, "amount": amount,
+            "is_airtime": airtime, "country": "NG", "label_name": "Mobile Number",
+            "fee": 0}
+
+
+# A slice of the catalogue the test API returned on 2026-11-03: one biller of each
+# kind, plus the second Glo airtime item and a repeated row, which the real one has.
+CATALOGUE = [
+    catalogue_row("BIL099", "MTN VTU", "AT099", "AIRTIME", 0, airtime=True),
+    catalogue_row("BIL102", "GLO NIGERIA", "AT133", "GLO VTU", 0, airtime=True),
+    catalogue_row("BIL102", "GLO NIGERIA", "AT102", "GLO VTU", 0, airtime=True),
+    catalogue_row("BIL103", "9MOBILE NIGERIA", "AT103", "9MOBILE VTU", 0, airtime=True),
+    catalogue_row("BIL104", "MTN DATA BUNDLE", "MD107", "MTN 1.5 GB", 1000),
+    catalogue_row("BIL104", "MTN DATA BUNDLE", "MD108", "MTN 3.5 GB", 2000),
+    catalogue_row("BIL104", "MTN DATA BUNDLE", "MD107", "MTN 1.5 GB", 1000),
+    catalogue_row("BIL119", "DSTV", "CB140", "DSTV Premium", 14600),
+    catalogue_row("BIL119", "DSTV", "CB141", "DSTV Access", 1800),
+    catalogue_row("BIL123", "STARTIMES", "CB260", "BASIC - One Month", 1700),
+    catalogue_row("BIL113", "IKEJA DISCO ELECTRICITY BILLS", "UB159", "IKEDC  PREPAID", 0),
+    catalogue_row("BIL113", "IKEJA DISCO ELECTRICITY BILLS", "UB160", "IKEDC  POSTPAID", 0),
+    catalogue_row("BIL130", "Federal Inland Revenue Service", "TP214", "FIRS Tax", 0),
+]
+
+
+class FakeBills:
+    """Flutterwave's bill endpoints. `outcome` is what the status read says next."""
+
+    test_mode = True
+
+    def __init__(self, outcome: str = "successful",
+                 extra: str | None = "TOKEN11472398570712345678") -> None:
+        from app.modules.flutterwave.flutterwave import FlutterwaveError
+
+        self.error = FlutterwaveError
+        self.outcome = outcome
+        self.extra = extra
+        self.paid: list[dict[str, Any]] = []
+        self.read: list[str] = []
+        self.placed: set[str] = set()
+        self.refuse: Any = None
+
+    def ngn_balance(self) -> int:
+        return 500_000
+
+    def pay_bill(self, **order: Any) -> dict[str, Any]:
+        if self.refuse is not None:
+            raise self.refuse
+        self.paid.append(order)
+        self.placed.add(f"CF-FLYAPI-{order['reference']}")
+        return {"tx_ref": f"CF-FLYAPI-{order['reference']}", "reference": "247891569224",
+                "amount": order["amount_ngn"], "code": "200"}
+
+    def bill_status(self, tx_ref: str) -> dict[str, Any]:
+        self.read.append(tx_ref)
+        if tx_ref not in self.placed:
+            raise self.error(400, "Transaction not found")
+        delivered = self.outcome == "successful"
+        return {"status": self.outcome, "code": "200" if delivered else "400",
+                "extra": self.extra if delivered else None, "tx_ref": tx_ref}
+
+
+def use_catalogue() -> None:
+    from app.modules.vending.catalog import CATALOG
+
+    CATALOG.use(lambda: CATALOGUE)
+
+
+use_catalogue()

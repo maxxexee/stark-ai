@@ -40,7 +40,7 @@ def methods(_account: AuthUser, module: Module) -> JSONResponse:
     return JSONResponse({
         **module.deposits.methods(),
         "test_money": module.wallet.test_money,
-        "withdraw": {"bank": module.bachs is not None,
+        "withdraw": {"bank": module.flutterwave is not None,
                      "crypto": module.crypto_withdrawals.available()},
     })
 
@@ -71,9 +71,12 @@ def crypto_assets(_account: AuthUser, module: Module) -> JSONResponse:
              responses=ApiResponses.errors("bad_amount", "bad_method", "bad_asset",
                                            "not_available", "provider_failed"))
 def start_deposit(dto: StartDepositDto, account: AuthUser, module: Module) -> JSONResponse:
-    """`bank`: send the user to `pay.checkout_url`. `crypto`: show `pay.amount` of
-    `pay.asset` on `pay.chain` to `pay.address` (with `pay.memo` when set). The
-    balance moves when the deposit reads `credited`; poll GET /v1/wallet/deposits/{id}."""
+    """`bank`: send the user to `pay.checkout_url` in the same tab; Flutterwave brings
+    them back to `/wallet/add?deposit=<id>`, and reading the deposit then verifies it.
+    `crypto`: show `pay.amount` of `pay.asset` on `pay.chain` to `pay.address` (with
+    `pay.memo` when set); the user can leave, and Stark checks the deposit on its own.
+    Read GET /v1/wallet/deposits/{id} when they come back. The balance moves when the
+    deposit reads `credited`."""
     return JSONResponse(
         module.deposits.start(account.id, dto.amount_ngn, dto.method, dto.asset_id),
         status_code=201,
@@ -124,9 +127,9 @@ def resolve(dto: BankAccountDto, _account: AuthUser, module: Module) -> JSONResp
                                            "insufficient_balance", "not_available",
                                            "provider_failed"))
 def withdraw(dto: WithdrawDto, account: AuthUser, module: Module) -> JSONResponse:
-    """The money leaves the balance at once. `reviewing` means Bachs is checking a
-    new bank account; it moves to `processing`, then `paid` — or `returned`, and the
-    money comes back to the balance."""
+    """The money leaves the balance at once. `sending` until Flutterwave takes the
+    transfer, then `processing`, then `paid` — or `returned`, and the money comes
+    back to the balance."""
     return JSONResponse(
         module.withdrawals.request(account.id, dto.amount_ngn, dto.bank_code,
                                    dto.account_number),
