@@ -24,7 +24,7 @@ export class BillKinds {
     electricity: ["Ikeja Electric"],
     airtime: ["MTN", "Airtel", "Glo", "9mobile"],
     data: ["MTN", "Airtel", "Glo", "9mobile"],
-    tv: ["DStv", "GOtv", "Startimes", "Showmax"],
+    tv: ["DStv", "GOtv", "Startimes"],
     internet: ["Spectranet", "Smile", "Other"],
     water: ["Lagos Water Corporation", "Other"],
   };
