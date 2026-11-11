@@ -24,6 +24,7 @@ class ApprovalsTest(unittest.TestCase):
         self.addCleanup(self.account.close)
         self.api = test_support.ApiHarness(self.account)
         self.addCleanup(self.api.restart)
+        self.api.sell_with(test_support.FakeBills())
         self.client = self.api.client
         self.bill = self.client.post("/v1/bills", json={
             "kind": "airtime", "provider": "MTN", "reference": "08030000003",

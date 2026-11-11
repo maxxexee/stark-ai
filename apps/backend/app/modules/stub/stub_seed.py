@@ -45,9 +45,8 @@ class StubSeed:
                 "provider": "DStv",
                 "label": "Living room TV",
                 "reference": "7032119456",
-                # The plan is the product. `dstv79` is the Compact bouquet in
-                # VTpass's captured catalogue and costs ₦7,900.
-                "plan": "dstv79",
+                # The plan is the product: the cheapest DStv bouquet Flutterwave
+                # sells, picked below from the live catalogue.
                 # Due in three days, not recently paid: the reminder window always
                 # has a bill in it (see `reminders.py`).
                 "renews_on": Clock.in_days(3),
@@ -67,13 +66,16 @@ class StubSeed:
             },
         ]
         bills = {bill["id"]: copy.deepcopy(bill) for bill in seed}
-        # Bills bought by plan carry the vendor's price, so nobody guesses it.
+        # Bills bought by plan carry the vendor's plan and price, so nobody guesses
+        # them. Without a catalogue (Flutterwave unset) the TV bill has no plan yet.
         for bill in bills.values():
             product = catalog.CATALOG.product(bill["kind"], bill["provider"])
-            if product is not None and product.needs_plan and bill.get("plan"):
-                plan = catalog.CATALOG.plan(product, bill["plan"])
-                if plan is not None:
-                    bill["plan_price_ngn"] = plan.price_ngn
+            if product is not None and product.needs_plan:
+                plans = catalog.CATALOG.plans(product)
+                if plans:
+                    cheapest = min(plans, key=lambda plan: plan.price_ngn)
+                    bill["plan"] = cheapest.code
+                    bill["plan_price_ngn"] = cheapest.price_ngn
         return bills
 
     @staticmethod

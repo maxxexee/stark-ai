@@ -1,8 +1,0 @@
-{
-  "code": "019",
-  "response_description": "DUPLICATE TRANSACTION",
-  "requestId": "202610201930a1b2c3d4",
-  "content": {
-    "errors": "Duplicate request_id"
-  }
-}

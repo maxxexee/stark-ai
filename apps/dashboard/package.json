@@ -5,7 +5,7 @@
   "type": "module",
   "description": "The Stark app: balance, bills, limits, wallet, activity and Talk. TanStack Start, talks only to the backend's /v1 API.",
   "scripts": {
-    "dev": "vite dev --port 5174",
+    "dev": "infisical secrets-manager run --env=dev --path=/dashboard --silent -- vite dev --port 5174",
     "build": "vite build",
     "start": "vite preview --port 5174",
     "clean": "git clean -xdf .output .tanstack .turbo dist node_modules",

@@ -2,12 +2,39 @@
 
 **Written 2026-10-20, last resumed 2026-11-03 (money flow, crypto withdrawals, live
 rails).** If you are an agent picking this up, read §0 (newest first) and then §1–3
-before touching anything. Sections 9–11 are the honest list of what is broken, guessed,
-or still unproven — but where §0's 2026-11-03 notes contradict them, §0 is newer.
+before touching anything. Sections 9, 10 and 13 were brought in line with §0 on
+2026-11-11; §11 and §12 still carry VTpass-era notes, and where they disagree, §0 wins.
 
 ---
 
 ## 0. Resume here — state as of 2026-11-03
+
+**Later on 2026-11-03: Bachs and VTpass were replaced by Flutterwave.** One Flutterwave
+account now collects deposits (hosted checkout), pays bills and sends withdrawals, from
+one NGN balance, so there is no float to refill. Every Bachs and VTpass mention below is
+history. What is true now:
+
+- The v3 test key works for `/bill-categories`, `/banks/NG`, `/balances/NGN`,
+  `/accounts/resolve` and `POST /payments` (checkout with a localhost redirect).
+- **Bills and transfers answer `Please enable IP Whitelisting`** (HTTP 400) until the
+  caller's IP is on the dashboard's whitelist, test mode included. The list is empty and
+  has no off switch. No bill or transfer has run. Production needs a fixed outgoing IP.
+- **Hosted checkout does not open on this account.** `POST /payments` returns a link, but
+  every link shows `Initialization failed` in test mode, even with only the required
+  fields and a public redirect. Our payload is not the cause. No deposit has completed.
+- Dashboard, still to change by hand: turn on *Enable v3 webhooks* and *Enable webhook
+  retries* (both off; the handler reads the v3 shape), save the webhook URL and hash, and
+  choose *Settle to my payout balance* (it says bank account, and none exists).
+- Collections settle into the balance later (batched daily), so Stark still fronts a
+  deposit until then.
+- A retry reads a bill by Flutterwave's `tx_ref`, the documented id, saved on the receipt
+  as `vendor_ref`. One with no `tx_ref` got no answer and fails after 30 minutes, leaving
+  the user uncharged; if it did land, Stark paid for it. The money loop re-reads every
+  pending bill older than a minute (`BillPaymentService.settle_pending`), so it settles
+  without a retry.
+- A bank transfer checks `GET /transfers?reference=` before sending and after any refusal,
+  so nothing depends on the wording of a duplicate error.
+- There are no fixtures: the catalogue is read live, and tests fake the client.
 
 Verified on 2026-11-03 against the live services, not assumed:
 
@@ -294,8 +321,8 @@ is resolved server-side.
 `POST /v1/payments` now enforces the **per-payment** cap as well as the monthly one,
 in the same order as the agent (§10.13). 50 smoke checks cover the new routes.
 
-What is still in memory: bills, limits and `units_left`. A restart resets them while
-receipts and the wallet survive (§9).
+Bills and limits are stored in Postgres (`bills`, `account_limits`), and `units_left`
+is worked out from delivered receipts, so all three survive a restart (2026-11-11).
 
 ### M2 — the agent server
 
@@ -833,122 +860,109 @@ refactor delay the one working demo.
 
 ## 9. What's NOT built
 
-Do not assume any of this exists:
+Rewritten 2026-11-11 to match §0 (2026-11-03). Do not assume any of this exists:
 
-- **Vault deployment** — the contract is written, tested and compiles to a 203 KB wasm
-  (§0), but has never been deployed: no testnet account, no testnet NEAR, and neither
-  `near` nor `cargo-near` is installed on this machine.
-- **Agent server, partly** — tool routing, the policy gate and `pay()` signing exist
-  and are tested (M2), the payment path buys through VTpass (M3), and the real NEAR AI
-  model + Whisper are live-verified (2026-10-22). Still not real: no transaction has
-  ever been broadcast or landed onchain, no live VTpass purchase has run, and
-  `/v1/voice` still accepts `transcript_hint` rather than audio.
-- **Token custody** — each user's vault `balance_ngn` is a naira ledger that mirrors
-  money Stark holds (VTpass float, Bachs balance, treasury USDC). The vault does not
-  hold tokens: crypto deposits land as USDC in Stark's treasury and the funder credits
-  the vault. Say so plainly; the onchain guarantee is the **caps**, not custody.
+- **Per-user vaults, live.** The shared vault is deployed at `stark-vault.testnet` and
+  a `pay()` signed by `near_tx` was accepted on chain (commit `f2e8c61`). Vaults per
+  user (`u-<hex>.stark-vault.testnet`) are code and tests only: `STARK_FUNDER_KEY` and
+  `STARK_AGENT_KEY` are not on this machine, so none has been created.
+- **A live bill purchase.** Bills go through Flutterwave, and Flutterwave answers every
+  bill and transfer with `Please enable IP Whitelisting` (HTTP 400) until the caller's
+  IP is whitelisted, test mode included. No bill has been bought, so no real token has
+  come back. Production needs a fixed outgoing IP.
+- **Token custody.** Each user's vault `balance_ngn` is a naira ledger that mirrors
+  money Stark holds (the Flutterwave NGN balance and the treasury's USDC). The vault does
+  not hold tokens: crypto deposits land as USDC in Stark's treasury and the funder
+  credits the vault. Say so plainly; the onchain guarantee is the **caps**, not custody.
 - **Auth** — Neon Auth sessions on every `/v1` route (401 `unauthorized` without one);
   the Telegram webhook authenticates with its own secret. Still missing: the
   channel-signature scheme for WhatsApp/SMS in §8A.
-- **Persistence, partly** — accounts, receipts, wallets and channel identities are in
-  Neon Postgres and survive restarts, scoped per account (M3 + auth). Still in memory: telemetry readings, **bills added through `POST /v1/bills`,
-  the limits set through `PATCH /v1/limits`, and `units_left`**. A delivered payment
-  updates the bill's `last_amount_ngn` / `last_units` / `last_paid_at` and adds its
-  units to `units_left`, but all four reset on restart (and on `_stub/reset`). So a
-  restart can keep the spending while forgetting the meter that caused it. Making
-  these durable is additive and does not change any shape. `days_left` remains the
-  seeded estimate.
-- **Water and internet** — no confirmed VTpass product. Asking for them fails with a
-  plain message and charges nothing; there is no silent "recorded" fallback.
-- **Wallet funding — built 2026-11-03, never run live.** Bachs checkout (bank,
-  card, USDT/USDC) and NEAR Intents (any chain → USDC on NEAR) credit Postgres and
-  the vault once each; Bachs payouts withdraw and refill the VTpass float. All of it
-  is tested against faked rails only (`tests/test_money.py`). Needs `BACHS_SECRET_KEY`,
-  `BACHS_WEBHOOK_SECRET`, `STARK_TREASURY_NEAR_ACCOUNT`, `STARK_USDC_NGN_RATE`.
+- **Persistence** — accounts, receipts, wallets, channel identities, bills
+  (`POST /v1/bills`), limits (`PATCH /v1/limits`) and telemetry readings are in Neon
+  Postgres and survive restarts, scoped per account. `units_left` is derived from
+  delivered receipts and readings, not stored, so it survives too (checked 2026-11-11).
+- **Water and internet** — Flutterwave is not used for them. A bill of either kind
+  can be saved, but paying it fails with a plain message and charges nothing; there is
+  no silent "recorded" fallback.
+- **A completed deposit.** Flutterwave checkout (bank transfer, card, USSD) and NEAR
+  Intents (any chain → USDC on NEAR) credit Postgres and the vault once each. Neither
+  has completed live: every Flutterwave checkout link shows `Initialization failed` in
+  test mode (our payload is not the cause), and 1Click runs on mainnet only. The flow is
+  tested against faked clients (`tests/test_money.py`, `tests/test_settlement.py`).
+- **A completed withdrawal.** Bank withdrawals use Flutterwave transfers (blocked by the
+  same IP whitelist). Crypto withdrawals are off until a real mainnet treasury account
+  and `STARK_TREASURY_KEY` are set (§0).
 - **Bill edits do not rewrite history.** Renaming a bill leaves old receipts with the
   `bill_label` captured at payment time; deleting a bill keeps its activity rows.
   That is intended, but a UI that joins on `bill_id` must handle a missing bill.
-- **Intents funding** — built (see wallet funding above); no swap has ever run.
-- **Telegram bot — built, never live.** The adapter, webhook auth, dedupe, linking
-  and the wake gate exist and are tested (§0 M4), but no bot token or webhook
-  secret has ever been set, so the server refuses every update in production
-  until the human configures `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET`.
-  No real Telegram update has ever been received or answered. WhatsApp, SMS and
-  Apple are still design-only (§8A).
+- **WhatsApp, SMS and Apple Messages.** The Telegram bot is live (`@hellostarkai_bot`,
+  §0). The WhatsApp (Meta) and SMS (Twilio) adapters are built and fail closed, because
+  neither account exists. Apple Messages is design-only (§8A).
 - **Telemetry → suggestions** — `/v1/telemetry` readings now feed `load_imbalance`,
   but the sensor only exists in demo data: no real meter has ever posted. The line
   needs two devices, which is why it is quiet in a fresh install.
 - **Reminder pushes** — the loop, the de-dupe and the Telegram send are written and
-  tested; **no push has ever left the machine** because no bot token is configured.
+  tested. The bot is now live, but no delivered push has been recorded here.
 - **Frontend** — being built by a human teammate against `docs/API.md`.
 - **Demo video, X post, submission** — none.
 
 ---
 
-## 9A. The money flow (2026-11-03)
+## 9A. The money flow (Flutterwave, 2026-11-03)
 
 ```
-FUND      Bachs checkout ──► collection.succeeded ─┐
-          1Click quote ──► /v0/status SUCCESS ─────┼─► wallet credit (one statement, keyed on the
-                                                   │   deposit id) + vault fund(amount, id) via outbox
-PAY       paused? caps? balance? ─► VTpass float covers it? ─► vault pay (agent key) or
-          pay_approved (owner key, approved over-cap) ─► record ─► VTpass buy ─► charge on
-          delivery │ vendor failed ─► vault refund(payment_id)
-WITHDRAW  resolve name ─► hold the money + vault debit ─► Bachs destination review ─► payout
-          ─► payout.paid │ payout.failed / rejected ─► credit back + vault fund(<id>-r)
-REFILL    float < STARK_FLOAT_LOW_NGN ─► Bachs payout to VTPASS_FUNDING_DESTINATION (or a logged
-          manual top-up) ─► payout.paid closes it
-LOOP      every 30s: flush vault ops, poll open deposits, send approved withdrawals, check float
+FUND      Flutterwave checkout ──► verify by tx_ref ─┐   (webhook, redirect or a due check)
+          1Click quote ──► /v0/status SUCCESS ───────┼─► wallet credit (one statement, keyed on
+                                                     │   the deposit id) + vault fund(amount, id)
+PAY       paused? caps? balance? ─► Flutterwave balance covers it (minus pending)? ─► vault pay
+          (agent key) or pay_approved (owner key, approved over-cap) ─► record ─► Flutterwave
+          bill ─► charge on delivery │ vendor failed ─► vault refund(payment_id)
+WITHDRAW  resolve name ─► hold the money + vault debit ─► Flutterwave transfer (reference =
+          withdrawal id; GET /transfers?reference= first) ─► transfer.completed SUCCESSFUL │
+          FAILED ─► credit back + vault fund(<id>-r)
+CRYPTO    hold ─► USDC at STARK_USDC_NGN_RATE ─► treasury ft_transfer to a 1Click address
+LOOP      every 30s: flush vault ops, send withdrawals, warn under STARK_FLOAT_LOW_NGN
+DEPOSITS  each open deposit has a next_check_at; one thread sleeps until the earliest
 ```
 
-Stark **fronts the naira**: a credited deposit is spendable immediately from the
-VTpass float; the rails settle afterwards and the FX risk on crypto is Stark's.
+Stark **fronts the naira**: a credited deposit is spendable at once from Stark's
+Flutterwave NGN balance; Flutterwave settles collections into that balance later
+(batched daily), and the FX risk on crypto is Stark's. There is no float to refill,
+since deposits, bills and transfers share one balance. A payment the balance cannot cover
+is refused with `float_low` before anything is signed.
 `python -m app.modules.treasury.treasury_service` reports owed vs held.
 
 Decisions taken, and why:
 
 | Decision | Why |
 |---|---|
+| One Flutterwave account for deposits, bills and withdrawals | one NGN balance, so no float to refill between rails (replaced Bachs + VTpass) |
 | One vault per user, a sub-account `u-<id>.<funder>` created in one tx | user's choice; the agent key is added per vault and can only `pay` there |
 | Vault code as a **global contract** by default | a 277 KB wasm per user is ~2.8 NEAR of storage; a global contract is stored once |
-| Bachs **checkout per deposit**, not a virtual account | a Bachs virtual account is one per merchant with no reference; checkout carries our `reference` back |
-| Crypto credited at a **locked env rate** (`STARK_USDC_NGN_RATE`) | Bachs does not convert USDC→NGN or support NEAR; the treasury sells USDC off-platform |
+| Checkout **per deposit**, keyed on our `tx_ref` | the deposit is credited only from Flutterwave's own verify call, never from a webhook body |
+| Crypto credited at a **locked env rate** (`STARK_USDC_NGN_RATE`) | Flutterwave does not take USDC or NEAR; the treasury sells USDC off-platform |
 | Policy synced **lazily before each pay** | caps only bind at payment time; no chain call on every settings change |
 | `pay_approved` is owner-only | an approved over-cap payment cannot be reached with the agent key |
 
 ## 10. Uncovered and unverified (do not let these get laundered into facts)
 
-1. **VTpass live token vending has never happened.** Everything is fixture-backed. The
-   wire shape matches VTpass's published SDK, and as of M3 the whole path — store,
-   idempotent retry, charge-on-delivery — runs end to end against fixtures, but no `pay`
-   call has returned a real token. **This is still the single thing that can kill the
-   project.**
-
-   **2026-10-22 update — auth and verification are now live-verified.** The sandbox key
-   pair authenticates (POSTs need `api-key` + `secret-key`; the static key alone is 401),
-   `merchant-verify` for the documented test meter `1111111111111` returns
-   `Customer_Name: TESTMETER1` and `WrongBillersCode: false`, and a wrong meter returns
-   HTTP 200 / `code: "000"` with `WrongBillersCode: true` in `content` — which the client
-   now refuses as `016`. `/pay` returns `028 PRODUCT IS NOT WHITELISTED ON YOUR ACCOUNT`
-   for both `ikeja-electric` and `mtn`, so purchases are blocked by **account
-   provisioning**, not code. Ask VTpass to enable the products on the sandbox account;
-   then the only remaining step is the one real `DELIVERED` token.
-2. **All five purchase-response fixtures are hand-written.** The 13 catalogue fixtures
-   (`services_*.json`, `service-variations_*.json`) were captured live on 2026-10-22;
-   `merchant-verify_ok.json` and the four `pay_*.json` files are modeled, because a
-   purchase needs credentials. `Customer_Name`, `units`, `token` nesting are all guesses
-   at VTpass's real shape. `fixtures/README.md` records this. Replace them with real
-   captures the moment credentials exist.
-3. **Whisper's privacy tier is unknown.** NEAR AI has three tiers — **Confidential TEE**
-   (their own fleet), **3P Confidential TEE**, and **Incognito** (gateway in a TEE but the
-   model runs *outside* a TEE). The `/v1/models` payload has no tier field. If whisper is
-   Incognito, **"the whole voice path stays private" is false** and must not be said to
-   `security` judges. Check the model catalog before writing the README.
-
-   **2026-10-22:** the pricing page labels `Qwen/Qwen3.8-27B` **Private TEE** (NEAR's
-   own fleet), so the chat path can carry that claim. Whisper reports
-   `owned_by: nearai` but its tier is still not stated in the API payload — confirm it
-   on the catalogue before claiming the voice path is private.
+1. **No bill has been bought live.** VTpass is gone (2026-11-03); bills now go
+   through Flutterwave (`flutterwave/flutterwave.py`, `vending/vending.py`). The test key
+   reads `/bill-categories`, `/banks/NG`, `/balances/NGN` and `/accounts/resolve`, but
+   `POST` bills and transfers answer `Please enable IP Whitelisting` (HTTP 400) until the
+   caller's IP is on the dashboard's whitelist. The list is empty and has no off switch.
+   So the whole purchase path (record before buy, idempotent retry, charge on delivery)
+   runs only against a faked client, and no call has returned a real token. **This is
+   still the single thing that can kill the project.** It is blocked by account setup,
+   not code.
+2. **No purchase response has been captured.** The fixtures directory is deleted.
+   The catalogue is read live, and tests fake the Flutterwave client, so the shapes of a
+   bill result, its token and its pending state come from Flutterwave's docs, not from a
+   captured response. Check them against the first live purchase.
+3. ~~**Whisper's privacy tier is unknown.**~~ **Settled 2026-11-03** (§0): near.ai/models
+   lists **Whisper Large v3 as Private TEE**, so voice-in is private. The chat model,
+   `google/gemini-2.5-flash-lite`, is **Incognito** (it runs at Google), so do not claim
+   the chat path is private. See §10.12 for the speed trade-off.
 4. **NEAR AI minimum top-up / starter credits unknown.** Usage is fractions of a cent; a
    required deposit is the only way cost becomes a real question.
 5. **AC wiring unknown.** A 1–1.5 HP split on a 13A socket takes a 16A smart plug (watch
@@ -965,14 +979,12 @@ Decisions taken, and why:
    and OpenAI's $0.003–0.006/min), so "pennies" is safe; the exact figure is not published.
 9. **`whisper-large-v3` accuracy on Nigerian-accented English is unmeasured** — reasonable
    inference from model size, not a measurement.
-10. **One non-hermetic test.** `test_live_flag_accepted_after_subcommand` makes a real
-    network call (tolerates failure, so it won't flake-fail).
-11. **The borsh transaction encoding has never been round-tripped.** `near_tx.py`
-    encodes `TransactionV0` + `Action::FunctionCall` from `near-primitives`, and the
-    tests pin byte offsets, the U128-as-string argument and `tx_hash = sha256(tx)` —
-    but no signed transaction has been accepted by an RPC. A layout error is silent
-    until the first live send. **Verify with one tiny testnet `fun` call before
-    trusting it for a payment.**
+10. ~~**One non-hermetic test.**~~ Gone: `test_live_flag_accepted_after_subcommand`
+    lived in `test_vtpass.py`, which was deleted with VTpass.
+11. ~~**The borsh transaction encoding has never been round-tripped.**~~ **Done
+    2026-11-03:** a `pay()` signed by `near_tx.py` was accepted on chain by
+    `stark-vault.testnet` (commit `f2e8c61`). What is still not round-tripped: the
+    global-contract actions (§10.21) and creating a per-user vault.
 12. ~~**The NEAR AI model client has never run.**~~ **Live-verified 2026-10-22.** With
     a key, `NearAiModel` returned a real completion from `Qwen/Qwen3.8-27B` and a
     parsed tool call (`get_balance`). `stt.transcribe` returned real Whisper
@@ -1017,28 +1029,29 @@ Decisions taken, and why:
     speed call, not a TEE one. If a judge asks about the model tier, either say
     `gemini-2.5-flash-lite` plainly or flip `NEAR_AI_MODEL` back to `Qwen/Qwen3.8-27B`;
     one env var, restart the server.
-13. **Limits do not survive a restart.** `PATCH /v1/limits` mutates the agent's live
-    `Limits` object, so both paths enforce the new caps immediately — but the values live
-    in memory. A restart, or `_stub/reset`, restores ₦30,000 / ₦10,000. (The per-payment
-    cap *is* now enforced on `POST /v1/payments`; it is no longer a two-rule-set gap.)
-14. **In dry-run, every purchase returns the same token.** `fixtures/pay_ok.json` carries
-    `4821 0937 5512 8846 3019`, which is also receipt `rcpt_0003`'s token. Perfect for
-    tests, misleading in a screenshot: do not present a dry-run token as a live one, and
-    do not let two purchases side by side in the same demo both show it.
-15. **A pending payment does not reserve the balance.** The cap and balance are checked
-    before the vendor call; a purchase that comes back pending is charged later on
-    settlement. Two payments racing on the same intent can both pass the check —
-    `find_pending` narrows it, it does not lock. Fine for one wall phone; revisit before
-    more than one user.
-16. **Plan prices are a snapshot.** `fixtures/service-variations_*.json` was captured
-    2026-10-22. VTpass changes bouquet prices; a stale fixture means the agent refuses a
-    payment the vendor would now accept (or accepts one it wouldn't). Re-capture before
-    the demo, and note that `dstv79` is ₦7,900 *as of the capture*.
+13. ~~**Limits do not survive a restart.**~~ **Fixed:** `PATCH /v1/limits` writes
+    `account_limits` and replaces the agent's live `Limits`, so the new caps apply at
+    once and after a restart.
+14. ~~**In dry-run, every purchase returns the same token.**~~ Gone with the fixtures.
+    There is no dry mode now: a `FLWSECK_TEST-` key talks to Flutterwave's test
+    environment. Still, do not present a test-mode token as a live one in a demo.
+15. ~~**A pending payment does not reserve the balance.**~~ **Fixed 2026-11-11:** the
+    amount leaves the balance in the same statement that records the pending receipt
+    (`record_debit`), so a second payment racing it is refused `insufficient_balance`.
+    Delivery turns the hold into spend and failure returns it (`finish`), each moving
+    only a receipt still `pending`, so a retry and the background check cannot both
+    settle it. Still open: the **monthly cap** counts delivered spend only, so two
+    simultaneous payments can each pass it in Python. With a vault chain configured its
+    onchain caps still bind; without one, nothing serialises the cap check.
+16. ~~**Plan prices are a snapshot.**~~ **Fixed 2026-11-03:** the catalogue reads
+    Flutterwave's `GET /v3/bill-categories?country=NG` live and refreshes it hourly
+    (`vending/catalog.py`), so a plan price is at most an hour old.
 17. **A plan change does not touch past receipts.** `PATCH /v1/bills/{id}` rewrites the
     bill's `plan` and `plan_price_ngn` for future payments; an earlier receipt keeps the
     amount it was actually charged. Do not recompute history from the current plan.
-18. **Airtime/data/TV have never been bought, only resolved.** The catalogue proves the
-    ids and prices exist; `pay` for those products still has no live response (§10.1).
+18. **Airtime/data/TV have never been bought, only resolved.** The live Flutterwave
+    catalogue proves the billers, items and prices exist; no `pay` has gone through for
+    any of them (§10.1).
 19. **The seed leaves only ₦7,000 of the monthly cap.** With the artboards' ₦23,000
     spent, a ₦7,900 DStv payment is an `over_cap` refusal until the month rolls over.
     That matches the design ("DStv · Nov 3" is next month), but it means the earlier
@@ -1052,8 +1065,8 @@ Decisions taken, and why:
     `sendVoice` is proven with ffmpeg; and `bun smoke` passes **60/60 with a
     voice up, 58/58 with voice off** — against a *live* model (Qwen when written,
     `google/gemini-2.5-flash-lite` since 2026-10-24), which is why two smoke
-    assertions were rewritten to stop pinning deterministic phrasing. No note
-    has reached a real chat, because the bot has no live token. Two honest gaps on
+    assertions were rewritten to stop pinning deterministic phrasing. The bot is
+    live now (§0), but no voice note to a real chat has been recorded here. Two honest gaps on
     top: **Kokoro has no Nigerian English voice** (default `af_heart` is US female;
     Chatterbox cloning is the accent path), and the sidecar venv needs spaCy's
     `en_core_web_sm` installed explicitly (`tts-requirements.txt`) — misaki's
@@ -1075,14 +1088,20 @@ Decisions taken, and why:
     free tier is 10,000 credits/month, non-commercial — fine for the demo, worth
     knowing before a launch claim.
 
-21. **The whole money flow is fixture-tested only (2026-11-03).** Nothing below has run live:
-   - Bachs checkout, webhooks and payouts. The shapes come from Bachs's OpenAPI spec
-     (`docs.bachs.io/docs/openapi/openapi.json`), not from captured responses.
-   - Bachs says payout destinations "must belong to you" and go through review. Ask
-     Bachs whether a user's own bank account and VTpass's funding account will pass
-     that review before promising withdrawals or automatic refills.
-   - The VTpass funding account details are undocumented.
-   - 1Click quotes and status: mainnet only, and there is no testnet.
+21. **The whole money flow is tested against faked clients only (2026-11-03).** Nothing
+    below has run live:
+   - Flutterwave checkout: `POST /payments` returns a link, but every link shows
+     `Initialization failed` in test mode, even with only the required fields and a
+     public redirect. No deposit has completed.
+   - Flutterwave bills and transfers: blocked by the IP whitelist (§10.1).
+   - Flutterwave webhooks: *Enable v3 webhooks* and *Enable webhook retries* are off on
+     the dashboard, and the handler reads the v3 shape. The webhook URL and hash, and
+     *Settle to my payout balance*, are still to be set by hand (§0).
+   - A pending bill with no `tx_ref` fails after 30 minutes and leaves the user
+     uncharged; if it did land, Stark paid for it. The money loop settles pending bills
+     in the background; a retry is no longer needed.
+   - 1Click quotes and status: mainnet only, and there is no testnet. `refundTo` must be
+     a real mainnet account; `stark-treasury.near` is a placeholder.
    - Global-contract actions 9 and 10 (`DeployGlobalContract`, `UseGlobalContract`)
      are encoded from near-primitives' enum order and have not been round-tripped.
    - Per-user vault creation has never been broadcast.
@@ -1175,83 +1194,36 @@ Rules that keep this from drifting again:
 
 ## 13. If you're the next agent, do this next
 
-**In order. Items 1, 3 and 4 are external or human-gated. Items 2, 5 and 6 are done.
-Item 7 is the next code.**
+**Rewritten 2026-11-11 to match §0.** M0–M4, auth, Neon storage, the vault deploy and the
+Flutterwave money flow are built. What is left is almost all owner-gated account setup,
+then the first live runs.
 
-1. **VTpass: credentials supplied 2026-10-22; get the products whitelisted.** Auth and
-   `merchant-verify` work (see §10.1). `/pay` is blocked by `028 PRODUCT IS NOT
-   WHITELISTED ON YOUR ACCOUNT`, so ask VTpass to provision `ikeja-electric` and the
-   other products on the sandbox account, then run:
+1. **Flutterwave dashboard (owner).** Add the server's outgoing IP under *Settings →
+   Whitelisted IP addresses* (test mode needs it too; production needs a fixed IP).
+   Turn on *Enable v3 webhooks* and *Enable webhook retries*, save the webhook URL
+   (`/v1/flutterwave/webhook`) with `FLW_SECRET_HASH` as its hash, and choose
+   *Settle to my payout balance*. Ask Flutterwave why every checkout link shows
+   `Initialization failed` on this account (§10.21).
+2. **First live bill, then first live deposit and withdrawal.** Once the IP is
+   whitelisted, buy one Ikeja prepaid token with the test key and check the bill result
+   shape against what `vending.py` expects (§10.2). Then one checkout deposit and one
+   bank withdrawal end to end, watching the webhook arrive.
+3. **Per-user vaults (owner).** Put `STARK_FUNDER_ACCOUNT`, `STARK_FUNDER_KEY` and
+   `STARK_AGENT_KEY` in `apps/backend/.env` and in Brimble. Publish the vault code as a
+   global contract once:
    ```sh
-   cd apps/backend
-   set -a; . ./.env; set +a
-   python3 vtpass.py verify --meter 1111111111111 --live
-   python3 vtpass.py buy --meter 1111111111111 --amount 5000 --phone <their-phone> --live
+   python -m app.modules.chain.vault_chain publish ../contracts/vault/target/wasm32-unknown-unknown/release/stark_vault.wasm
    ```
-   If it prints `DELIVERED` with a 20-digit token, **replace the remaining modeled
-   purchase fixtures with real captures** and update `fixtures/README.md`.
-2. ~~Write the vault contract (M1).~~ **Done 2026-10-20, re-verified 22:25:** `contracts/vault/`,
-   **38 tests** (not 41 — that number was wrong here), clippy clean, 203 KB wasm builds with
-   plain `cargo`. Still missing: **deploy to testnet**. It needs a funded account, then:
-   ```sh
-   RUSTUP_HOME=/Users/mac/.rustup cargo build --target wasm32-unknown-unknown --release
-   # with near-cli installed and an account funded:
-   near deploy <acct>.testnet stark_vault.wasm
-   near call <acct>.testnet new '{
-     "owner":"<acct>.testnet", "treasury":"<acct>.testnet",
-     "monthly_cap_ngn":"30000", "per_payment_cap_ngn":"10000",
-     "allowed_meters":["04512345678"]
-   }' --accountId <acct>.testnet
-   ```
-   That argument list is copied from `pub fn new` in `src/lib.rs` (U128s go over the wire
-   as strings). `per_payment_cap_ngn` must not exceed `monthly_cap_ngn` or `new` panics —
-   which is itself one of the 38 tests.
-3. ~~**Ask for the NEAR AI API key.**~~ **Done 2026-10-22.** Live chat + tool call and
-   real Whisper transcripts verified. What remains: accept audio on `/v1/voice` (it
-   still takes `transcript_hint`) and confirm Whisper's privacy tier before any TEE
-   claim.
-4. ~~`git init` and push a public repo.~~ **Done 2026-10-20:** `github.com/geekman58748/stark-ai`,
-   branch `main`. **But the push predates M1**, so the remote has no `contracts/`. The repo
-   working tree now has it (uncommitted, re-verified there) — **ask the human before
-   committing and pushing**, because `main` auto-deploys to hellostark.xyz.
-5. ~~**M2 — agent server.**~~ **Done 2026-10-22:** tool schema, routing, policy gate and
-   `pay()` signing, 59 tests. Built against a fake model exactly as §0.2 said to, so the
-   key is still missing without blocking anything. What is left from M2: **call the real
-   NEAR AI model once** (§10.12) and **round-trip one signed transaction** (§10.11).
-6. ~~**M3 — real vending + receipts.**~~ **Done 2026-10-22:** `vending.py`, `receipts.py`,
-   `payments.py`, 44 tests. Record-before-buy, charge-on-delivery, retry-reuses-id all
-   enforced. What is left from M3: **one live purchase with real credentials** (§10.1),
-   then replace the modeled fixtures with real captures.
-7. **M4 — Telegram bot + Whisper voice + TTS**, the next code item. Read §8A first:
-   the adapter contract, identity linking and webhook-auth design are there, and the
-   rule is “one brain, many doors”. ~~TTS~~ **Done 2026-10-23:** the Kokoro sidecar
-   (`bun tts`, `apps/backend/tts_server.py`) speaks `/v1/voice` replies and Telegram
-   voice-note replies, and every failure of that path falls back to text (§10.20).
-   What remains of M4: real audio into `/v1/voice` (it still takes `transcript_hint`),
-   a live bot token to prove one voice-note round trip, and whisper's privacy tier
-   (§10.3) *before* any README claim — the wake gate already sits server-side
-   (`h_voice`), so nothing there is waiting.
-
-   **Identity linking is finished (2026-10-25).** The gap was that nothing except
-   tests could mint a code, so every `/link` in a real chat was refused. Now
-   `POST /v1/link/code` mints one (single-use, 10 minutes) with the bot's `t.me`
-   deep link, `/start <code>` redeems it as well as `/link <code>`, and the
-   dashboard's **Connect a chat** screen (`/connect`, linked from Settings) shows
-   the digits and the one-tap link. The bot exists on BotFather as
-   **@hellostarkai_bot** and the webhook is registered against
-   `https://geddon.hellostark.xyz/v1/tg/webhook`. Still human-gated: the deployed
-   `stark-api` needs `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET` in the
-   Brimble dashboard, because secrets live there and not in `brimble.toml`.
-   Until then the live webhook answers `401 webhook_unconfigured` and Telegram
-   reports a delivery error — the code path itself is verified locally.
-8. ~~**Auth + storage on Neon.**~~ **Done 2026-10-26:** the backend verifies Neon Auth
-   sessions against the provider's JWKS (`auth.py`) and stores accounts, wallets,
-   receipts and channel identities in Neon Postgres (`neon.py`, `receipts.py`,
-   `identities.py`), scoped per account; the dashboard signs up and in at `/login`
-   (`apps/dashboard/src/lib/auth.ts`) and `/v1` answers `401 unauthorized` without a
-   bearer token. `stark.db` is dead — anything that read SQLite must use Postgres.
-   Still human-gated: the deployed `stark-api` needs `DATABASE_URL` and
-   `NEON_AUTH_BASE_URL` in its environment, same as the Telegram secrets above.
+   That is also the first round trip of the global-contract actions (§10.21), so check
+   the transaction on the explorer before creating a user's vault.
+4. **Crypto withdrawals (owner).** Fund and name a real mainnet treasury account and set
+   `STARK_TREASURY_NEAR_ACCOUNT` and `STARK_TREASURY_KEY`. Until then 1Click refuses the
+   quote's `refundTo` and the feature stays off.
+5. **WhatsApp and SMS (owner).** Create the Meta (WhatsApp) and Twilio (SMS) accounts;
+   the adapters are built and fail closed until their secrets are set.
+6. **Make the in-memory state durable.** Bills from `POST /v1/bills`, limits from
+   `PATCH /v1/limits` and `units_left` still reset on restart (§9, §10.13). This is the
+   next code item that needs no one else.
 
 **Never without explicit human confirmation:** submit the application, publish on X, make
 the repo public, sign transactions, spend tokens, deploy to mainnet, or commit secrets.

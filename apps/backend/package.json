@@ -5,7 +5,7 @@
   "description": "Python bill-pay API on FastAPI. This file only wires it into the workspace's turbo tasks; run `bun run setup` once to create .venv.",
   "scripts": {
     "setup": "python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt",
-    "dev": "set -a; [ ! -f .env ] || . ./.env; set +a; exec .venv/bin/python -m app",
+    "dev": "infisical secrets-manager run --env=dev --path=/backend --silent -- .venv/bin/python -m app",
     "test": ".venv/bin/python -m unittest discover -s tests -t .",
     "smoke": ".venv/bin/python -m tests.smoke_test",
     "tts": "exec ../../.venv-tts/bin/python -u tts_server.py"

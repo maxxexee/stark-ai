@@ -1,4 +1,4 @@
-"""Every priced data and TV plan, straight from the captured VTpass catalogue."""
+"""Every priced data and TV plan, straight from Flutterwave's live catalogue."""
 
 from __future__ import annotations
 
@@ -15,27 +15,20 @@ class PlanService:
         kind = kind.strip().lower()
         if kind and kind not in PLAN_KINDS:
             raise ApiError(400, "bad_kind", "Plans exist only for data and TV.")
-        wanted = catalog.slug(provider.strip())
+        wanted = catalog.ALIASES.get(catalog.slug(provider), catalog.slug(provider))
         rows: list[dict[str, Any]] = []
         for each_kind in ([kind] if kind else list(PLAN_KINDS)):
-            for service in catalog.CATALOG.services(each_kind):
-                service_id = str(service.get("serviceID") or "")
-                name = str(service.get("name") or service_id)
-                # Loosely: "mtn" must find "mtn-data", the way a picker's provider
-                # chip does. Exact matching returned an empty list for the very
-                # example in docs/API.md.
-                if wanted and not any(
-                    wanted in slug for slug in (catalog.slug(service_id), catalog.slug(name))
-                ):
-                    continue
-                product = catalog.CATALOG.product(each_kind, service_id)
-                if product is None or not product.needs_plan:
+            for product in catalog.CATALOG.products(each_kind):
+                # Loosely: "mtn" must find MTN's data biller, the way a picker's
+                # provider chip does.
+                if wanted and wanted not in (catalog.slug(product.name),
+                                             catalog.slug(product.biller_code)):
                     continue
                 for plan in catalog.CATALOG.plans(product):
                     rows.append({
                         "kind": each_kind,
-                        "provider": service_id,
-                        "service_name": name,
+                        "provider": product.name,
+                        "service_name": product.name,
                         "plan": plan.code,
                         "label": plan.name,
                         "price_ngn": plan.price_ngn,

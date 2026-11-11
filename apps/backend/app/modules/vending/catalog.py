@@ -1,55 +1,51 @@
-"""Which VTpass product a bill actually is — read from captured fixtures.
+"""Which Flutterwave biller and item a bill actually is.
 
-Nothing here is guessed. Every service id, product type and price in this module
-comes from a response captured off `sandbox.vtpass.com` on 2026-10-22 and stored in
-`fixtures/`:
+Read live from `GET /v3/bill-categories?country=NG`: one row per (biller, item),
+with the item's price, refreshed hourly. The app points the shared catalogue at
+Flutterwave at boot (`CATALOG.use`); until then, or with Flutterwave unconfigured, it
+is empty and nothing can be sold.
 
-| Fixture | What it proves |
+Rows group by `biller_code` (`BIL104` is MTN data) and each item is either:
+
+- **amount** (airtime `AT…`, electricity `UB…`, price `0`): the amount is the product.
+- **plan** (data `MD…`, TV `CB…`, priced): the item is the product and the price is
+  the item's. A bill therefore carries a `plan` (the item code) and the amount paid
+  must equal that price — otherwise Flutterwave charges something nobody asked for.
+
+Which billers Stark sells, by name, since that is what the catalogue is keyed on:
+
+| Kind | Biller rows |
 |---|---|
-| `services_airtime.json` | `mtn`, `airtel`, `glo`, `etisalat`; all `product_type: flexible` |
-| `services_data.json` | `mtn-data`, `airtel-data`, `glo-data`, `etisalat-data`; all `fix` |
-| `services_tv-subscription.json` | `dstv`, `gotv`, `startimes`, `showmax` |
-| `service-variations_{...}.json` | the plans and their prices |
-| `service-variations_mtn.json` | `011 No Variations for MTN Airtime VTU` — airtime is billed by amount, not a plan |
-
-Two product shapes fall out of that:
-
-- **flexible** (airtime, and electricity): the amount is the product. Validate it
-  against the vendor's own `minimium_amount`/`maximum_amount`.
-- **fix** (data, DStv, GOtv, Showmax): the *plan* is the product and the price is the
-  plan's. A bill therefore needs a `plan` (a variation code) and the requested amount
-  must equal that plan's price — otherwise the vendor charges something the user did
-  not ask for.
+| airtime | `is_airtime: true` — MTN, Airtel, Glo, 9mobile |
+| data | `… DATA BUNDLE` |
+| tv | DSTV, GOTV, STARTIMES |
+| electricity | Ikeja's prepaid item (`IKEDC  PREPAID`) |
 """
 
 from __future__ import annotations
 
-import json
 import re
+import threading
+import time
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
-
-FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
-
-CATEGORY_FILES = {
-    "airtime": "services_airtime.json",
-    "data": "services_data.json",
-    "tv": "services_tv-subscription.json",
-}
+from typing import Any, Callable
 
 AMOUNT = "amount"
 PLAN = "plan"
+REFRESH_SECONDS = 3600
+
+# What a bill's provider is called, against the first word of Flutterwave's biller name.
+NETWORKS = ("mtn", "airtel", "glo", "9mobile", "dstv", "gotv", "startimes")
+ALIASES = {"etisalat": "9mobile", "dstvcompact": "dstv"}
 
 
 @dataclass(frozen=True)
 class Product:
     kind: str
-    service_id: str
+    biller_code: str
     name: str
     mode: str  # AMOUNT | PLAN
-    min_ngn: int | None = None
-    max_ngn: int | None = None
+    item_code: str | None = None  # the item, for an amount product
 
     @property
     def needs_plan(self) -> bool:
@@ -67,118 +63,110 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
-def _money(raw: object) -> int | None:
-    try:
-        return int(Decimal(str(raw)))
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-
-
 class Catalog:
-    def __init__(self, fixtures: Path = FIXTURES):
-        self.fixtures = fixtures
-        self._services: dict[str, list[dict]] = {}
-        self._plans: dict[str, list[Plan]] = {}
+    def __init__(self, load: Callable[[], list[dict[str, Any]]] = list):
+        self._load = load
+        self._rows: list[dict[str, Any]] | None = None
+        self._loaded_at = 0.0
+        self._lock = threading.Lock()
 
-    # --- services ------------------------------------------------------------
+    def use(self, load: Callable[[], list[dict[str, Any]]]) -> None:
+        """Read the catalogue from `load` (the live API) from now on."""
+        with self._lock:
+            self._load = load
+            self._rows = None
 
-    def services(self, kind: str) -> list[dict]:
-        if kind not in self._services:
-            data = _load_fixtures(self.fixtures, CATEGORY_FILES.get(kind, ""))
-            content = data.get("content")
-            self._services[kind] = content if isinstance(content, list) else []
-        return self._services[kind]
+    def rows(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._rows is not None and time.monotonic() - self._loaded_at < REFRESH_SECONDS:
+                return self._rows
+            load = self._load
+        try:
+            rows = load()
+        except Exception:
+            if self._rows is not None:
+                return self._rows  # a stale catalogue beats none while Flutterwave is down
+            raise
+        with self._lock:
+            self._rows, self._loaded_at = rows, time.monotonic()
+        return rows
+
+    # --- products ------------------------------------------------------------
+
+    def products(self, kind: str) -> list[Product]:
+        """Every biller Stark sells for `kind`, one per biller code."""
+        by_biller: dict[str, list[dict[str, Any]]] = {}
+        for row in self.rows():
+            if _kind_of(row) == kind:
+                by_biller.setdefault(row["biller_code"], []).append(row)
+        products = []
+        for biller_code, items in by_biller.items():
+            name = _network(items[0]) or items[0]["name"]
+            if kind in ("data", "tv"):
+                products.append(Product(kind, biller_code, name.upper(), PLAN))
+            else:
+                products.append(Product(kind, biller_code, name.upper(), AMOUNT,
+                                        _amount_item(biller_code, items)))
+        return products
 
     def product(self, kind: str, provider: str) -> Product | None:
-        """The vendor product for a bill kind and provider, or `None`."""
-        wanted = slug(provider)
+        """The biller for a bill kind and provider, or `None`.
+
+        `provider` is what the bill was saved with: a name (`MTN`, `DStv`,
+        `Ikeja Electric`) or a biller code (`BIL104`).
+        """
+        wanted = ALIASES.get(slug(provider), slug(provider))
         if not wanted:
             return None
-
-        best: tuple[int, dict] | None = None
-        for service in self.services(kind):
-            score = _match_score(wanted, service)
-            if score and (best is None or score > best[0]):
-                best = (score, service)
-        if best is None:
-            return None
-
-        service = best[1]
-        service_id = str(service.get("serviceID", ""))
-        # The plan list decides the shape, not the `product_type` field: VTpass marks
-        # Startimes "flexible" and still sells it as 25 priced bouquets. If the vendor
-        # publishes plans, the plan is the product.
-        return Product(
-            kind=kind,
-            service_id=service_id,
-            name=str(service.get("name", "")),
-            mode=PLAN if self.plans_for(service_id) else AMOUNT,
-            min_ngn=_money(service.get("minimium_amount")),
-            max_ngn=_money(service.get("maximum_amount")),
-        )
+        for product in self.products(kind):
+            network = slug(product.name)
+            if wanted in (slug(product.biller_code), network, f"{network}data"):
+                return product
+            if kind == "electricity" and wanted.startswith("ikeja"):
+                return product
+        return None
 
     # --- plans ---------------------------------------------------------------
 
-    def plans_for(self, service_id: str) -> list[Plan]:
-        if service_id not in self._plans:
-            data = _load_fixtures(
-                self.fixtures, f"service-variations_{service_id}.json"
-            )
-            content = data.get("content") or {}
-            raw = []
-            if isinstance(content, dict):
-                # VTpass misspells this as "varations" in some responses.
-                raw = content.get("variations") or content.get("varations") or []
-            plans = []
-            for item in raw if isinstance(raw, list) else []:
-                price = _money(item.get("variation_amount"))
-                code = str(item.get("variation_code") or "")
-                if code and price is not None:
-                    plans.append(Plan(code=code, name=str(item.get("name") or code),
-                                      price_ngn=price))
-            self._plans[service_id] = plans
-        return self._plans[service_id]
-
     def plans(self, product: Product) -> list[Plan]:
-        return self.plans_for(product.service_id)
+        if not product.needs_plan:
+            return []
+        seen: dict[str, Plan] = {}
+        for row in self.rows():
+            code = row["item_code"]
+            if row["biller_code"] == product.biller_code and code not in seen:
+                seen[code] = Plan(code, row["biller_name"].strip(), int(row["amount"]))
+        return [plan for plan in seen.values() if plan.price_ngn > 0]
 
     def plan(self, product: Product, code: str) -> Plan | None:
         return next((p for p in self.plans(product) if p.code == code), None)
 
 
-def _match_score(wanted: str, service: dict) -> int:
-    """How well a bill's provider names this VTpass service.
-
-    Higher wins. The ordering matters: `glo` must pick `glo-data`, not `glo-sme-data`.
-    """
-    service_id = slug(str(service.get("serviceID", "")))
-    name = slug(str(service.get("name", "")))
-    if not service_id:
-        return 0
-    if wanted == service_id:
-        return 100
-    if service_id == f"{wanted}data":
-        return 90
-    if wanted in service_id:
-        return 70 if "sme" not in service_id else 20
-    if name.startswith(wanted):
-        return 60
-    if wanted in name:
-        return 50
-    return 0
+def _network(row: dict[str, Any]) -> str | None:
+    first = slug(row["name"].split()[0]) if row["name"].split() else ""
+    return first if first in NETWORKS else None
 
 
-def _load_fixtures(fixtures: Path, name: str) -> dict:
-    if not name:
-        return {}
-    path = fixtures / name
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
-        return {}
+def _kind_of(row: dict[str, Any]) -> str | None:
+    name = row["name"].upper()
+    if row["is_airtime"]:
+        return "airtime" if _network(row) else None
+    if name.endswith("DATA BUNDLE") and _network(row):
+        return "data"
+    if _network(row) in ("dstv", "gotv", "startimes") and int(row["amount"]) > 0:
+        return "tv"
+    if "IKEJA" in name and "PREPAID" in row["biller_name"].upper():
+        return "electricity"
+    return None
 
 
-# One shared catalog: fixtures are read once per process.
+def _amount_item(biller_code: str, items: list[dict[str, Any]]) -> str:
+    """The item to buy an amount on. Glo lists two airtime items; the one numbered like
+    its biller (`BIL102` → `AT102`) is the one Flutterwave's docs test with."""
+    matching = f"AT{biller_code[3:]}"
+    codes = [row["item_code"] for row in items]
+    return matching if matching in codes else codes[0]
+
+
+# One shared catalogue, pointed at Flutterwave by the app module.
 CATALOG = Catalog()

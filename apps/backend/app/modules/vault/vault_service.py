@@ -6,10 +6,10 @@ that counterpart is written to an outbox (`chain_ops`) **before** it is sent:
 
 | Postgres | Vault | When |
 |---|---|---|
-| deposit credited | `fund(amount, reference)` | Bachs collection, Intents deposit |
+| deposit credited | `fund(amount, reference)` | Flutterwave charge, Intents deposit |
 | withdrawal debited | `debit(amount, reference)` | bank withdrawal |
-| withdrawal reversed | `fund(amount, reference)` | Bachs payout failed |
-| payment not delivered | `refund(payment_id)` | VTpass failed after `pay` |
+| withdrawal reversed | `fund(amount, reference)` | Flutterwave transfer failed |
+| payment not delivered | `refund(payment_id)` | Flutterwave bill failed after `pay` |
 
 Policy (caps and the meter allowlist) is synced **at payment time**: before `pay`,
 the vault's `get_policy` is compared with the account's current limits and

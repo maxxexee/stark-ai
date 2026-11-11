@@ -124,7 +124,7 @@ check("state has 3 bills", len(st.get("bills", [])) == 3, str(len(st.get("bills"
 due = st.get("due_soon", [])
 check("state due_soon carries the DStv renewal",
       len(due) == 1 and due[0].get("id") == "bill_dstv"
-      and due[0].get("days_until") == 3 and due[0].get("price_ngn") == 7900,
+      and due[0].get("days_until") == 3 and (due[0].get("price_ngn") or 0) > 0,
       str(due))
 
 status, bills, _ = call("GET", "/v1/bills")
@@ -139,29 +139,33 @@ check("unknown bill -> 404 unknown_bill",
 
 # --- plans, add/remove bill ------------------------------------------------
 status, plans, _ = call("GET", "/v1/plans?kind=tv")
-check("GET /v1/plans 200", status == 200 and len(plans) > 0, f"status={status}")
-dstv79 = next((p for p in plans if p.get("plan") == "dstv79"), {})
-check("dstv79 costs 7900", dstv79.get("price_ngn") == 7900, str(dstv79))
+check("GET /v1/plans 200", status == 200 and len(plans) > 1, f"status={status}")
+# Prices come from Flutterwave's live catalogue, so the test takes two of its plans.
+dstv = [p for p in plans if p.get("provider") == "DSTV"] or plans
+first, second = dstv[0], (dstv[1] if len(dstv) > 1 else plans[1])
 
-# A picker's provider chip says "MTN" / "mtn", not "mtn-data".
-status, mtn, _ = call("GET", "/v1/plans?kind=data&provider=MTN")
+# A picker's provider chip says "MTN" / "mtn"; the data biller is found loosely.
+status, mtn, _ = call("GET", "/v1/plans?kind=data&provider=mtn")
 check("plans provider filter is loose",
-      status == 200 and len(mtn) > 0 and all(p.get("provider") == "mtn-data" for p in mtn),
+      status == 200 and len(mtn) > 0 and all(p.get("provider") == "MTN" for p in mtn),
       f"status={status} n={len(mtn)}")
 
-new_bill = {"kind": "tv", "provider": "DStv", "label": "Test TV",
-            "reference": "9998887776", "plan": "dstv79"}
+new_bill = {"kind": "tv", "provider": first["provider"], "label": "Test TV",
+            "reference": "9998887776", "plan": first["plan"]}
 status, added, _ = call("POST", "/v1/bills", new_bill)
 check("POST /v1/bills 201", status == 201, f"status={status} {added}")
-check("added bill carries plan price", added.get("plan_price_ngn") == 7900, str(added))
+check("added bill carries plan price",
+      added.get("plan_price_ngn") == first["price_ngn"], str(added))
 status, dup, _ = call("POST", "/v1/bills", new_bill)
 check("duplicate bill -> 409",
       status == 409 and dup.get("code") == "duplicate_bill",
       f"status={status} {dup.get('code')}")
-status, patched, _ = call("PATCH", f"/v1/bills/{added.get('id')}", {"plan": "dstv-padi"})
-check("PATCH plan -> 1850",
-      status == 200 and patched.get("plan_price_ngn") == 1850,
-      f"status={status} {patched}")
+if second["provider"] == first["provider"]:
+    status, patched, _ = call("PATCH", f"/v1/bills/{added.get('id')}",
+                              {"plan": second["plan"]})
+    check("PATCH plan takes the new price",
+          status == 200 and patched.get("plan_price_ngn") == second["price_ngn"],
+          f"status={status} {patched}")
 status, deleted, _ = call("DELETE", f"/v1/bills/{added.get('id')}")
 check("DELETE bill -> 200",
       status == 200 and deleted.get("deleted") is True, f"status={status} {deleted}")

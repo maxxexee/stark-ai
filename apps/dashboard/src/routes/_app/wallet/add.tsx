@@ -1,14 +1,13 @@
-import { fundingMethodsQuery } from "@stark/api/queries";
-import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { z } from "zod";
 import { BackLink } from "@/components/shell/back-link";
 import { PageTitle } from "@/components/shell/page-title";
 import { AddMoneyForm } from "@/components/wallet/add-money-form";
 import { DepositStatus } from "@/components/wallet/deposit-status";
+import { fundingMethodsQuery } from "@stark/api/queries";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { z } from "zod";
 
 export const Route = createFileRoute("/_app/wallet/add")({
-  // `deposit` is set when Bachs's checkout sends the user back here.
   validateSearch: z.object({ deposit: z.string().optional() }),
   loader: ({ context }) => context.queryClient.query(fundingMethodsQuery()),
   head: () => ({ meta: [{ title: "Add money · Stark" }] }),
@@ -26,7 +25,8 @@ function AddMoney() {
       <div className="flex flex-col gap-2">
         <PageTitle>Add money</PageTitle>
         <p className="m-0 text-fg-2">
-          Stark pays your bills from this balance. It’s ready to spend as soon as it lands.
+          Stark pays your bills from this balance. It’s ready to spend as soon
+          as it lands.
         </p>
       </div>
       {deposit ? (
@@ -34,7 +34,11 @@ function AddMoney() {
       ) : (
         <AddMoneyForm
           methods={methods}
-          onStarted={(started) => navigate({ to: ".", search: { deposit: started.id } })}
+          onStarted={async (started) => {
+            await navigate({ to: ".", search: { deposit: started.id } });
+            if (started.method === "bank")
+              window.location.assign(started.pay.checkout_url);
+          }}
           onTestMoneyAdded={() => navigate({ to: "/wallet" })}
         />
       )}

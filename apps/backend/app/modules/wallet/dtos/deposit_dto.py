@@ -12,7 +12,7 @@ class StartDepositDto(BaseModel):
                             description="Integer naira, ₦100 to ₦5,000,000.")
     method: Literal["bank", "crypto"] = Field(
         examples=["bank"],
-        description="`bank` opens a Bachs checkout (bank transfer, card, USDT/USDC). "
+        description="`bank` opens a Flutterwave checkout (bank transfer, card, USSD). "
                     "`crypto` quotes a NEAR Intents deposit from any listed asset.",
     )
     asset_id: Optional[str] = Field(

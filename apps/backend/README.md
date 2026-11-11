@@ -16,7 +16,7 @@ backend state, environment traps and what to do next, read
 
 ```sh
 cd apps/backend && bun run setup   # once: .venv with FastAPI, uvicorn, httpx
-cp .env.example .env               # then set DATABASE_URL — the server will not start without it
+infisical login                    # once: secrets come from Infisical (dev, /backend)
 bun dev:backend                    # from the repo root → http://127.0.0.1:8000, docs at /docs
 bun smoke                          # in another shell: 69 checks
 ```
@@ -25,13 +25,14 @@ bun smoke                          # in another shell: 69 checks
 requirement: accounts, wallets, receipts, bills, limits, readings and linked identities
 live there and the schema creates itself on first boot. `NEON_AUTH_BASE_URL` (the same
 branch's Auth URL) makes sign-in work — without it every `/v1` request answers 401.
-Everything else is offline: payments are dry-run against captured fixtures, nothing is
-signed or broadcast, and a deterministic model stands in for the LLM. Each remaining
+Everything else is off: without `FLW_SECRET_KEY` nothing can be bought, deposited or
+withdrawn (test money still works), nothing is signed or broadcast, and a
+deterministic model stands in for the LLM. Each remaining
 variable in [`.env.example`](.env.example) switches one piece on.
 
 | Command (from `apps/backend`) | What it does |
 |---|---|
-| `.venv/bin/python -m app` | API on `HOST:PORT` (127.0.0.1:8000; no `.env` loading) |
+| `.venv/bin/python -m app` | API on `HOST:PORT` (127.0.0.1:8000; no secrets unless you wrap it in `infisical secrets-manager run`) |
 | `.venv/bin/python -m tests.smoke_test` | 69 end-to-end checks (sign-up, auth, every endpoint) against a running server; `STARK_SMOKE_BASE` points it elsewhere |
 | `.venv/bin/python -m unittest discover -s tests -t .` | the unit tests, no server needed (`bun run test` from the root) |
 | `bun tts` | the local Kokoro voice sidecar on :8010 (needs `.venv-tts`, see Voice output) |
@@ -67,13 +68,13 @@ app/
     voice/               /v1/voice, /v1/speak: stt, tts, audio, the wake rule
     agent/               tool schema, routing, policy gate, model loop; the per-account toolbox
     chain/               borsh + ed25519 + base58 + RPC: builds and signs pay()
-    vending/             VTpass client, product catalogue, kind → product
+    flutterwave/         the one naira provider: client, webhook (checkout, bills, transfers)
+    vending/             bill catalogue and kind → biller/item; buys through Flutterwave
     telegram/            the bot: webhook, identity linking, the owner's agent
     reminder/            renewal windows and the push loop
     turnlog/  stub/      the conversation log; the demo seed and reset
     health_checker/      GET /, GET /health
 tests/                   unit tests, support.py (TempAccount, ApiHarness), smoke_test.py
-fixtures/                captured + modeled VTpass responses (see its README)
 tts_server.py            the Kokoro-82M sidecar: OpenAI `/v1/audio/speech`, own venv
 requirements*.txt        the API's dependencies; -dev adds the test client
 ```
@@ -89,8 +90,8 @@ never pass through a serializer that could change them.
 ## Running it
 
 ```sh
-bun dev:backend              # from the repo root, loads .env if present
-.venv/bin/python -m app      # or directly, from apps/backend, without .env
+bun dev:backend              # from the repo root, with secrets from Infisical (dev, /backend)
+.venv/bin/python -m app      # or directly, from apps/backend, with no secrets
 ```
 
 Both serve http://127.0.0.1:8000, with the API documented at
@@ -151,7 +152,7 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
 ```sh
 .venv/bin/python -m unittest tests.test_agent     # policy parity, RFC 8032, the cap gate
 .venv/bin/python -m unittest tests.test_vending   # store, idempotent retry, plans
-.venv/bin/python -m unittest tests.test_vtpass    # the VTpass client and its shapes
+.venv/bin/python -m unittest tests.test_live_paths # Flutterwave's wire format, over loopback
 .venv/bin/python -m unittest tests.test_tg        # the Telegram door and its gates
 .venv/bin/python -m unittest tests.test_tts       # the voice path, without torch
 ```
@@ -163,7 +164,7 @@ until you give it secrets — an unauthenticated webhook is a wallet anyone on t
 internet could talk to:
 
 ```sh
-# apps/backend/.env
+# Infisical, folder /backend
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token     # from @BotFather
 TELEGRAM_WEBHOOK_SECRET=...                  # openssl rand -hex 32
 ```
@@ -201,7 +202,7 @@ one, every payment path signs `pay` on the user's vault before buying, and a
 signature that cannot be produced **refuses the payment**. Deposits, withdrawals
 and refunds reach the vault through an outbox (`chain_ops`) the money loop retries.
 `python -m app.modules.treasury.treasury_service` prints what Stark owes against
-what it holds (VTpass float, Bachs, treasury USDC).
+what it holds (the Flutterwave NGN balance and treasury USDC).
 
 **Honest limits:** the borsh layout has never been round-tripped against a live RPC.
 The NEAR AI model and Whisper *have* run live (2026-10-22). `/v1/voice` now takes real
@@ -312,7 +313,7 @@ uv pip install --python .venv-tts/bin/python -r apps/backend/tts-requirements.tx
 cd apps/backend && ../../.venv-tts/bin/python tts_server.py
 ```
 
-Then set `STARK_TTS_URL=http://127.0.0.1:8010` in `.env` (see `.env.example`).
+Then set `STARK_TTS_URL=http://127.0.0.1:8010` in Infisical (see `.env.example`).
 Measured 2026-10-23 on an M1 Pro: ~2s for a typical reply on MPS and on CPU
 (RTF ~0.25–0.3, so speech arrives faster than it plays on both). `STARK_TTS_VOICE`
 picks the voice — `af_heart` (US female, default), `bf_emma` (UK female),
@@ -343,7 +344,7 @@ To judge Stark on a real conversation rather than on a test, turn the log on
 and every exchange appends one JSON line:
 
 ```sh
-STARK_TURN_LOG=1 bun dev:backend     # or add it to .env; a path works too
+STARK_TURN_LOG=1 bun dev:backend     # or set it in Infisical; a path works too
 tail -f apps/backend/logs/turns/turns.jsonl
 ```
 
@@ -365,35 +366,29 @@ and `ms` — time to first byte on the stream, whole-synthesis time on
 Off by default, `logs/` is gitignored, and a log that cannot be written is
 discarded rather than returned as a 500.
 
-## Bill API (VTpass)
+## Flutterwave
 
-Dry-run by default, so it works with no credentials:
+One account does all the naira: deposits (hosted checkout), bills, and withdrawals
+(transfers), from one NGN balance. v3 API, standard library client in
+`app/modules/flutterwave/flutterwave.py`.
 
 ```sh
-.venv/bin/python -m app.modules.vending.vtpass variations                       # prepaid | postpaid
-.venv/bin/python -m app.modules.vending.vtpass verify --meter 04512345678
-.venv/bin/python -m app.modules.vending.vtpass buy --meter 04512345678 --amount 5000 --phone 08031234567
-.venv/bin/python -m app.modules.vending.vtpass buy ... --fixture pay_pending.json    # exercise the pending path
-.venv/bin/python -m unittest tests.test_vtpass -v
+FLW_SECRET_KEY=FLWSECK_TEST-...    # a test key talks to Flutterwave's test environment
+FLW_SECRET_HASH=...                # the webhook's secret hash, set in the dashboard too
+STARK_APP_URL=http://localhost:5174
 ```
 
-Two behaviours the agent depends on:
+Three things that are true of the account, not the code:
 
-- **A token only counts when `code == "000"` and `status == "delivered"`.** A `099`/`pending`
-  transaction must not be reported as paid — requery it with the same `request_id`.
-- **Retries reuse the same `request_id`.** A new id on a retry books a second sale (`019`).
-
-Add `--live` to hit the real API. It needs `VTPASS_ENV`, `VTPASS_USERNAME`,
-`VTPASS_PASSWORD` (sandbox default), or the `VTPASS_API_KEY` /
-`VTPASS_PUBLIC_KEY` / `VTPASS_SECRET_KEY` trio. Never commit them.
-
-The 13 catalogue fixtures (`services_*.json`, `service-variations_*.json`) are real
-captured responses (2026-10-22). The first authenticated calls captured
-`merchant-verify_ok.json`, `merchant-verify_wrong.json` and
-`pay_not_whitelisted.json` (code 028). The four remaining purchase fixtures
-(`pay_ok`, `pay_pending`, `pay_low_balance`, `pay_duplicate`) are **modeled on the
-documented shape and have never been seen live** — the sandbox account is not yet
-provisioned for `/pay`. See [`fixtures/README.md`](fixtures/README.md).
+- **Bills and transfers need the server's IP whitelisted** (dashboard → Settings →
+  Whitelisted IP addresses), test mode included. Until then they answer `Please
+  enable IP Whitelisting`, and Stark reports the bill as not paid, charging nothing.
+- **Collections settle into the balance later** (batched daily, and only if
+  settlement goes to the Flutterwave wallet, not a bank). A deposit is spendable at
+  once, so Stark fronts it from the balance in the meantime; `float_low` refuses a
+  payment the balance cannot cover.
+- **There is no dry mode and no fixture data.** The bill catalogue is read live
+  (`GET /bill-categories`, hourly); without a key nothing can be sold.
 
 ## Vending and receipts
 
@@ -405,43 +400,31 @@ policy check → sign pay() → record the intent → buy → charge → speak t
 
 - **Record before buying.** The receipt exists with a `request_id` and status
   `pending` before the vendor is called. If the process dies mid-purchase, the id
-  survives and the purchase is re-queried instead of duplicated — VTpass treats a
-  retry with a new id as a second sale (`019`).
-- **Charge only on delivery.** `pending` and `failed` never move money. A delivered
-  transaction with no token is treated as pending, not success.
+  survives and the purchase is re-read instead of duplicated: the `request_id` is the
+  bill's `reference` at Flutterwave, which refuses a reused one.
+- **Charge only on delivery.** Flutterwave's payment call only says the order was
+  taken; a status read follows, and only `successful` counts. `pending` and `failed`
+  never move money. A delivered meter top-up with no token is treated as pending.
 - **A retry reuses its request_id.** Paying the same bill for the same amount while a
-  purchase is still pending re-queries it rather than buying again.
+  purchase is still pending re-reads it rather than buying again.
 
-Dry by default: the request still flows through the VTpass client, but it reads
-`fixtures/pay_ok.json`. To vend for real:
+**What is sold**, read from Flutterwave's catalogue by biller name:
 
-```sh
-STARK_VENDING=live
-VTPASS_ENV=sandbox
-VTPASS_USERNAME=... VTPASS_PASSWORD=...
-STARK_PHONE=08031234567            # the phone VTpass quotes on the purchase
-```
-
-`STARK_VENDING=live` **refuses to start without credentials** — discovering that on
-someone's meter is worse than a clean config error.
-
-**What is vendable, and on what evidence.** All of these are confirmed against the
-sandbox catalogue captured in [`fixtures/`](fixtures/README.md) (see its README):
-
-| Kind | Vendor products | Priced by |
+| Kind | Flutterwave billers | Priced by |
 |---|---|---|
-| electricity | `ikeja-electric` (prepaid) | amount |
-| airtime | `mtn`, `airtel`, `glo`, `etisalat` | amount, inside the vendor's own min/max |
-| data | `mtn-data`, `airtel-data`, `glo-data`, `etisalat-data` | **plan** |
-| tv | `dstv`, `gotv`, `startimes`, `showmax` | **plan** |
+| electricity | Ikeja prepaid (`IKEDC  PREPAID`) | amount, ₦500 minimum |
+| airtime | MTN, Airtel, Glo, 9mobile | amount |
+| data | `… DATA BUNDLE` | **plan** (`MD…` item) |
+| tv | DSTV, GOTV, STARTIMES | **plan** (`CB…` item) |
 
-A plan is a VTpass variation code (`dstv79` = DStv Compact, ₦7,900) with a fixed
-price. Those bills carry `plan` and `plan_price_ngn`, and a payment for any other
-amount is refused rather than silently accepted. Water and internet are not wired:
-asking for them refuses and charges nothing.
+A plan is a Flutterwave item code with a fixed price. Those bills carry `plan` and
+`plan_price_ngn`, and a payment for any other amount is refused rather than silently
+accepted. Water and internet are not wired: asking for them refuses and charges
+nothing. Flutterwave does not report units for a token, so they are worked out from
+the tariff (≈ ₦209/kWh).
 
-The demo's per-payment cap is ₦10,000 for this reason — a ₦5,000 cap makes the TV
-bill impossible to pay.
+The demo's per-payment cap is ₦10,000 because a mid-range DStv bouquet costs more
+than ₦5,000.
 
 Receipts, wallets and linked identities live in Neon Postgres, one set per account.
 `POST /v1/_stub/reset` wipes the signed-in account's rows and re-seeds the artboards'

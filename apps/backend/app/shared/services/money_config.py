@@ -17,7 +17,7 @@ class MoneyConfig:
     funding: FundingSettings
     float_settings: FloatSettings
     crypto_payouts: CryptoPayoutSettings
-    bachs_webhook_secret: Optional[str]
+    flutterwave_secret_hash: Optional[str]
     money_tick_seconds: int
 
     @classmethod
@@ -33,15 +33,12 @@ class MoneyConfig:
             ),
             float_settings=FloatSettings(
                 low_water_ngn=int(source.get("STARK_FLOAT_LOW_NGN") or 100_000),
-                target_ngn=int(source.get("STARK_FLOAT_TARGET_NGN") or 500_000),
-                funding_destination=(source.get("VTPASS_FUNDING_DESTINATION") or "").strip()
-                or None,
             ),
             crypto_payouts=CryptoPayoutSettings(
                 usdc_ngn_rate=Decimal(rate) if rate else None,
                 max_ngn=int(source.get("STARK_CRYPTO_WITHDRAW_MAX_NGN") or 200_000),
                 daily_ngn=int(source.get("STARK_CRYPTO_WITHDRAW_DAILY_NGN") or 1_000_000),
             ),
-            bachs_webhook_secret=(source.get("BACHS_WEBHOOK_SECRET") or "").strip() or None,
+            flutterwave_secret_hash=(source.get("FLW_SECRET_HASH") or "").strip() or None,
             money_tick_seconds=int(source.get("STARK_MONEY_TICK") or 30),
         )

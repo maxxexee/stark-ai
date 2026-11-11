@@ -97,7 +97,7 @@ class BillService:
             else:
                 plan = None
         else:
-            # Internet and water have no confirmed VTpass product yet; the bill can
+            # Internet and water are not sold through Flutterwave here; the bill can
             # be saved, but paying it will refuse and charge nothing.
             plan = None
 
@@ -175,7 +175,10 @@ class BillService:
         `spent_ngn` is moved by the receipt store, and units left are worked out
         from the receipts themselves (`TelemetryService.meter_reading`).
         """
-        bill = self.bills(account_id).get(receipt.get("bill_id"))
+        bill_id = receipt.get("bill_id")
+        if not isinstance(bill_id, str):
+            return
+        bill = self.bills(account_id).get(bill_id)
         if bill is None:
             return
         bill["last_amount_ngn"] = receipt["amount_ngn"]

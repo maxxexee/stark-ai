@@ -252,7 +252,7 @@ type DepositCommon = {
   credited_at: string | null;
 };
 
-/** `bank` pays on Bachs's hosted page; `crypto` is a one-off address for an exact amount. */
+/** `bank` pays on Flutterwave's hosted page; `crypto` is a one-off address for an exact amount. */
 export type Deposit = DepositCommon &
   (
     | { method: "bank"; pay: { checkout_url: string } }
@@ -287,12 +287,12 @@ type WithdrawalCommon = {
 };
 
 /**
- * `reviewing`: Bachs is checking a new bank account. `sending`: the transfer for a
- * crypto withdrawal is going out. `returned`: the money came back to the balance.
+ * `sending`: the transfer is going out (a bank transfer Flutterwave has not taken yet,
+ * or the swap for a crypto withdrawal). `returned`: the money came back to the balance.
  */
 export type Withdrawal = WithdrawalCommon &
   (
-    | { method: "bank"; status: "reviewing" | "processing" | "paid" | "returned"; crypto: null }
+    | { method: "bank"; status: "sending" | "processing" | "paid" | "returned"; crypto: null }
     | {
         method: "crypto";
         status: "sending" | "processing" | "paid" | "returned";

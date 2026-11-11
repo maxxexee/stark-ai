@@ -17,7 +17,7 @@ The agent's calls are signed *as the vault itself* with that function-call key, 
 the contract sees `predecessor == current_account_id`. A leaked agent key can spend
 inside a user's caps and do nothing more.
 
-Dry by default, like `vtpass.py`: with `STARK_BROADCAST` unset, transactions are
+Dry by default: with `STARK_BROADCAST` unset, transactions are
 signed offline (nonce 0, zero block hash) and never sent, so the money paths run
 without a network. A dry signature proves the encoding, not that the chain agreed.
 

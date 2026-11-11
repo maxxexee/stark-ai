@@ -4,8 +4,11 @@
 keep. It is covered by money Stark actually holds:
 
     owed     = Σ wallet balances
-    held     = VTpass float + Bachs NGN balance + treasury USDC × rate
+    held     = Flutterwave NGN balance − pending purchases + treasury USDC × rate
     coverage = held − owed           (must never go negative)
+
+Collections Flutterwave has not settled yet are not in its balance, so right after
+a run of deposits coverage dips until settlement; it must recover by the next day.
 
 `report()` prints both sides; `python -m app.modules.treasury.treasury_service`
 runs it from a shell. Treasury USDC is read through NEAR RPC when a treasury
@@ -14,10 +17,12 @@ account is configured.
 **The money loop** (`start`) runs every `STARK_MONEY_TICK` seconds (default 30):
 
 1. send vault ops that are still pending (`VaultService.flush`);
-2. check open deposits with their rail (catches a missed webhook);
-3. send withdrawals whose bank account Bachs has approved;
+2. settle bill purchases that came back pending (`BillPaymentService.settle_pending`);
+3. send bank withdrawals not yet taken, and re-read ones in flight;
 4. send held crypto withdrawals and follow their swaps;
-5. read the float, and refill it if it is low.
+5. read the float, and warn if it is low.
+
+Open deposits are not here: each has its own due time (`DepositService.check_due`).
 
 Each step is idempotent and isolated: one failing never stops the others.
 """
@@ -30,12 +35,12 @@ from decimal import Decimal
 from typing import Any, Callable, Optional
 
 from app.database import neon
-from app.modules.bachs.bachs import BachsClient, BachsError
+from app.modules.flutterwave.flutterwave import FlutterwaveError
 from app.modules.chain import near_tx
 from app.modules.intents import one_click
 from app.modules.liquidity.float_service import FloatService
+from app.modules.payment.bill_payment_service import BillPaymentService
 from app.modules.vault.vault_service import VaultService
-from app.modules.vending.vtpass import VtpassError
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.crypto_withdrawal_service import CryptoWithdrawalService
 from app.modules.wallet.withdrawal_service import WithdrawalService
@@ -46,18 +51,18 @@ USDC_CONTRACT = one_click.USDC_NEAR.split(":", 1)[1]
 
 class TreasuryService:
     def __init__(self, db: neon.Database, vaults: VaultService, deposits: DepositService,
+                 bill_payments: BillPaymentService,
                  withdrawals: WithdrawalService, crypto_withdrawals: CryptoWithdrawalService,
-                 floats: FloatService,
-                 bachs: Optional[BachsClient], treasury_account: Optional[str],
+                 floats: FloatService, treasury_account: Optional[str],
                  usdc_ngn_rate: Optional[Decimal],
                  mainnet_rpc: near_tx.NearRpc) -> None:
         self.db = db
         self.vaults = vaults
         self.deposits = deposits
+        self.bill_payments = bill_payments
         self.withdrawals = withdrawals
         self.crypto_withdrawals = crypto_withdrawals
         self.floats = floats
-        self.bachs = bachs
         self.treasury_account = treasury_account
         self.usdc_ngn_rate = usdc_ngn_rate
         self.mainnet_rpc = mainnet_rpc
@@ -65,24 +70,18 @@ class TreasuryService:
     def report(self) -> dict[str, Any]:
         owed = int(self.db.value("SELECT COALESCE(SUM(balance_ngn), 0) FROM wallets") or 0)
         held: dict[str, Optional[int]] = {
-            "vtpass_float_ngn": _read(lambda: self.floats.balance(fresh=True)),
-            "vtpass_reserved_ngn": self.floats.reserved(),
-            "bachs_ngn": _read(self.bachs.ngn_balance) if self.bachs else None,
+            "flutterwave_ngn": _read(lambda: self.floats.balance(fresh=True)),
+            "pending_purchases_ngn": self.floats.reserved(),
             "treasury_usdc_as_ngn": _read(self._treasury_usdc_as_ngn),
         }
-        known = sum(v for k, v in held.items() if v is not None and k != "vtpass_reserved_ngn")
-        open_refill = self.db.one(
-            "SELECT id, amount_ngn, status FROM float_refills"
-            " WHERE status IN ('requested', 'sent', 'manual') ORDER BY created_at DESC LIMIT 1"
-        )
+        known = sum(v for k, v in held.items() if v is not None and k != "pending_purchases_ngn")
         stuck_ops = int(self.db.value(
             "SELECT COUNT(*) FROM chain_ops WHERE status <> 'done'"
         ) or 0)
         return {
             "owed_to_users_ngn": owed,
             "held": held,
-            "coverage_ngn": known - held["vtpass_reserved_ngn"] - owed,
-            "open_refill": open_refill,
+            "coverage_ngn": known - held["pending_purchases_ngn"] - owed,
             "unsettled_vault_ops": stuck_ops,
         }
 
@@ -97,9 +96,9 @@ class TreasuryService:
     # --- the loop -------------------------------------------------------------
 
     def tick(self) -> None:
-        for step in (self.vaults.flush, self.deposits.poll_open,
-                     self.withdrawals.advance_reviewing, self.crypto_withdrawals.advance,
-                     self.floats.check_level):
+        for step in (self.vaults.flush, self.bill_payments.settle_pending,
+                     self.withdrawals.advance,
+                     self.crypto_withdrawals.advance, self.floats.check_level):
             try:
                 step()
             except Exception:  # one rail being down must not stop the others
@@ -120,7 +119,7 @@ def _read(read: Callable[[], Optional[int]]) -> Optional[int]:
     """A balance that could not be read is unknown, not zero."""
     try:
         return read()
-    except (BachsError, VtpassError, near_tx.NearRpcError) as err:
+    except (FlutterwaveError, near_tx.NearRpcError) as err:
         log.warning("balance unreadable: %s", err)
         return None
 

@@ -2,8 +2,8 @@
 
 | `method` | Rail | The user | Confirmed by |
 |---|---|---|---|
-| `bank` | Bachs checkout | opens a hosted page: bank transfer, card, or USDT/USDC | `collection.succeeded` webhook, or the money loop reading the checkout |
-| `crypto` | NEAR Intents (1Click) | sends the quoted amount of what they hold to a one-off address | the money loop reading `/v0/status` |
+| `bank` | Flutterwave checkout | opens a hosted page: bank transfer, card or USSD | `charge.completed` webhook, the redirect back, or a due check verifying the `tx_ref` |
+| `crypto` | NEAR Intents (1Click) | sends the quoted amount of what they hold to a one-off address | a due check reading `/v0/status`, or the user reopening the deposit |
 
 Either way the credit is the same three writes, and each is safe to repeat:
 
@@ -12,8 +12,17 @@ Either way the credit is the same three writes, and each is safe to repeat:
 2. the vault's `fund(amount, deposit id)` through the outbox;
 3. the deposit row marked `credited`.
 
-The money is spendable the moment step 1 lands: Stark fronts the naira from the
-VTpass float and settles the rail afterwards.
+The money is spendable the moment step 1 lands: Stark fronts the naira from its
+Flutterwave balance until Flutterwave settles the charge into it.
+
+A bank deposit is only ever credited from Flutterwave's own verify call, never from
+a webhook body or the redirect's query string: the charge must be `successful`, in
+NGN, for at least the amount asked.
+
+**Due checks, not a scan.** 1Click has no webhook and a Flutterwave webhook can be
+missed, so each deposit in flight carries its own `next_check_at`, half its age from
+now (one minute at least, fifteen at most). One thread sleeps until the earliest of
+those, so with nothing in flight it makes no calls at all. `/tx` pulls the check in.
 
 A crypto deposit is credited at the rate locked when it was quoted
 (`STARK_USDC_NGN_RATE`, naira per USDC — Stark's buying rate), and never for more
@@ -22,6 +31,7 @@ than the naira the user asked for.
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -34,15 +44,20 @@ from typing import Any, Optional
 from app.common.api_error import ApiError
 from app.common.clock import Clock
 from app.database import neon
-from app.modules.bachs.bachs import BachsClient, BachsError
+from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError, whole_naira
 from app.modules.intents import one_click
 from app.modules.intents.one_click import OneClickClient, OneClickError
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.vault.vault_service import VaultService
 
-MIN_DEPOSIT_NGN = 100            # Bachs's NGN checkout minimum
-MAX_DEPOSIT_NGN = 5_000_000      # Bachs's default single-deposit limit
+log = logging.getLogger("stark.deposits")
+
+MIN_DEPOSIT_NGN = 100
+MAX_DEPOSIT_NGN = 5_000_000
 WINDOW_MINUTES = 60
+MIN_CHECK_SECONDS = 60
+MAX_CHECK_SECONDS = 15 * 60
+SOON_SECONDS = 30
 UNIQUE_VIOLATION = "23505"
 
 
@@ -55,21 +70,24 @@ class FundingSettings:
 
 class DepositService:
     def __init__(self, db: neon.Database, receipts: ReceiptRepository, vaults: VaultService,
-                 bachs: Optional[BachsClient], one_click_client: OneClickClient,
+                 flutterwave: Optional[FlutterwaveClient], one_click_client: OneClickClient,
                  settings: FundingSettings) -> None:
         self.db = db
         self.receipts = receipts
         self.vaults = vaults
-        self.bachs = bachs
+        self.flutterwave = flutterwave
         self.one_click = one_click_client
         self.settings = settings
         self._tokens: Optional[tuple[float, list[dict[str, Any]]]] = None
         self._tokens_lock = threading.Lock()
+        self._wake = threading.Event()
+        self._watching = False
 
     # --- what can be used -----------------------------------------------------
 
     def methods(self) -> dict[str, bool]:
-        return {"bank": self.bachs is not None, "crypto": self._crypto_ready()}
+        return {"bank": self.flutterwave is not None and self.settings.app_url is not None,
+                "crypto": self._crypto_ready()}
 
     def crypto_assets(self) -> list[dict[str, Any]]:
         if not self._crypto_ready():
@@ -99,28 +117,32 @@ class DepositService:
         raise ApiError(400, "bad_method", "method must be bank or crypto")
 
     def _start_bank(self, account_id: str, amount_ngn: int) -> dict[str, Any]:
-        if self.bachs is None:
+        if self.flutterwave is None or self.settings.app_url is None:
             raise ApiError(501, "not_available",
                            "Adding money by bank or card isn't set up yet. Nothing was taken.")
+        account = self.db.one("SELECT email, name FROM accounts WHERE id = $1", [account_id])
+        assert account is not None
         deposit_id = f"dep_{uuid.uuid4().hex[:16]}"
-        success_url = (f"{self.settings.app_url.rstrip('/')}/wallet/add?deposit={deposit_id}"
-                       if self.settings.app_url else None)
         try:
-            checkout = self.bachs.create_checkout(
-                amount_ngn=amount_ngn, reference=deposit_id,
-                metadata={"account_id": account_id, "deposit_id": deposit_id},
-                success_url=success_url, expires_in_minutes=WINDOW_MINUTES,
+            link = self.flutterwave.create_checkout(
+                tx_ref=deposit_id, amount_ngn=amount_ngn, email=account["email"],
+                name=account["name"] or account["email"],
+                redirect_url=f"{self.settings.app_url.rstrip('/')}/wallet/add?deposit={deposit_id}",
+                meta={"account_id": account_id, "deposit_id": deposit_id},
             )
-        except BachsError as err:
+        except FlutterwaveError as err:
             raise ApiError(502, "provider_failed",
                            "Couldn't start that payment. Nothing was taken.") from err
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=WINDOW_MINUTES)) \
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
         row = self.db.one(
             "INSERT INTO deposits (id, user_id, method, amount_ngn, status, provider_ref,"
-            " checkout_url, expires_at, created_at, updated_at)"
-            " VALUES ($1, $2, 'bank', $3, 'open', $4, $5, $6, $7, $7) RETURNING *",
-            [deposit_id, account_id, amount_ngn, checkout["checkout_id"],
-             checkout["checkout_url"], checkout.get("expires_at"), Clock.now_iso()],
+            " checkout_url, expires_at, next_check_at, created_at, updated_at)"
+            " VALUES ($1, $2, 'bank', $3, 'open', $1, $4, $5, $6, $7, $7) RETURNING *",
+            [deposit_id, account_id, amount_ngn, link, expires_at,
+             _in_seconds(MIN_CHECK_SECONDS), Clock.now_iso()],
         )
+        self._wake.set()
         return shape(row)
 
     def _start_crypto(self, account_id: str, amount_ngn: int, asset_id: str) -> dict[str, Any]:
@@ -151,14 +173,16 @@ class DepositService:
             "INSERT INTO deposits (id, user_id, method, amount_ngn, status, provider_ref,"
             " deposit_address, deposit_memo, asset_id, asset_symbol, asset_chain,"
             " amount_in, amount_in_formatted, usdc_out, rate_ngn_per_usdc, expires_at,"
-            " created_at, updated_at)"
+            " next_check_at, created_at, updated_at)"
             " VALUES ($1, $2, 'crypto', $3, 'open', $4, $4, $5, $6, $7, $8, $9, $10, $11,"
-            " $12, $13, $14, $14) RETURNING *",
+            " $12, $13, $14, $15, $15) RETURNING *",
             [deposit_id, account_id, amount_ngn, quote["depositAddress"],
              quote.get("depositMemo"), asset_id, token["symbol"], token["blockchain"],
              quote["amountIn"], quote["amountInFormatted"], str(usdc_out), str(rate),
-             quote.get("deadline") or deadline, Clock.now_iso()],
+             quote.get("deadline") or deadline, _in_seconds(MIN_CHECK_SECONDS),
+             Clock.now_iso()],
         )
+        self._wake.set()
         return shape(row)
 
     # --- reading ----------------------------------------------------------------
@@ -186,6 +210,9 @@ class DepositService:
             self.one_click.submit_deposit(row["deposit_address"], tx_hash, row["deposit_memo"])
         except OneClickError as err:
             raise ApiError(400, "bad_tx", "That transaction wasn't recognised.") from err
+        self.db.query("UPDATE deposits SET next_check_at = $2 WHERE id = $1",
+                      [deposit_id, _in_seconds(SOON_SECONDS)])
+        self._wake.set()
         return self.get(account_id, deposit_id)
 
     def _row(self, account_id: str, deposit_id: str) -> dict[str, Any]:
@@ -197,29 +224,52 @@ class DepositService:
 
     # --- confirming -------------------------------------------------------------
 
-    def on_collection(self, event_type: str, data: dict[str, Any]) -> None:
-        """A Bachs collection event. Deposits are matched on our `reference`."""
-        reference = data.get("reference")
-        if not reference:
-            return  # a virtual-account transfer or a checkout we did not create
-        row = self.db.one("SELECT * FROM deposits WHERE id = $1", [reference])
-        if row is None or row["status"] == "credited":
-            return
-        status = str(data.get("status") or "").upper()
-        if event_type == "collection.succeeded" and status in ("SUCCEEDED", "OVERPAID"):
-            self._credit(row, int(row["amount_ngn"]))
-        elif event_type == "collection.succeeded" and status == "ACCEPTED":
-            self._set_status(row["id"], "confirming", None)
-        elif event_type == "collection.failed":
-            self._set_status(row["id"], "failed", data.get("reason"))
+    def on_charge(self, tx_ref: str) -> None:
+        """A `charge.completed` webhook names a deposit; Flutterwave is asked about it.
 
-    def poll_open(self) -> None:
-        """The money loop's pass over every deposit still in flight."""
+        The webhook body is not trusted for the amount or the outcome: the verify
+        call is the only thing that credits.
+        """
+        row = self.db.one("SELECT * FROM deposits WHERE id = $1", [tx_ref])
+        if row is None or row["status"] == "credited" or row["method"] != "bank":
+            return
+        self._check(row)
+
+    def check_due(self) -> Optional[float]:
+        """Check what has come due. Returns seconds to the next one, None if none is set."""
         for row in self.db.query(
             "SELECT * FROM deposits WHERE status IN ('open', 'confirming')"
-            " ORDER BY created_at LIMIT 100"
+            " AND next_check_at <= $1 ORDER BY next_check_at LIMIT 100",
+            [Clock.now_iso()],
         ):
+            # Moved on before checking, so a deposit that crashes its check can't spin.
+            self.db.query("UPDATE deposits SET next_check_at = $2 WHERE id = $1",
+                          [row["id"], _in_seconds(_check_delay(row["created_at"]))])
             self._check(row)
+        earliest = self.db.value(
+            "SELECT MIN(next_check_at) FROM deposits WHERE status IN ('open', 'confirming')"
+        )
+        if earliest is None:
+            return None
+        return max((_when(earliest) - datetime.now(timezone.utc)).total_seconds(), 0)
+
+    def start_watching(self) -> None:
+        def run() -> None:
+            while self._watching:
+                self._wake.clear()
+                try:
+                    wait = self.check_due()
+                except Exception:  # the database being down must not end the watch
+                    log.exception("deposit checks failed")
+                    wait = MIN_CHECK_SECONDS
+                self._wake.wait(wait)
+
+        self._watching = True
+        threading.Thread(target=run, daemon=True, name="deposits").start()
+
+    def stop_watching(self) -> None:
+        self._watching = False
+        self._wake.set()
 
     def _check(self, row: dict[str, Any]) -> None:
         try:
@@ -227,17 +277,30 @@ class DepositService:
                 self._check_bank(row)
             else:
                 self._check_crypto(row)
-        except (BachsError, OneClickError):
+        except (FlutterwaveError, OneClickError):
             return  # the next pass tries again
 
     def _check_bank(self, row: dict[str, Any]) -> None:
-        if self.bachs is None:
+        if self.flutterwave is None:
             return
-        checkout = self.bachs.get_checkout(row["provider_ref"])
-        if checkout["status"] == "completed":
+        try:
+            charge = self.flutterwave.verify_by_reference(row["id"])
+        except FlutterwaveError as err:
+            # 400 "No transaction was found" is an unpaid checkout, not a failure.
+            if err.transient:
+                raise
+            if row["status"] == "open" and _past(row["expires_at"]):
+                self._set_status(row["id"], "expired", None)
+            return
+        if charge["currency"] != "NGN" or charge["tx_ref"] != row["id"]:
+            return
+        paid_in_full = whole_naira(charge["amount"]) >= int(row["amount_ngn"])
+        if charge["status"] == "successful" and paid_in_full:
             self._credit(row, int(row["amount_ngn"]))
-        elif checkout["status"] in ("expired", "cancelled") and row["status"] == "open":
-            self._set_status(row["id"], "expired", None)
+        elif charge["status"] == "failed":
+            self._set_status(row["id"], "failed", charge.get("processor_response"))
+        elif row["status"] == "open":
+            self._set_status(row["id"], "confirming", None)
 
     def _check_crypto(self, row: dict[str, Any]) -> None:
         report = self.one_click.status(row["deposit_address"], row["deposit_memo"])
@@ -272,8 +335,8 @@ class DepositService:
                 "status": "received",
                 "entry_type": "deposit",
                 "source": f"{row['asset_symbol']} on {row['asset_chain']}" if crypto
-                else "Bank or card",
-                "vendor": "near-intents" if crypto else "bachs",
+                else "Bank, card or USSD",
+                "vendor": "near-intents" if crypto else "flutterwave",
                 "vendor_code": None,
                 "vendor_message": None,
                 "created_at": Clock.now_iso(),
@@ -348,5 +411,18 @@ def shape(row: dict[str, Any]) -> dict[str, Any]:
 def _past(iso: Optional[str]) -> bool:
     if not iso:
         return False
-    when = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return when < datetime.now(timezone.utc)
+    return _when(iso) < datetime.now(timezone.utc)
+
+
+def _when(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def _in_seconds(seconds: float) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)) \
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _check_delay(created_at: str) -> float:
+    age = (datetime.now(timezone.utc) - _when(created_at)).total_seconds()
+    return min(max(age / 2, MIN_CHECK_SECONDS), MAX_CHECK_SECONDS)

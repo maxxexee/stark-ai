@@ -38,23 +38,18 @@ health = "/"
 
 [services.stark-api.env]
 PUBLIC_URL = "https://geddon.hellostark.xyz"
-HOST = "0.0.0.0"
-STARK_VENDING = "dry"
-# Where Bachs checkout sends the user back after a bank or card deposit.
-STARK_APP_URL = "https://dash.hellostark.xyz"
-# One JSON line per turn — heard, said, replied, timings, and the whole
-# exchange with the model — read back with `GET /v1/turnlog`. On only here:
-# tests, smoke runs and local demos stay silent unless they ask for it.
-STARK_TURN_LOG = "1"
-# Optional integrations (NEAR_AI_API_KEY, VTPASS_*, TELEGRAM_*, STARK_FUNDER_*/STARK_AGENT_KEY, BACHS_*, WHATSAPP_*, TWILIO_*) are secrets:
-# set them in the dashboard, never here. See apps/backend/.env.example.
+# Everything the app reads — secrets and settings alike (DATABASE_URL, HOST,
+# STARK_APP_URL, STARK_TURN_LOG, FLW_*, ...) — lives in Infisical, project `stark`,
+# environment `prod`, folder `/backend`. apps/backend/start.sh pulls it at boot.
+# See apps/backend/.env.example for the keys.
+INFISICAL_PROJECT_ID = "1274ebdc-b5c0-4fe2-bfd3-a74d27f44819"
 
-# The two the API will not start without: the Neon Postgres pooler URL and the same
-# branch's Auth API. Values live in the project's Environment (dashboard or
-# `brimble env set`), never in this file — this only says they must exist, so a
-# deploy stops here rather than shipping a service that 500s on every query.
+# The machine identity start.sh logs in with (Infisical > Access Control > Machine
+# Identities, Universal Auth, read access to prod). Values live in the project's
+# Environment (dashboard or `brimble env set`), never in this file — this only says
+# they must exist, so a deploy stops here rather than shipping a service that can't boot.
 [services.stark-api.secrets]
-required = ["DATABASE_URL", "NEON_AUTH_BASE_URL"]
+required = ["INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"]
 
 # --- Dashboard: TanStack Start in SPA mode, served as static files ----------------------------
 

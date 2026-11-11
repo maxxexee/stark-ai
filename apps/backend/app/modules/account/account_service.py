@@ -20,8 +20,8 @@ from app.modules.receipt.receipt_repository import ReceiptRepository
 
 class AccountService:
     # Every account starts with these caps until it sets its own. ₦10,000, not the
-    # ₦5,000 the first draft used: a DStv Compact bouquet is ₦7,900 in VTpass's
-    # catalogue, so a ₦5,000 per-payment cap would make the TV bill unpayable.
+    # ₦5,000 the first draft used: a mid-range DStv bouquet costs more than ₦5,000,
+    # so a ₦5,000 per-payment cap would make the TV bill unpayable.
     MONTHLY_CAP_NGN = 30_000
     PER_PAYMENT_CAP_NGN = 10_000
 

@@ -94,7 +94,7 @@ def read_env_value(key: str, path: Path | None = None) -> str | None:
     and a missing database url in a test run reads as fifty unrelated import errors.
 
     Deliberately **one key**, named by the caller. Loading the whole file would drag
-    `NEAR_AI_API_KEY` and the VTpass credentials into tests that assert what happens
+    `NEAR_AI_API_KEY` and the Flutterwave key into tests that assert what happens
     when they are absent — which is exactly the bug this docstring replaced.
     """
     env_path = path or Path(__file__).resolve().parents[2] / ".env"
@@ -436,7 +436,7 @@ CREATE TABLE IF NOT EXISTS vault_payments (
     PRIMARY KEY (user_id, receipt_id)
 );
 
--- A deposit is one attempt to add money: a Bachs checkout (method bank) or a
+-- A deposit is one attempt to add money: a Flutterwave checkout (method bank) or a
 -- NEAR Intents quote (method crypto). Its id is the request_id of the credit, so
 -- a deposit can only ever be credited once.
 CREATE TABLE IF NOT EXISTS deposits (
@@ -465,18 +465,12 @@ CREATE TABLE IF NOT EXISTS deposits (
 );
 
 CREATE INDEX IF NOT EXISTS deposits_open ON deposits (status, created_at);
+ALTER TABLE deposits ADD COLUMN IF NOT EXISTS next_check_at TEXT;
+UPDATE deposits SET next_check_at = created_at
+  WHERE next_check_at IS NULL AND status IN ('open', 'confirming');
+CREATE INDEX IF NOT EXISTS deposits_due ON deposits (next_check_at)
+  WHERE status IN ('open', 'confirming');
 CREATE INDEX IF NOT EXISTS deposits_user ON deposits (user_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS payout_destinations (
-    user_id        TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    bank_code      TEXT NOT NULL,
-    account_number TEXT NOT NULL,
-    destination_id TEXT NOT NULL,
-    account_name   TEXT NOT NULL,
-    bank_name      TEXT NOT NULL,
-    created_at     TEXT NOT NULL,
-    PRIMARY KEY (user_id, bank_code, account_number)
-);
 
 CREATE TABLE IF NOT EXISTS withdrawals (
     id             TEXT PRIMARY KEY,
@@ -493,9 +487,10 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 
 CREATE INDEX IF NOT EXISTS withdrawals_reviewing ON withdrawals (status, created_at);
 
--- A crypto withdrawal has no Bachs destination: it is a 1Click swap from
+-- A crypto withdrawal has no bank account: it is a 1Click swap from
 -- treasury USDC to an address the user gave. `signed_tx` is stored before it is
 -- broadcast, so a retry resends the same transaction and can never pay twice.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS vendor_ref TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT 'bank';
 ALTER TABLE withdrawals ALTER COLUMN destination_id DROP NOT NULL;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS asset_id TEXT;
@@ -508,16 +503,12 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS amount_out_formatted TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS signed_tx TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS tx_hash TEXT;
 
--- Refills of the VTpass float: Stark-wide, not per account.
-CREATE TABLE IF NOT EXISTS float_refills (
-    id         TEXT PRIMARY KEY,
-    amount_ngn BIGINT NOT NULL,
-    status     TEXT NOT NULL,
-    payout_id  TEXT,
-    last_error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+-- A bank withdrawal names the account it pays: the transfer is sent (and resent,
+-- with the same reference) from these.
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bank_code TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_number TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_name TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bank_name TEXT;
 """
 
 

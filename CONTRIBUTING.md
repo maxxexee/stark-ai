@@ -13,9 +13,13 @@ bun dev           # website :5173, dashboard :5174, API :8000
 Requirements: Node 22+ (`.nvmrc` says 24), Bun 1.3+ (pinned via `packageManager`),
 Python 3.9+. Rust only if you touch [`apps/contracts`](apps/contracts/README.md).
 
-Configuration is per app. Only the backend reads any today:
-`cp apps/backend/.env.example apps/backend/.env`. Never commit a `.env`; they are
-gitignored.
+Configuration lives in [Infisical](https://infisical.com), project `stark`, one folder
+per app (`/backend`, `/dashboard`, `/website`) in each environment. Install the CLI
+(`brew install infisical/get-cli/infisical`) and run `infisical login` once;
+`.infisical.yaml` already links the repo to the project, and every `dev` script runs
+through `infisical secrets-manager run`. To see or change a value:
+`infisical secrets-manager secrets --env dev --path /backend`.
+[`apps/backend/.env.example`](apps/backend/.env.example) documents each key. Never commit a `.env`.
 
 ## Making a change
 
