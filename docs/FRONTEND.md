@@ -349,10 +349,19 @@ it would also breach the monthly cap.
 
 ## 6. Design
 
-From the artboards, which are the source of truth:
+The dashboard's tokens live at the top of `apps/dashboard/src/styles.css`. One of
+each, nothing in between:
 
-- Accent `#C2410C`, warm highlight `#F08A4B`
-- Crimson Pro for display, Inter for UI text
+- **Theme:** light and neutral. Talk is the one dark, immersive screen (`talk-scope`).
+- **Accent:** `#C2410C`, only for the main action, the current selection and focus.
+- **Type:** Inter only. 12 / 13 / 14 / 16 / 20 / 24 / 32 via `text-xs` … `text-3xl`;
+  no `text-[Npx]`, no serif, no uppercase eyebrows.
+- **Radius:** one value, 8px, for buttons, fields, tabs, chips, rows, cards and
+  dialogs. Fully round only for avatars, status dots and the mic.
+- **Heights:** controls are 32px (sm) or 36px; a form's main action is 40px. A field
+  and the button beside it are the same height.
+- **Layout:** one centred column; the header row sits in that same column so the
+  logo, titles and cards share a left and a right edge.
 - No sliders anywhere in the product
 - No crypto jargon at all
 
