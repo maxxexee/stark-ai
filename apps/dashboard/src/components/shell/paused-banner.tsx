@@ -17,10 +17,10 @@ export function PausedBanner() {
 
   return (
     <Notice
-      icon={<Icons.Pause size={18} />}
+      icon={<Icons.Pause size={16} />}
       title="Stark is paused"
       actions={
-        <Button onClick={handleResume} disabled={setPaused.isPending} className="min-h-10">
+        <Button onClick={handleResume} disabled={setPaused.isPending}>
           Resume
         </Button>
       }

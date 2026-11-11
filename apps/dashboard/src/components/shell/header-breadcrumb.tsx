@@ -1,11 +1,3 @@
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@stark/ui/components/breadcrumb";
 import { LogoMark } from "@stark/ui/components/logo";
 import { Link } from "@tanstack/react-router";
 import { usePath } from "@/components/shell/use-path";
@@ -25,22 +17,21 @@ export function HeaderBreadcrumb() {
   const path = usePath();
   const page = pageNames.find(([p]) => NavMatch.isActive(path, p, false))?.[1] ?? "Home";
   return (
-    <Breadcrumb>
-      <BreadcrumbList className="gap-3 text-fg">
-        <BreadcrumbItem>
-          <BreadcrumbLink
-            render={<Link to="/" aria-label="Stark home" />}
-            className="flex items-center gap-2 text-fg no-underline"
-          >
-            <LogoMark />
-            <span className="text-base font-semibold sm:text-[15px]">Stark</span>
-          </BreadcrumbLink>
-        </BreadcrumbItem>
-        <BreadcrumbSeparator className="hidden text-faint sm:inline">/</BreadcrumbSeparator>
-        <BreadcrumbItem className="hidden sm:inline-flex">
-          <BreadcrumbPage className="text-[13px] font-medium">{page}</BreadcrumbPage>
-        </BreadcrumbItem>
-      </BreadcrumbList>
-    </Breadcrumb>
+    <nav aria-label="Breadcrumb" className="flex items-center gap-2.5">
+      <Link
+        to="/"
+        aria-label="Stark home"
+        className="flex items-center gap-2.5 text-fg no-underline hover:text-fg"
+      >
+        <LogoMark size={20} cutout="#ffffff" />
+        <span className="text-base font-semibold">Stark</span>
+      </Link>
+      <span aria-hidden="true" className="hidden text-faint sm:inline">
+        /
+      </span>
+      <span aria-current="page" className="hidden text-base text-fg-2 sm:inline">
+        {page}
+      </span>
+    </nav>
   );
 }
