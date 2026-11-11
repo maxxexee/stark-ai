@@ -72,6 +72,7 @@ class AppModule:
 
         # Money: each user's vault, the rails that fill and empty it, the float.
         money = config.money
+        self.usdc_rate = money.funding.usdc_rate
         self.flutterwave = flutterwave.client_from_env()
         if self.flutterwave is not None:
             CATALOG.use(self.flutterwave.bill_categories)
@@ -129,7 +130,7 @@ class AppModule:
             self.crypto_withdrawals,
             self.floats,
             money.funding.treasury_account,
-            money.funding.usdc_ngn_rate,
+            self.usdc_rate,
             near_tx.NearRpc(near_tx.MAINNET_RPC),
         )
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)

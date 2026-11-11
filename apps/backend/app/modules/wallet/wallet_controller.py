@@ -3,15 +3,20 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.common.api_error import ApiError
 from app.decorators.api_responses import ApiResponses
 from app.decorators.auth_user import AuthUser
 from app.decorators.inject_module import Module
+from app.modules.liquidity.usdc_rate import RateUnavailable
 from app.modules.wallet.dtos.deposit_dto import (
     CryptoAssetDto,
     DepositDto,
+    DepositPreviewDto,
+    DepositPreviewResultDto,
     DepositTxDto,
     FundingMethodsDto,
     StartDepositDto,
+    UsdcRatesDto,
 )
 from app.modules.wallet.dtos.top_up_dto import TopUpDto
 from app.modules.wallet.dtos.wallet_dto import WalletDto
@@ -45,6 +50,20 @@ def methods(_account: AuthUser, module: Module) -> JSONResponse:
     })
 
 
+@router.get("/rates", response_model=UsdcRatesDto,
+            summary="Stark's naira/USDC rates for crypto deposits and withdrawals",
+            responses=ApiResponses.errors("provider_failed"))
+def rates(_account: AuthUser, module: Module) -> JSONResponse:
+    """Paycrest's live rate with Stark's spread taken each way. A quote can still land
+    on a slightly different rate if the market moves before it is made."""
+    try:
+        return JSONResponse({"deposit": str(module.usdc_rate.buying()),
+                             "withdraw": str(module.usdc_rate.selling())})
+    except RateUnavailable as err:
+        raise ApiError(502, "provider_failed",
+                       "Couldn't get a price right now. Try again in a minute.") from err
+
+
 @router.post("/topup", status_code=201, response_model=WalletEntryDto,
              summary="Add test money", responses=ApiResponses.errors("bad_amount",
                                                                      "not_available"))
@@ -68,7 +87,8 @@ def crypto_assets(_account: AuthUser, module: Module) -> JSONResponse:
 
 @router.post("/deposits", status_code=201, response_model=DepositDto,
              summary="Start adding money",
-             responses=ApiResponses.errors("bad_amount", "bad_method", "bad_asset",
+             responses=ApiResponses.errors("bad_amount", "below_minimum", "bad_method",
+                                           "bad_asset",
                                            "not_available", "provider_failed"))
 def start_deposit(dto: StartDepositDto, account: AuthUser, module: Module) -> JSONResponse:
     """`bank`: send the user to `pay.checkout_url` in the same tab; Flutterwave brings
@@ -81,6 +101,18 @@ def start_deposit(dto: StartDepositDto, account: AuthUser, module: Module) -> JS
         module.deposits.start(account.id, dto.amount_ngn, dto.method, dto.asset_id),
         status_code=201,
     )
+
+
+@router.post("/deposits/preview", response_model=DepositPreviewResultDto,
+             summary="Price a crypto deposit from either side, reserving nothing",
+             responses=ApiResponses.errors("bad_amount", "below_minimum", "bad_asset",
+                                           "not_available", "provider_failed"))
+def preview_deposit(dto: DepositPreviewDto, _account: AuthUser, module: Module) -> JSONResponse:
+    """For the Add money card as the user types. Give `amount_ngn` to see what to send,
+    or `amount_in` to see what it credits. Starting the deposit still locks its own
+    quote, so `amount_in` can differ by a hair from a preview made from the naira side.
+    `below_minimum` names 1Click's current floor, in naira, when it refuses a small swap."""
+    return JSONResponse(module.deposits.preview(dto.asset_id, dto.amount_ngn, dto.amount_in))
 
 
 @router.get("/deposits", response_model=list[DepositDto], summary="Recent deposits")

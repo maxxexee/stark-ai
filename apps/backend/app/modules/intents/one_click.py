@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from decimal import Decimal
+from typing import Any, Literal, Mapping, Optional
 
 BASE_URL = "https://1click.chaindefuser.com"
 # Native Circle USDC on NEAR mainnet (6 decimals), confirmed in /v0/tokens.
@@ -42,11 +44,20 @@ TERMINAL = frozenset({"SUCCESS", "REFUNDED", "FAILED"})
 USER_AGENT = "stark-backend/1.0 (+https://hellostark.xyz)"
 
 
+SwapType = Literal["EXACT_INPUT", "EXACT_OUTPUT"]
+MINIMUM_USD = re.compile(r"minimum swap amount is \$([\d.]+)")
+
+
 class OneClickError(Exception):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(f"{status}: {message}")
         self.status = status
         self.message = message
+
+    def minimum_usd(self) -> Optional[Decimal]:
+        """The swap floor 1Click named when it refused a quote as too small, if it did."""
+        found = MINIMUM_USD.search(self.message)
+        return Decimal(found.group(1)) if found else None
 
 
 @dataclass(frozen=True)
@@ -63,16 +74,19 @@ class OneClickClient:
             if t["symbol"] in OFFERED_SYMBOLS and t["assetId"] != USDC_NEAR
         ]
 
-    def quote(self, *, origin_asset: str, usdc_out: int, recipient: str, deadline: str,
-              dry: bool = False) -> dict[str, Any]:
+    def quote(self, *, origin_asset: str, swap_type: SwapType, amount: int, recipient: str,
+              deadline: str, dry: bool = False) -> dict[str, Any]:
+        """A swap of `origin_asset` into USDC on NEAR. `EXACT_OUTPUT`: `amount` is the USDC
+        out; `EXACT_INPUT`: `amount` is the origin asset in. A dry quote reserves no
+        deposit address, so it is safe to ask for on every keystroke."""
         return self._request("POST", "/v0/quote", {
             "dry": dry,
-            "swapType": "EXACT_OUTPUT",
+            "swapType": swap_type,
             "slippageTolerance": 100,
             "originAsset": origin_asset,
             "depositType": "ORIGIN_CHAIN",
             "destinationAsset": USDC_NEAR,
-            "amount": str(usdc_out),
+            "amount": str(amount),
             "refundTo": recipient,
             "refundType": "INTENTS",
             "recipient": recipient,
