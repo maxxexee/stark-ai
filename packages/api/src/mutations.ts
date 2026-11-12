@@ -54,6 +54,17 @@ export function useUpdateBill(id: string) {
   });
 }
 
+export function useConfirmBill(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.confirmBill(id),
+    onSuccess: (bill) => {
+      qc.setQueryData(queryKeys.bill(id), bill);
+      return invalidateMoney(qc);
+    },
+  });
+}
+
 export function useDeleteBill() {
   const qc = useQueryClient();
   return useMutation({

@@ -13,6 +13,8 @@ export type Bill = {
   plan_price_ngn?: number;
   renews_on?: string;
   fee_ngn?: number;
+  /** Saved by Stark from a chat: it cannot be paid until the owner confirms it. */
+  needs_confirmation?: true;
 };
 
 export type DueBill = {

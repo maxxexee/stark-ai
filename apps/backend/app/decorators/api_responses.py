@@ -14,6 +14,7 @@ class ApiResponses:
         "bad_fee": 400,
         "unknown_fee": 400,
         "unknown_bill": 404,
+        "bill_unconfirmed": 409,
         "no_route": 404,
         "bad_amount": 400,
         "bad_watts": 400,

@@ -44,6 +44,9 @@ class BillPaymentService:
         `ApprovalService`); the pause and the balance still apply, and the vault
         is signed through its owner-only `pay_approved`."""
         bill = self.bills.get(account_id, bill_id)
+        if bill.get("needs_confirmation"):
+            raise ApiError(409, "bill_unconfirmed",
+                           f"Confirm {bill['label']} in the app before paying it.")
         state = self.accounts.state(account_id)
         if state.paused_at is not None:
             raise ApiError(423, policy.PAUSED, policy.MESSAGES[policy.PAUSED])

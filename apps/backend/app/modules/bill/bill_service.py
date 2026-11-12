@@ -70,7 +70,11 @@ class BillService:
             raise ApiError(404, "unknown_bill", f"No bill {bill_id}")
         return bill
 
-    def add(self, account_id: str, dto: CreateBillDto) -> dict[str, Any]:
+    def add(self, account_id: str, dto: CreateBillDto, *,
+            by_agent: bool = False) -> dict[str, Any]:
+        """Save a bill. One the agent saves (`by_agent`) waits for the owner to
+        confirm it in the app before it can be paid: whoever can talk to Stark
+        could otherwise name their own number and pay it in the same breath."""
         kind = dto.kind.strip().lower()
         if kind not in BillKind.values():
             raise ApiError(400, "bad_kind",
@@ -128,6 +132,8 @@ class BillService:
             bill["plan_price_ngn"] = plan_price
         if renews_on:
             bill["renews_on"] = renews_on
+        if by_agent:
+            bill["needs_confirmation"] = True
         bills[bill["id"]] = bill
         self.repository.save_bill(account_id, bill)
         self.accounts.rebuild_limits(account_id)
@@ -162,6 +168,15 @@ class BillService:
             else:
                 bill.pop("renews_on", None)
         self.repository.save_bill(account_id, bill)
+        return bill
+
+    def confirm(self, account_id: str, bill_id: str) -> dict[str, Any]:
+        """The owner, signed in, agrees to a bill the agent saved. Only now does its
+        reference join the meters Stark (and the vault) may pay."""
+        bill = self.get(account_id, bill_id)
+        if bill.pop("needs_confirmation", None):
+            self.repository.save_bill(account_id, bill)
+            self.accounts.rebuild_limits(account_id)
         return bill
 
     def delete(self, account_id: str, bill_id: str) -> dict[str, Any]:

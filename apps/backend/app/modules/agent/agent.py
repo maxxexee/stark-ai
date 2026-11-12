@@ -155,7 +155,9 @@ Rules:
   user gave: the meter number, smartcard number or phone line. Never make up or
   complete a reference. Data and TV are sold as plans, so call find_plans first and
   pass the plan's code; if they did not say which plan, name two or three by price
-  and ask. After saving, read the reference back so a misheard digit is caught.
+  and ask. After saving, read the reference back so a misheard digit is caught,
+  and say the owner must confirm the new bill in the Stark app before it can be
+  paid. A bill marked needs_confirmation cannot be paid until they do.
 - To add money, call add_money with the amount and how they want to pay: "bank"
   for bank transfer, card or USSD, or "crypto" with the coin, like USDT, and the
   network when they named one. If they did not say how, ask bank or crypto, in one
@@ -1030,6 +1032,23 @@ class Agent:
                     "error": {"code": "unknown_bill",
                               "message": "I don't have that bill saved.",
                               "detail": {"bill_id": bill_id}}}
+
+        # A bill this agent saved is not payable until its owner confirms it in the
+        # app: a voice in the room must not be able to name a number and pay it.
+        if bill.get("needs_confirmation"):
+            effect["code"] = "bill_unconfirmed"
+            return {
+                "ok": False,
+                "error": {
+                    "code": "bill_unconfirmed",
+                    "message": (
+                        f"{bill.get('label', 'That bill')} is saved but not confirmed. "
+                        "Confirm it in the Stark app, then I can pay it. Nothing was "
+                        "charged."
+                    ),
+                    "detail": {"bill_id": bill.get("id")},
+                },
+            }
 
         # A plan is sold at its own price. Refuse a mispriced attempt before it can
         # reach the vendor, so the user hears the real number.

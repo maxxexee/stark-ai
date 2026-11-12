@@ -251,6 +251,14 @@ A date that does not parse is **400 `bad_renews_on`** — never silently dropped
 set to today or tomorrow shows up in `state.due_soon` on the next read, so a client can
 prove the reminder works without waiting a week.
 
+### `POST /v1/bills/{bill_id}/confirm` → `Bill`
+
+A bill Stark saved from a chat or by voice comes back with `needs_confirmation:
+true`, and stays off the list of references Stark (and the vault) may pay until its
+owner confirms it here, signed in. Paying it before then is refused with **409**
+`bill_unconfirmed`. Confirming removes the field; confirming twice changes nothing.
+Unknown id: **404** `unknown_bill`.
+
 ### `DELETE /v1/bills/{bill_id}`
 
 Returns `{ "deleted": true, "bill_id": "bill_abc123" }`. The bill's history stays in
@@ -486,7 +494,9 @@ the clock, so it always has a renewal due and one request waiting.
 ```
 
 Which ways of adding money are switched on. `test_money` is true only while no
-payment rail is configured. `withdraw` says which ways of taking it out are on.
+payment rail is configured. `withdraw` says which ways of taking it out are on;
+`withdraw.crypto` stays false while Flutterwave runs on a test key, whose checkouts
+credit naira nobody paid.
 
 ### `POST /v1/wallet/topup`
 
@@ -495,8 +505,9 @@ payment rail is configured. `withdraw` says which ways of taking it out are on.
 ```
 
 **Test money**: nothing is collected. The entry's `source` is always `"Test money"`.
-Refused with **501** `not_available` once Flutterwave is configured, so a deployed app
-cannot mint balance.
+Refused with **501** `not_available` once Flutterwave or the crypto treasury is
+configured, so a deployed app cannot mint balance, and minted balance can never leave
+as real USDC.
 
 Returns **201** with `{ "wallet": { /* GET /v1/wallet */ }, "entry": { /* Receipt */ } }`.
 `entry.type` is `deposit`, `entry.status` is `received`, `entry.bill_id` is `"wallet"`.
@@ -1093,6 +1104,7 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | `GET /v1/payees`: each saved bill with its delivered totals (this month, all time, count). Additive only. |
 | 2026-11-03 | **Money flow.** Deposits: `GET /v1/wallet/methods`, `POST`/`GET /v1/wallet/deposits`, `GET /v1/wallet/deposits/{id}`, `POST /v1/wallet/deposits/{id}/tx`, `GET /v1/wallet/crypto-assets`. Withdrawals: `GET /v1/wallet/banks`, `POST /v1/wallet/bank-accounts/resolve`, `GET /v1/wallet/withdrawals`; `POST /v1/wallet/withdraw` now takes `bank_code` + `account_number` and returns a `Withdrawal` instead of 501. `POST /v1/bachs/webhook`. `POST /v1/wallet/topup` answers 501 once Bachs is configured. Payments gain `float_low` (503) and `authorisation_failed` (502); `tx_hash` is set on every path when a chain is configured. New codes `unknown_deposit`, `bad_method`, `bad_asset`, `bad_tx`, `bad_account`, `provider_failed`. |
 | 2026-11-03 | **One provider: Flutterwave.** Bachs and VTpass are gone. Deposits are Flutterwave checkout, bills are Flutterwave bill payments, withdrawals are Flutterwave transfers, all from one NGN balance. `POST /v1/bachs/webhook` → `POST /v1/flutterwave/webhook` (`verif-hash`). Plan codes are Flutterwave item codes (`MD107`, `CB141`) and `GET /v1/plans` providers are network names (`MTN`, `DSTV`). A bank `Withdrawal` starts `sending` instead of `reviewing`. Showmax is no longer sold. |
+| 2026-11-12 | Security fixes. A bill the agent saves carries `needs_confirmation: true` and cannot be paid (409 `bill_unconfirmed`) until the owner calls `POST /v1/bills/{id}/confirm`. Test money is off whenever the crypto treasury is configured, and crypto withdrawals are off while Flutterwave runs on a test key. |
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
