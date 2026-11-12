@@ -64,10 +64,10 @@ NOT_LINKED_REPLY = (
     "send: link 000000"
 )
 VOICE_NO_STT = (
-    "I cannot hear voice notes right now — text is working. "
+    "I cannot hear voice notes right now. "
     "Type what you need instead."
 )
-VOICE_ASLEEP = "I'm here — say 'stark' first, then your question."
+VOICE_ASLEEP = "I'm here. Say 'stark' first, then your question."
 HELP_TEXT = (
     "Stark pays your household bills inside your limits.\n"
     "Try: 'hello stark how much is left' or 'hello stark pay 5000 for electricity'.\n"
@@ -459,7 +459,7 @@ class TelegramAdapter:
         user_id = self.identities.consume_code(code, CHANNEL, channel_user_id, display_name)
         if user_id is None:
             return ("That code did not work. Codes expire after 10 minutes and "
-                    "are single-use — get a fresh one in the app.")
+                    "work once. Get a fresh one in the app.")
         return "Linked. Ask me for your balance, or say 'hello stark pay 5000 for electricity'."
 
     def _command(self, text: str, channel_user_id: str, display_name: str | None) -> str:

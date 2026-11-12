@@ -9,7 +9,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ConnectIntro } from "@/components/connect/connect-intro";
 import { ConnectSteps } from "@/components/connect/connect-steps";
 import { MintedCode } from "@/components/connect/minted-code";
-import { WhyCodeCard } from "@/components/connect/why-code-card";
 import { PageTitle } from "@/components/shell/page-title";
 
 export const Route = createFileRoute("/_app/connect")({
@@ -42,8 +41,6 @@ function Connect() {
           {minted ? "Get another code" : "Get a code"}
         </Button>
       </Card>
-
-      <WhyCodeCard />
     </>
   );
 }

@@ -103,8 +103,7 @@ export function Intro() {
       <div className="flex flex-[0_1_420px] flex-col gap-5">
         <p className="m-0 text-ink-2">
           Send a voice note. Stark pays your electricity, airtime, data and TV bills from your
-          balance, and never spends past the limits you set. Prepaid electricity is where it shines
-          first.
+          balance, and never spends past the limits you set. Prepaid electricity comes first.
         </p>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
           <a href={links.getStarted} className={buttonVariants({ variant: "ink", size: "md" })}>

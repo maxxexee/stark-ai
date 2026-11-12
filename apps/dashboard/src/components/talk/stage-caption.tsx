@@ -22,7 +22,7 @@ export function StageCaption({
     listening: [
       "Listening…",
       session
-        ? "Keep going — you only say Stark once."
+        ? "Keep going. You only say Stark once."
         : "Start with “Hey Stark”, then say what you need.",
     ],
     thinking: ["One moment", "Checking your bills and balance."],

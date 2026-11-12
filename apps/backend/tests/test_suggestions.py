@@ -144,7 +144,7 @@ class CapSignal(unittest.TestCase):
         self.assertEqual(found[0]["id"], "sug_cap")
         self.assertEqual(found[0]["severity"], "warn")
         self.assertEqual(found[0]["text"],
-                         "You've used 82% of your ₦30,000 limit — ₦5,500 left this month.")
+                         "You've used 82% of your ₦30,000 limit. ₦5,500 is left this month.")
 
     def test_past_ninety_five_percent_is_an_alert(self):
         found = build_suggestions(spent_ngn=29_000, cap_ngn=30_000)
@@ -160,7 +160,7 @@ class DueSignal(unittest.TestCase):
                                               plan_price_ngn=7900)])
         due = [f for f in found if f["reason"] == "bill_due"]
         self.assertEqual(len(due), 1)
-        self.assertEqual(due[0]["text"], "DStv renews in 3 days — ₦7,900.")
+        self.assertEqual(due[0]["text"], "DStv renews in 3 days, ₦7,900.")
         self.assertEqual(due[0]["severity"], "warn")
 
     def test_at_most_two_renewals_surface(self):

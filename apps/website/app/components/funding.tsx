@@ -15,7 +15,7 @@ export function Funding() {
         </h2>
         <p className="m-0 max-w-[540px] text-ink-2">
           Pay by bank transfer or card, or send almost any coin you already hold. It lands in your
-          Stark balance in naira, ready for bills. Nothing to figure out.
+          Stark balance in naira, ready for bills.
         </p>
       </div>
       <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">

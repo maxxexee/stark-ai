@@ -109,9 +109,9 @@ class Copy(unittest.TestCase):
                          "Your DStv renews in 3 days.")
 
     def test_ui_summaries(self):
-        self.assertEqual(summary(self.item(3)), "DStv renews in 3 days — ₦7,900.")
-        self.assertEqual(summary(self.item(0)), "DStv renews today — ₦7,900.")
-        self.assertEqual(summary(self.item(-2)), "DStv was due 2 days ago — ₦7,900.")
+        self.assertEqual(summary(self.item(3)), "DStv renews in 3 days, ₦7,900.")
+        self.assertEqual(summary(self.item(0)), "DStv renews today, ₦7,900.")
+        self.assertEqual(summary(self.item(-2)), "DStv was due 2 days ago, ₦7,900.")
 
     def test_push_text_ends_with_the_action(self):
         self.assertEqual(push_text(self.item(3)),
