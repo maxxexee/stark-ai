@@ -34,7 +34,7 @@ from app.database import neon
 RECEIPT_COLUMNS = (
     "id", "user_id", "request_id", "bill_id", "bill_label", "meter", "amount_ngn",
     "units", "token", "tx_hash", "status", "entry_type", "source",
-    "vendor", "vendor_code", "vendor_ref", "vendor_message", "created_at",
+    "vendor", "vendor_code", "vendor_ref", "vendor_message", "created_at", "fee_ngn",
 )
 
 UPDATABLE = frozenset({
@@ -60,20 +60,24 @@ def _insert_sql(*, from_wallet: bool = False) -> tuple[str, int, int]:
 
 
 def _typed(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """A receipt row with `amount_ngn` as an int.
+    """A receipt row with `amount_ngn` and `fee_ngn` as ints.
 
     Neon's HTTP endpoint returns `BIGINT` as a JSON **string** (JSON numbers can't
     hold 64 bits safely), so without this the amount comes back as `"5000"` and
     ends up in `/v1/bills` as a string the UI has to guess about. Money is integer
     naira everywhere in this codebase, so it is an int the moment it leaves a query.
     """
-    if row is not None and row.get("amount_ngn") is not None:
-        row["amount_ngn"] = int(row["amount_ngn"])
+    if row is None:
+        return row
+    for column in ("amount_ngn", "fee_ngn"):
+        if row.get(column) is not None:
+            row[column] = int(row[column])
     return row
 
 
 def _values(receipt: dict[str, Any], user_id: str) -> list[Any]:
-    return [user_id if column == "user_id" else receipt.get(column) for column in RECEIPT_COLUMNS]
+    row = {**receipt, "user_id": user_id, "fee_ngn": receipt.get("fee_ngn") or 0}
+    return [row.get(column) for column in RECEIPT_COLUMNS]
 
 
 class ReceiptRepository:
@@ -281,8 +285,8 @@ class ReceiptRepository:
         other gets None.
         """
         wallet = {
-            "delivered": "spent_ngn = spent_ngn + r.amount_ngn",
-            "failed": "balance_ngn = balance_ngn + r.amount_ngn",
+            "delivered": "spent_ngn = spent_ngn + r.amount_ngn + r.fee_ngn",
+            "failed": "balance_ngn = balance_ngn + r.amount_ngn + r.fee_ngn",
         }[status]
         unknown = set(fields) - UPDATABLE
         if unknown:
@@ -304,8 +308,8 @@ class ReceiptRepository:
         self.db.query(
             "WITH r AS (DELETE FROM receipts"
             " WHERE id = $1 AND user_id = $2 AND status = 'pending'"
-            " RETURNING user_id, amount_ngn)"
-            " UPDATE wallets SET balance_ngn = balance_ngn + r.amount_ngn"
+            " RETURNING user_id, amount_ngn, fee_ngn)"
+            " UPDATE wallets SET balance_ngn = balance_ngn + r.amount_ngn + r.fee_ngn"
             " FROM r WHERE wallets.user_id = r.user_id",
             [receipt_id, user_id],
         )
@@ -350,4 +354,6 @@ def api_shape(receipt: dict[str, Any]) -> dict[str, Any]:
         "source": receipt.get("source"),
         # Additive (2026-11-03): why a `declined` entry was stopped, in plain words.
         "reason": receipt.get("vendor_message") if receipt["status"] == "declined" else None,
+        # Additive (2026-11-12): Stark's service fee, charged on top of `amount_ngn`.
+        "fee_ngn": receipt.get("fee_ngn") or 0,
     }

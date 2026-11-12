@@ -3,6 +3,7 @@ import { Button } from "@stark/ui/components/button";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { AdminChain } from "@/components/admin/admin-chain";
+import { AdminFees } from "@/components/admin/admin-fees";
 import { AdminInFlightTable } from "@/components/admin/admin-in-flight-table";
 import { AdminPots } from "@/components/admin/admin-pots";
 import { AdminStatusTable } from "@/components/admin/admin-status-table";
@@ -49,6 +50,13 @@ export function AdminOverview({
       {data ? (
         <>
           <AdminPots report={data.treasury} />
+          {data.fees_ngn ? (
+            <AdminFees
+              key={JSON.stringify(data.fees_ngn)}
+              adminKey={adminKey}
+              fees={data.fees_ngn}
+            />
+          ) : null}
           <div className="grid gap-6 md:grid-cols-2">
             <AdminStatusTable title="Deposits" rows={data.deposits} />
             <AdminStatusTable title="Withdrawals" rows={data.withdrawals} />

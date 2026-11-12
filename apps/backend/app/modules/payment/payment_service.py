@@ -79,8 +79,13 @@ class PaymentService:
         self.clock = clock
 
     def pay(self, user_id: str, bill: dict, amount_ngn: int, *,
-            approved: bool = False) -> dict:
-        """Book a payment for one account. Returns the stored receipt row."""
+            approved: bool = False, fee_ngn: int = 0) -> dict:
+        """Book a payment for one account. Returns the stored receipt row.
+
+        `fee_ngn` is Stark's service fee: it is held, authorised onchain and refunded
+        with the amount, but only `amount_ngn` is bought from the vendor.
+        """
+        total_ngn = amount_ngn + fee_ngn
         token_required = bill["kind"] == "electricity"
         pending = self.store.find_pending(user_id, bill["id"], amount_ngn)
         if pending is not None:
@@ -96,6 +101,7 @@ class PaymentService:
                 "bill_label": bill["label"],
                 "meter": str(bill.get("reference") or ""),
                 "amount_ngn": amount_ngn,
+                "fee_ngn": fee_ngn,
                 "units": None,
                 "token": None,
                 "tx_hash": None,
@@ -104,16 +110,16 @@ class PaymentService:
                 "vendor_code": None,
                 "vendor_message": None,
                 "created_at": self.clock(),
-            }, amount_ngn)
+            }, total_ngn)
         except ValueError:
             raise SpendError(INSUFFICIENT_BALANCE,
                              "There isn't enough in your balance for that.",
-                             {"amount_ngn": amount_ngn}) from None
+                             {"amount_ngn": total_ngn}) from None
 
         if self.vaults is not None:
             try:
                 authorisation = self.vaults.authorise_payment(
-                    user_id, str(bill.get("reference") or ""), amount_ngn, approved=approved
+                    user_id, str(bill.get("reference") or ""), total_ngn, approved=approved
                 )
             except AuthorisationFailed as err:
                 self.store.drop_hold(user_id, receipt["id"])

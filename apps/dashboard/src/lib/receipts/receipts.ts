@@ -30,10 +30,11 @@ export class Receipts {
     return r.source ?? "";
   }
 
+  /** What the entry moved: a bill counts its service fee, since the wallet paid both. */
   static signedAmount(r: Receipt): number {
     if (r.type === "deposit") return r.amount_ngn;
     if (r.type === "withdrawal") return -r.amount_ngn;
-    return r.amount_ngn;
+    return r.amount_ngn + (r.fee_ngn ?? 0);
   }
 
   static matchesFilter(r: Receipt, filter: ActivityFilter): boolean {

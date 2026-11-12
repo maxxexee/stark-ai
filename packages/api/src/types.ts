@@ -18,6 +18,8 @@ export type Bill = {
    * renew on a schedule.
    */
   renews_on?: string;
+  /** Stark's service fee a payment to this bill carries right now, on top of the amount. */
+  fee_ngn?: number;
 };
 
 export type DueBill = {
@@ -73,6 +75,8 @@ export type Receipt = {
   source: string | null;
   /** Why a `declined` entry was stopped, in plain words; null otherwise. */
   reason: string | null;
+  /** Stark's service fee, charged on top of `amount_ngn`. */
+  fee_ngn?: number;
 };
 
 export type Plan = {

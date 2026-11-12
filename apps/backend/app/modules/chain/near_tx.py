@@ -469,8 +469,9 @@ def sign_transaction(*, key: KeyPair, signer_id: str, receiver_id: str, nonce: i
 
 # --- JSON-RPC ---------------------------------------------------------------
 
-TESTNET_RPC = "https://rpc.testnet.near.org"
-MAINNET_RPC = "https://rpc.mainnet.near.org"
+# FastNEAR answers in about 0.5s from Lagos; NEAR's own public endpoints took 3.5s.
+TESTNET_RPC = "https://test.rpc.fastnear.com"
+MAINNET_RPC = "https://free.rpc.fastnear.com"
 
 
 class NearRpcError(Exception):

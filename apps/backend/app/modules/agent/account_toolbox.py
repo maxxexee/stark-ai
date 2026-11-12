@@ -21,7 +21,7 @@ class AccountToolbox:
         return self.module.state.snapshot(self.account_id)
 
     def list_bills(self) -> list[dict]:
-        return list(self.module.bills.bills(self.account_id).values())
+        return self.module.bills.public(self.account_id)
 
     def recent_activity(self) -> list[dict]:
         return self.module.bill_payments.recent(self.account_id, 20)

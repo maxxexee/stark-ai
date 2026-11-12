@@ -20,6 +20,7 @@ from app.modules.bill.bill_service import BillService
 from app.modules.payment import payment_service
 from app.modules.payment.payment_service import PaymentService
 from app.modules.receipt import receipt_repository
+from app.modules.settings.settings_service import SettingsService
 from app.modules.wallet.wallet_service import WalletService
 
 log = logging.getLogger("stark.payments")
@@ -29,11 +30,13 @@ SETTLE_AFTER_MINUTES = 1
 
 class BillPaymentService:
     def __init__(self, accounts: AccountService, bills: BillService,
-                 wallet: WalletService, payments: PaymentService) -> None:
+                 wallet: WalletService, payments: PaymentService,
+                 settings: SettingsService) -> None:
         self.accounts = accounts
         self.bills = bills
         self.wallet = wallet
         self.payments = payments
+        self.settings = settings
 
     def pay(self, account_id: str, bill_id: str, amount: int, *,
             approved: bool = False) -> dict[str, Any]:
@@ -47,26 +50,31 @@ class BillPaymentService:
         if amount <= 0:
             raise ApiError(400, "bad_amount", "amount_ngn must be positive")
 
+        # The limits and the balance cover what the user actually pays: the bill
+        # and Stark's fee on it.
+        fee = self.settings.fee_for(bill["kind"])
+        total = amount + fee
         limits = state.limits
         wallet = self.wallet.balance(account_id)
         spent, balance = wallet["spent_ngn"], wallet["balance_ngn"]
-        if not approved and amount > limits.per_payment_cap_ngn:
+        if not approved and total > limits.per_payment_cap_ngn:
             raise ApiError(409, "over_per_payment_cap",
                            "That's over the most you allow in one go.",
-                           {"amount_ngn": amount, "cap_ngn": limits.per_payment_cap_ngn})
-        if not approved and spent + amount > limits.monthly_cap_ngn:
+                           {"amount_ngn": total, "cap_ngn": limits.per_payment_cap_ngn})
+        if not approved and spent + total > limits.monthly_cap_ngn:
             raise ApiError(409, "over_cap", "That would go over your monthly limit.", {
                 "cap_ngn": limits.monthly_cap_ngn,
                 "spent_ngn": spent,
                 "remaining_ngn": max(limits.monthly_cap_ngn - spent, 0),
             })
-        if amount > balance:
+        if total > balance:
             raise ApiError(409, "insufficient_balance",
                            "Not enough in your wallet. Add money first.",
-                           {"balance_ngn": balance, "amount_ngn": amount})
+                           {"balance_ngn": balance, "amount_ngn": total})
 
         try:
-            receipt = self.payments.pay(account_id, bill, amount, approved=approved)
+            receipt = self.payments.pay(account_id, bill, amount, approved=approved,
+                                        fee_ngn=fee)
         except payment_service.SpendError as err:
             status = 409 if err.code == payment_service.INSUFFICIENT_BALANCE else 502
             raise ApiError(status, err.code, err.message, err.detail) from err
