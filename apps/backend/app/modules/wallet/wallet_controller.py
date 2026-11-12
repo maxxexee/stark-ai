@@ -147,21 +147,26 @@ def banks(_account: AuthUser, module: Module) -> JSONResponse:
 
 @router.post("/bank-accounts/resolve", response_model=ResolvedAccountDto,
              summary="The name on a bank account, before sending to it",
-             responses=ApiResponses.errors("bad_account", "not_available",
-                                           "provider_failed"))
-def resolve(dto: BankAccountDto, _account: AuthUser, module: Module) -> JSONResponse:
-    return JSONResponse(module.withdrawals.resolve(dto.bank_code, dto.account_number))
+             responses=ApiResponses.errors("bad_account", "too_many_lookups",
+                                           "not_available", "provider_failed"))
+def resolve(dto: BankAccountDto, account: AuthUser, module: Module) -> JSONResponse:
+    """Limited per account per day (`too_many_lookups`, 429): the name is someone's
+    personal data."""
+    return JSONResponse(module.withdrawals.lookup(account.id, dto.bank_code,
+                                                  dto.account_number))
 
 
 @router.post("/withdraw", status_code=201, response_model=WithdrawalDto,
              summary="Send money to a bank account",
-             responses=ApiResponses.errors("bad_amount", "bad_account",
+             responses=ApiResponses.errors("bad_amount", "bad_account", "paused",
+                                           "daily_limit", "funds_on_hold",
                                            "insufficient_balance", "not_available",
                                            "provider_failed"))
 def withdraw(dto: WithdrawDto, account: AuthUser, module: Module) -> JSONResponse:
     """The money leaves the balance at once. `sending` until Flutterwave takes the
     transfer, then `processing`, then `paid` — or `returned`, and the money comes
-    back to the balance."""
+    back to the balance. Refused while paused, over the account's daily bank total,
+    and for money a card added until its hold passes (`funds_on_hold`)."""
     return JSONResponse(
         module.withdrawals.request(account.id, dto.amount_ngn, dto.bank_code,
                                    dto.account_number),
@@ -172,7 +177,8 @@ def withdraw(dto: WithdrawDto, account: AuthUser, module: Module) -> JSONRespons
 @router.post("/withdraw/crypto", status_code=201, response_model=WithdrawalDto,
              summary="Send money out as crypto",
              responses=ApiResponses.errors("bad_amount", "bad_asset", "bad_address",
-                                           "over_limit", "daily_limit",
+                                           "over_limit", "daily_limit", "paused",
+                                           "funds_on_hold",
                                            "insufficient_balance", "not_available",
                                            "provider_failed"))
 def withdraw_crypto(dto: CryptoWithdrawDto, account: AuthUser, module: Module) -> JSONResponse:

@@ -10,10 +10,15 @@
 //!
 //! * **owner** — policy, allowlist, pause, withdraw, hand-over. Starts as Stark's
 //!   funder account (users sign in with email and hold no NEAR key) and can be
-//!   handed to the user's own account with `set_owner`.
+//!   handed to the user's own account in two steps: the owner `propose_owner`s it,
+//!   and the new account takes it with `accept_owner`. A mistyped account id can
+//!   never accept, so the vault cannot be handed to nobody.
 //! * **funder** — Stark's backend. Sets the naira rate, sends a bank withdrawal's
 //!   USDC back to the treasury (`debit`), and deposits USDC with
 //!   `ft_transfer_call`, each deposit carrying a reference that is applied once.
+//!   Only USDC sent by the funder or the treasury is taken; anyone else's is sent
+//!   back without touching state, so strangers cannot fill the vault's storage or
+//!   write events into its log.
 //! * **agent** — the function-call key on this very account. Its calls arrive with
 //!   `predecessor == current_account_id`, and it may only `pay`.
 //!
@@ -27,6 +32,7 @@ mod policy;
 pub use policy::{period_key, remaining_cap, Rejection};
 
 use near_sdk::json_types::U128;
+use near_sdk::serde_json::{json, Value};
 use near_sdk::store::{LookupMap, LookupSet};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
@@ -42,6 +48,14 @@ const CALLBACK_GAS: Gas = Gas::from_tgas(10);
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 /// A `ft_transfer_call` whose `msg` starts with this returns a payment's USDC.
 const REFUND_PREFIX: &str = "refund:";
+/// The longest deposit `msg` taken, in bytes. Every reference is kept forever, so
+/// an unbounded one is a storage leak. Stark's longest is `opening:<vault id>`,
+/// and an account id is at most 64 bytes.
+const MAX_MSG_LEN: usize = 128;
+/// Raw storage key for an ownership hand-over in progress. Kept outside the
+/// `Vault` struct so vaults already holding state still deserialise once they run
+/// this code.
+const PENDING_OWNER_KEY: &[u8] = b"pending_owner";
 
 const ERR_OWNER_ONLY: &str = "Only the owner can do that";
 const ERR_FUNDER_ONLY: &str = "Only Stark can do that";
@@ -50,6 +64,7 @@ const ERR_TOKEN_ONLY: &str = "This vault only holds USDC";
 const ERR_NO_BALANCE_MSG: &str = "That's more than the balance";
 const ERR_ZERO: &str = "That amount needs to be above zero.";
 const ERR_NO_RATE: &str = "The naira rate needs to be above zero";
+const ERR_NOT_PROPOSED: &str = "This account has not been offered the vault";
 
 #[near]
 #[derive(BorshStorageKey)]
@@ -215,6 +230,12 @@ impl Vault {
     /// NEP-141 receiver. A deposit's `msg` is its reference: a reference already
     /// applied is sent back untouched, so a retried deposit cannot credit twice.
     /// From the treasury, `msg = "refund:<payment_id>"` returns a failed bill's USDC.
+    ///
+    /// Only the funder and the treasury may deposit, with a `msg` of at most
+    /// `MAX_MSG_LEN` bytes. Anything else is sent back in full before any state is
+    /// written: each reference costs storage the vault pays for, so dust from a
+    /// stranger with long unique `msg`s would otherwise use it up and stop every
+    /// later call.
     pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
@@ -222,8 +243,14 @@ impl Vault {
         msg: String,
     ) -> PromiseOrValue<U128> {
         require!(env::predecessor_account_id() == self.usdc, ERR_TOKEN_ONLY);
+        if msg.len() > MAX_MSG_LEN {
+            return PromiseOrValue::Value(amount);
+        }
         if let Some(id) = msg.strip_prefix(REFUND_PREFIX) {
             return PromiseOrValue::Value(self.refund(&sender_id, id, amount.0));
+        }
+        if sender_id != self.funder && sender_id != self.treasury {
+            return PromiseOrValue::Value(amount);
         }
         if !msg.is_empty() && !self.references.insert(msg.clone()) {
             return PromiseOrValue::Value(amount);
@@ -231,10 +258,12 @@ impl Vault {
         self.balance_usdc += amount.0;
         emit(
             "funded",
-            &format!(
-                r#"{{"amount_usdc":"{}","reference":"{}","sender":"{}","balance_usdc":"{}"}}"#,
-                amount.0, msg, sender_id, self.balance_usdc
-            ),
+            json!({
+                "amount_usdc": amount,
+                "reference": msg,
+                "sender": sender_id,
+                "balance_usdc": U128(self.balance_usdc),
+            }),
         );
         PromiseOrValue::Value(U128(0))
     }
@@ -266,10 +295,11 @@ impl Vault {
         if env::promise_result_checked(0, 0).is_ok() {
             emit(
                 "debited",
-                &format!(
-                    r#"{{"amount_usdc":"{}","reference":"{}","balance_usdc":"{}"}}"#,
-                    amount_usdc.0, reference, self.balance_usdc
-                ),
+                json!({
+                    "amount_usdc": amount_usdc,
+                    "reference": reference,
+                    "balance_usdc": U128(self.balance_usdc),
+                }),
             );
         } else {
             self.balance_usdc += amount_usdc.0;
@@ -343,17 +373,29 @@ impl Vault {
     pub fn on_withdrawn(&mut self, amount_usdc: U128) -> bool {
         let sent = env::promise_result_checked(0, 0).is_ok();
         if sent {
-            emit("withdrawn", &format!(r#"{{"amount_usdc":"{}"}}"#, amount_usdc.0));
+            emit("withdrawn", json!({ "amount_usdc": amount_usdc }));
         } else {
             self.balance_usdc += amount_usdc.0;
         }
         sent
     }
 
-    /// Hand the vault to another account — the user's own, once they have one.
-    pub fn set_owner(&mut self, owner: AccountId) {
+    /// Offer the vault to another account — the user's own, once they have one.
+    /// Nothing changes until that account calls `accept_owner`, so a mistyped id
+    /// leaves the current owner in charge. A new offer replaces the last one.
+    pub fn propose_owner(&mut self, owner: AccountId) {
         self.assert_owner();
-        self.owner = owner;
+        env::storage_write(PENDING_OWNER_KEY, owner.as_bytes());
+        emit("owner_proposed", json!({ "owner": self.owner, "proposed": owner }));
+    }
+
+    /// Take the vault, as the account `propose_owner` named.
+    pub fn accept_owner(&mut self) {
+        let caller = env::predecessor_account_id();
+        require!(self.pending_owner().as_ref() == Some(&caller), ERR_NOT_PROPOSED);
+        env::storage_remove(PENDING_OWNER_KEY);
+        let previous = std::mem::replace(&mut self.owner, caller);
+        emit("owner_changed", json!({ "previous": previous, "owner": self.owner }));
     }
 
     // --- views ---------------------------------------------------------------
@@ -385,6 +427,11 @@ impl Vault {
             total_paid_ngn: U128(self.total_paid_ngn),
             payment_count: self.payment_count,
         }
+    }
+
+    /// The account offered the vault and not yet accepted, if any.
+    pub fn get_pending_owner(&self) -> Option<AccountId> {
+        self.pending_owner()
     }
 
     pub fn get_payment(&self, payment_id: u64) -> Option<PaymentRecord> {
@@ -480,10 +527,14 @@ impl Vault {
         let remaining = remaining_cap(self.monthly_cap_ngn, self.spent_period_ngn);
         emit(
             "payment",
-            &format!(
-                r#"{{"payment_id":"{}","meter":"{}","amount_ngn":"{}","amount_usdc":"{}","period":"{}","remaining_cap_ngn":"{}"}}"#,
-                self.payment_count, meter, amount, usdc, self.period_key, remaining
-            ),
+            json!({
+                "payment_id": self.payment_count.to_string(),
+                "meter": meter,
+                "amount_ngn": amount_ngn,
+                "amount_usdc": U128(usdc),
+                "period": self.period_key,
+                "remaining_cap_ngn": U128(remaining),
+            }),
         );
 
         PaymentOutcome {
@@ -524,10 +575,11 @@ impl Vault {
         self.payments.insert(payment_id, record);
         emit(
             "refunded",
-            &format!(
-                r#"{{"payment_id":"{}","amount_ngn":"{}","balance_usdc":"{}"}}"#,
-                payment_id, amount, self.balance_usdc
-            ),
+            json!({
+                "payment_id": payment_id.to_string(),
+                "amount_ngn": U128(amount),
+                "balance_usdc": U128(self.balance_usdc),
+            }),
         );
     }
 
@@ -552,14 +604,21 @@ impl Vault {
     fn transfer(&self, receiver: &AccountId, amount_usdc: u128, memo: &str) -> Promise {
         Promise::new(self.usdc.clone()).function_call(
             "ft_transfer".to_string(),
-            format!(
-                r#"{{"receiver_id":"{}","amount":"{}","memo":"{}"}}"#,
-                receiver, amount_usdc, memo
-            )
-            .into_bytes(),
+            json!({ "receiver_id": receiver, "amount": U128(amount_usdc), "memo": memo })
+                .to_string()
+                .into_bytes(),
             ONE_YOCTO,
             FT_TRANSFER_GAS,
         )
+    }
+
+    fn pending_owner(&self) -> Option<AccountId> {
+        env::storage_read(PENDING_OWNER_KEY).map(|bytes| {
+            String::from_utf8(bytes)
+                .ok()
+                .and_then(|id| id.parse().ok())
+                .unwrap_or_else(|| env::panic_str("Corrupt pending owner"))
+        })
     }
 
     fn record(&self, payment_id: u64) -> PaymentRecord {
@@ -610,21 +669,24 @@ impl Vault {
 /// Log the machine code, then panic with the human sentence.
 fn refuse_if(check: Result<(), Rejection>) {
     if let Err(rejected) = check {
-        env::log_str(&format!(
-            r#"{{"code":"{}","message":"{}"}}"#,
-            rejected.code(),
-            rejected.as_str()
-        ));
+        env::log_str(
+            &json!({ "code": rejected.code(), "message": rejected.as_str() }).to_string(),
+        );
         env::panic_str(rejected.as_str());
     }
 }
 
-/// NEP-297 shaped event, hand-built so we don't depend on macro internals.
-fn emit(event: &str, data: &str) {
-    env::log_str(&format!(
-        r#"{{"standard":"{}","version":"{}","event":"{}","data":[{}]}}"#,
-        EVENT_STANDARD, EVENT_VERSION, event, data
-    ));
+/// NEP-297 shaped event. Serialised by serde_json rather than `format!`, so a
+/// reference or meter holding a quote cannot break out of its string and forge
+/// fields or whole events.
+fn emit(event: &str, data: Value) {
+    let body = json!({
+        "standard": EVENT_STANDARD,
+        "version": EVENT_VERSION,
+        "event": event,
+        "data": [data],
+    });
+    env::log_str(&body.to_string());
 }
 
 #[cfg(test)]

@@ -14,8 +14,10 @@ router = APIRouter(tags=["Telemetry"], responses=ApiResponses.errors("unauthoriz
 
 @router.post("/v1/telemetry", status_code=202, response_model=ReadingAcceptedDto,
              summary="Record an appliance reading",
-             responses=ApiResponses.errors("bad_watts"))
+             responses=ApiResponses.errors("bad_watts", "rate_limited"))
 def record(dto: ReadingDto, account: AuthUser, module: Module) -> JSONResponse:
     """Stamped with the server's clock. Feeds units left, days left and the
-    `load_imbalance` suggestion."""
+    `load_imbalance` suggestion. Limited per account per minute, since every
+    reading is a stored row."""
+    module.telemetry_limit.hit(account.id)
     return JSONResponse(module.telemetry.record(account.id, dto), status_code=202)

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 import unittest
+from unittest import mock
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -25,7 +27,7 @@ from app.modules.chain.treasury_chain import SignedTransfer
 from app.modules.chain.vault_chain import ChainResult, VaultChain
 from app.modules.intents.one_click import OneClickError
 from app.modules.liquidity.float_service import FloatService, FloatSettings
-from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
+from app.modules.liquidity.usdc_rate import STALE_SECONDS, RateUnavailable, UsdcRate
 from app.modules.payment import payment_service
 from app.modules.vault.vault_service import AuthorisationFailed, VaultService
 from app.modules.vending import vending
@@ -42,8 +44,12 @@ from app.modules.wallet.deposit_service import (
     _check_delay,
     _payable,
 )
-from app.modules.wallet.withdrawal_service import WithdrawalService
+from app.modules.account.account_repository import AccountRepository
+from app.modules.wallet.withdrawal_service import WithdrawalService, WithdrawalSettings
 from tests import support
+
+OPEN_WITHDRAWALS = WithdrawalSettings(daily_ngn=10**12, lookups_per_day=10**6)
+CARD_HOLD_HOURS = 72
 
 KEY = near_tx.KeyPair.from_secret(bytes(range(32)))
 RATE_1500 = UsdcRate(spread_ngn=Decimal(0), fixed=Decimal("1500"))
@@ -99,7 +105,7 @@ class FakeChain:
         self.payment_id += 1
         self.calls.append(("pay", meter, amount))
         return ChainResult("cd" * 32, {"payment_id": self.payment_id,
-                                       "settled": self.settled}, True)
+                                       "settled": self.settled}, self.broadcast)
 
     def pay_approved(self, vault_id, meter, amount):
         self._maybe_fail()
@@ -158,6 +164,8 @@ class FakeFlutterwave:
         self.transfers: list[dict] = []
         self.transfer_status: dict[str, str] = {}
         self.resolved = True
+        self.resolves = 0
+        self.lookups: list[str] = []
         self.transfer_error: FlutterwaveError | None = None
 
     def ngn_balance(self):
@@ -169,10 +177,12 @@ class FakeFlutterwave:
                                   "redirect_url": redirect_url, "meta": meta}
         return f"https://checkout.flutterwave.com/v3/hosted/pay/{tx_ref[-6:]}"
 
-    def pay(self, tx_ref, amount, *, status="successful", currency="NGN"):
+    def pay(self, tx_ref, amount, *, status="successful", currency="NGN",
+            payment_type="bank_transfer"):
         """The customer finishes the checkout."""
         self.charges[tx_ref] = {"id": 4_000_000 + len(self.charges), "tx_ref": tx_ref,
-                                "amount": amount, "currency": currency, "status": status}
+                                "amount": amount, "currency": currency, "status": status,
+                                "payment_type": payment_type}
 
     def verify_by_reference(self, tx_ref):
         if tx_ref not in self.charges:
@@ -183,6 +193,7 @@ class FakeFlutterwave:
         return [{"id": 1, "name": "Guaranty Trust Bank", "code": "058"}]
 
     def resolve_account(self, bank_code, account_number):
+        self.resolves += 1
         if not self.resolved:
             raise FlutterwaveError(400, "Sorry, that account number is invalid")
         return {"account_name": "ADA OKAFOR", "account_number": account_number}
@@ -197,7 +208,13 @@ class FakeFlutterwave:
         return transfer
 
     def find_transfer(self, reference):
-        return next((t for t in self.transfers if t["reference"] == reference), None)
+        self.lookups.append(reference)
+        transfer = next((t for t in self.transfers if t["reference"] == reference), None)
+        if transfer is None:
+            return None
+        return {**transfer,
+                "status": self.transfer_status.get(reference, transfer["status"]),
+                "complete_message": "Account is invalid"}
 
     def get_transfer(self, transfer_id):
         transfer = next(t for t in self.transfers if str(t["id"]) == transfer_id)
@@ -210,6 +227,7 @@ class FakeOneClick:
         self.status_reply = {"status": "PENDING_DEPOSIT", "swapDetails": {}}
         self.quotes: list[dict] = []
         self.refuse: Optional[Exception] = None
+        self.status_reads = 0
 
     def tokens(self):
         return [{"assetId": "nep141:tron-usdt", "symbol": "USDT", "blockchain": "tron",
@@ -227,6 +245,7 @@ class FakeOneClick:
                           "deadline": deadline}}
 
     def status(self, address, memo):
+        self.status_reads += 1
         return self.status_reply
 
     def submit_deposit(self, address, tx_hash, memo):
@@ -267,6 +286,14 @@ class MoneyCase(unittest.TestCase):
 
     def wallet(self):
         return self.receipts.wallet(self.account.id)
+
+    def ledger(self, flutterwave, settings=OPEN_WITHDRAWALS):
+        return WithdrawalService(self.db, self.receipts, self.vaults, flutterwave,
+                                 AccountRepository(self.db), settings)
+
+    def pause(self):
+        self.db.query("UPDATE accounts SET paused_at = $2 WHERE id = $1",
+                      [self.account.id, Clock.now_iso()])
 
     def ops(self):
         return self.db.query(
@@ -417,6 +444,21 @@ class VaultChainTests(unittest.TestCase):
         self.assertFalse(chain.broadcast)
         self.assertEqual(chain.code, "global:stark.testnet")
         self.assertEqual(chain.storage_yocto, 2 * 10 ** 23)
+        self.assertIsNone(ChainResult("ab", None, False).sent_tx_hash)
+        self.assertEqual(ChainResult("ab", None, True).sent_tx_hash, "ab")
+
+    def test_a_dry_chain_says_so_at_boot(self):
+        keys = {
+            "STARK_FUNDER_ACCOUNT": "stark.testnet",
+            "STARK_FUNDER_KEY": "ed25519:" + near_tx.b58encode(bytes(range(32))),
+            "STARK_AGENT_KEY": "ed25519:" + near_tx.b58encode(bytes(range(1, 33))),
+        }
+        with self.assertLogs("stark.vault", "WARNING") as logged:
+            vault_chain.chain_from_env(keys)
+        self.assertIn("on-chain enforcement is off", logged.output[0])
+        with mock.patch.object(vault_chain.log, "warning") as warning:
+            vault_chain.chain_from_env({**keys, "STARK_BROADCAST": "1"})
+        warning.assert_not_called()
 
 
 # --- the vault and Postgres stay in step ------------------------------------------
@@ -527,6 +569,47 @@ class VaultServiceTests(MoneyCase):
         self.assertIsNone(self.vaults.vault_account(self.account.id))
         self.assertNotEqual(self.vaults.ensure(self.account.id), old)
 
+    def test_op_ids_are_scoped_to_the_user(self):
+        self.vaults.credit(self.account.id, 5000, "dep_1")
+        self.vaults.debit(self.account.id, 1000, "wd_1")
+        self.vaults.refund(self.account.id, 1)
+        ids = [row["id"] for row in self.db.query(
+            "SELECT id FROM chain_ops WHERE user_id = $1 ORDER BY seq", [self.account.id])]
+        user = self.account.id
+        self.assertEqual(ids, [f"fund:{user}:dep_1", f"debit:{user}:wd_1",
+                               f"refund:{user}:1"])
+
+    def test_two_users_refunds_of_the_same_payment_id_both_go_out(self):
+        # Payment ids restart at 1 in every vault.
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.refund(self.account.id, 1)
+        self.vaults.refund(other.id, 1)
+        self.assertEqual(self.chain.methods().count("refund"), 2)
+
+    def test_a_client_reference_cannot_claim_another_users_opening_deposit(self):
+        self.receipts.set_wallet(self.account.id, 7_500, 0)
+        vault = self.chain.vault_id(self.account.id)
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.credit(other.id, 100, f"opening:{vault}")
+        self.vaults.ensure(self.account.id)
+        self.vaults.flush(self.account.id)
+        self.assertEqual(self.ops()[-1], {"method": "fund", "status": "done"})
+        self.assertEqual(self.chain.calls[-1], ("fund", {
+            "amount_usdc": 5_000_003, "reference": f"opening:{vault}"}))
+
+    def test_an_op_written_with_an_old_unscoped_id_is_still_sent(self):
+        self.vaults.ensure(self.account.id)
+        self.db.query(
+            "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
+            " VALUES ($1, $2, 'refund', $3, 'pending', 0, $4)",
+            [f"refund:{self.account.id}-legacy", self.account.id,
+             json.dumps({"payment_id": 7}), Clock.now_iso()])
+        self.assertEqual(self.vaults.flush(self.account.id), 0)
+        self.assertEqual(self.chain.calls[-1], ("refund", {"payment_id": 7,
+                                                           "amount_usdc": 666_667}))
+
     def test_no_chain_means_no_writes_and_no_authorisation(self):
         offline = VaultService(self.db, None, FakeAccounts(limits()), RATE_1500.market)
         offline.credit(self.account.id, 5000, "dep_1")
@@ -613,6 +696,13 @@ class PaymentPathTests(MoneyCase):
         self.assertEqual(self.wallet()["balance_ngn"], 59_200)
         self.assertEqual(self.chain.methods()[-1], "pay")
 
+    def test_a_dry_chain_leaves_no_tx_hash_on_the_receipt(self):
+        self.chain.broadcast = False
+        gateway = ScriptedGateway(vending.VendingOutcome(status=vending.DELIVERED, token="1234"))
+        receipt = self.service(gateway).pay(self.account.id, ELECTRICITY, 5000)
+        self.assertIsNone(receipt["tx_hash"], "a dry signature names no real transaction")
+        self.assertEqual(self.chain.methods()[-1], "pay")
+
     def test_a_vendor_failure_refunds_the_vault(self):
         gateway = ScriptedGateway(vending.VendingOutcome(status=vending.FAILED, code="016",
                                                          message="bad meter"))
@@ -663,7 +753,7 @@ class DepositTests(MoneyCase):
         self.one_click = FakeOneClick()
         settings = FundingSettings(app_url="https://app.test",
                                    treasury_account="stark-treasury.near" if crypto else None,
-                                   usdc_rate=rate)
+                                   usdc_rate=rate, card_hold_hours=CARD_HOLD_HOURS)
         return DepositService(self.db, self.receipts, self.vaults, self.flutterwave,
                               self.one_click, settings)
 
@@ -826,6 +916,17 @@ class DepositTests(MoneyCase):
         self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "confirming")
         self.assertEqual(self.wallet()["balance_ngn"], 0)
 
+    def test_reading_a_deposit_asks_the_rail_at_most_every_few_seconds(self):
+        service = self.deposits()
+        deposit = service.start(self.account.id, 20_000, "crypto", "nep141:tron-usdt")
+        for _ in range(3):
+            self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "open")
+        self.assertEqual(self.one_click.status_reads, 1)
+        self.db.query("UPDATE deposits SET checked_at = $2 WHERE id = $1",
+                      [deposit["id"], Clock.ago(minutes=1)])
+        service.get(self.account.id, deposit["id"])
+        self.assertEqual(self.one_click.status_reads, 2)
+
     def test_a_refunded_swap_credits_nothing(self):
         service = self.deposits()
         deposit = service.start(self.account.id, 20_000, "crypto", "nep141:tron-usdt")
@@ -850,7 +951,8 @@ class DepositTests(MoneyCase):
             self.deposits().start(self.account.id, 20_000, "crypto", "nep141:unknown")
         self.assertEqual(caught.exception.code, "bad_asset")
         no_flutterwave = DepositService(self.db, self.receipts, self.vaults, None,
-                                        FakeOneClick(), FundingSettings(None, None, RATE_1500))
+                                        FakeOneClick(),
+                                        FundingSettings(None, None, RATE_1500, CARD_HOLD_HOURS))
         with self.assertRaises(ApiError) as caught:
             no_flutterwave.start(self.account.id, 20_000, "bank", None)
         self.assertEqual(caught.exception.code, "not_available")
@@ -862,9 +964,9 @@ class DepositTests(MoneyCase):
 class WithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def withdrawals(self):
+    def withdrawals(self, settings=OPEN_WITHDRAWALS):
         self.flutterwave = FakeFlutterwave()
-        return WithdrawalService(self.db, self.receipts, self.vaults, self.flutterwave)
+        return self.ledger(self.flutterwave, settings)
 
     def test_money_is_held_at_once_and_sent_with_our_reference(self):
         service = self.withdrawals()
@@ -982,6 +1084,146 @@ class WithdrawalTests(MoneyCase):
             service.request(self.account.id, 10_000, "058", "0123456789")
         self.assertEqual(caught.exception.code, "bad_account")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+        self.assertEqual(service.recent(self.account.id), [], "no row is left behind")
+
+    def test_a_failure_after_the_transfer_was_paid_returns_nothing(self):
+        service = self.withdrawals()
+        result = service.request(self.account.id, 10_000, "058", "0123456789")
+        service.on_transfer(result["id"], "SUCCESSFUL", None)
+        with self.assertLogs("stark.withdrawals", "CRITICAL"):
+            service.on_transfer(result["id"], "FAILED", "Reversed")
+        self.assertEqual(service.recent(self.account.id)[0]["status"], "paid")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        self.assertEqual(self.chain.deposits(), [])
+
+    def test_a_paused_account_withdraws_nothing(self):
+        service = self.withdrawals()
+        self.pause()
+        with self.assertRaises(ApiError) as caught:
+            service.request(self.account.id, 10_000, "058", "0123456789")
+        self.assertEqual((caught.exception.status, caught.exception.code), (423, "paused"))
+        self.assertEqual(self.flutterwave.transfers, [])
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+
+    def test_the_daily_bank_limit_is_per_account_and_counts_what_was_not_returned(self):
+        service = self.withdrawals(WithdrawalSettings(daily_ngn=25_000, lookups_per_day=20))
+        first = service.request(self.account.id, 10_000, "058", "0123456789")
+        with self.assertRaises(ApiError) as caught:
+            service.request(self.account.id, 20_000, "058", "0123456789")
+        self.assertEqual(caught.exception.code, "daily_limit")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        service.on_transfer(first["id"], "FAILED", "Account is invalid")
+        service.request(self.account.id, 20_000, "058", "0123456789")
+        self.assertEqual(self.wallet()["balance_ngn"], 30_000)
+
+    def test_the_hold_and_the_withdrawal_row_are_written_together(self):
+        service = self.withdrawals()
+        withdrawal = {"id": "wd_together_" + self.account.id[-8:], "user_id": self.account.id,
+                      "method": "bank", "amount_ngn": 10_000, "bank_code": "058",
+                      "account_number": "0123456789", "account_name": "ADA OKAFOR",
+                      "bank_name": "Guaranty Trust Bank", "status": "sending",
+                      "created_at": Clock.now_iso(), "updated_at": Clock.now_iso()}
+        service.hold(self.account.id, withdrawal, label="To ADA OKAFOR", source="GTB",
+                     vendor="flutterwave")
+        row = service._row(withdrawal["id"])
+        entry = self.receipts.by_request_id(self.account.id, withdrawal["id"])
+        self.assertEqual(row["receipt_id"], entry["id"])
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        # The crash this guards against: held, then nothing sent. The next send
+        # debits the vault before anything else.
+        self.assertNotIn(withdrawal["id"], [c[1].get("reference") for c in self.chain.calls
+                                            if c[0] == "debit"])
+        service._send(row)
+        self.assertIn(withdrawal["id"], [c[1]["reference"] for c in self.chain.calls
+                                         if c[0] == "debit"])
+
+    def test_name_lookups_are_limited_per_account(self):
+        service = self.withdrawals(WithdrawalSettings(daily_ngn=10**12, lookups_per_day=2))
+        for _ in range(2):
+            service.lookup(self.account.id, "058", "0123456789")
+        with self.assertRaises(ApiError) as caught:
+            service.lookup(self.account.id, "058", "0123456789")
+        self.assertEqual((caught.exception.status, caught.exception.code),
+                         (429, "too_many_lookups"))
+        self.assertEqual(self.flutterwave.resolves, 2)
+        # A typo never reaches Flutterwave, so it does not count.
+        with self.assertRaises(ApiError) as caught:
+            service.lookup(self.account.id, "058", "123")
+        self.assertEqual(caught.exception.code, "bad_account")
+        # Sending money still resolves the account it pays.
+        service.request(self.account.id, 1_000, "058", "0123456789")
+        self.assertEqual(self.flutterwave.resolves, 3)
+
+
+class CardHoldTests(MoneyCase):
+    """A card charge can be disputed after the money has left, so it pays bills at
+    once but cannot be withdrawn until its hold passes."""
+
+    def setUp(self):
+        super().setUp()
+        self.flutterwave = FakeFlutterwave()
+        self.deposits = DepositService(
+            self.db, self.receipts, self.vaults, self.flutterwave, FakeOneClick(),
+            FundingSettings("https://app.test", None, RATE_1500, CARD_HOLD_HOURS))
+        self.withdrawals = self.ledger(self.flutterwave)
+
+    def add(self, amount, payment_type):
+        deposit = self.deposits.start(self.account.id, amount, "bank", None)
+        self.flutterwave.pay(deposit["id"], amount, payment_type=payment_type)
+        self.deposits.on_charge(deposit["id"])
+        return deposit
+
+    def withdraw(self, amount):
+        return self.withdrawals.request(self.account.id, amount, "058", "0123456789")
+
+    def test_card_money_is_spendable_but_not_withdrawable(self):
+        deposit = self.add(20_000, "card")
+        self.assertEqual(self.wallet()["balance_ngn"], 20_000)
+        hold_until = self.db.value("SELECT hold_until FROM deposits WHERE id = $1",
+                                   [deposit["id"]])
+        self.assertGreater(hold_until, Clock.in_minutes(CARD_HOLD_HOURS * 60 - 1))
+        with self.assertRaises(ApiError) as caught:
+            self.withdraw(5_000)
+        self.assertEqual(caught.exception.code, "funds_on_hold")
+        self.assertEqual(self.wallet()["balance_ngn"], 20_000)
+        # A bill spends it all the same.
+        self.receipts.record_debit(self.account.id, {
+            "id": "rcpt_bill01", "request_id": "bill-req-1", "bill_id": "bill_home",
+            "bill_label": "Home meter", "meter": METER, "amount_ngn": 5_000, "units": None,
+            "token": None, "tx_hash": None, "status": "pending", "entry_type": "bill",
+            "source": None, "vendor": None, "vendor_code": None, "vendor_message": None,
+            "created_at": Clock.now_iso(),
+        }, 5_000)
+        self.assertEqual(self.wallet()["balance_ngn"], 15_000)
+
+    def test_only_money_beyond_the_hold_can_leave(self):
+        self.add(20_000, "card")
+        self.add(10_000, "bank_transfer")
+        with self.assertRaises(ApiError) as caught:
+            self.withdraw(15_000)
+        self.assertEqual(caught.exception.code, "funds_on_hold")
+        self.assertIn("₦10,000", caught.exception.message)
+        self.withdraw(10_000)
+        self.assertEqual(self.wallet()["balance_ngn"], 20_000)
+
+    def test_an_unknown_payment_type_is_held_like_a_card(self):
+        self.add(20_000, "applepay")
+        with self.assertRaises(ApiError) as caught:
+            self.withdraw(5_000)
+        self.assertEqual(caught.exception.code, "funds_on_hold")
+
+    def test_card_money_can_leave_once_the_hold_passes(self):
+        deposit = self.add(20_000, "card")
+        self.db.query("UPDATE deposits SET hold_until = $2 WHERE id = $1",
+                      [deposit["id"], Clock.ago(minutes=1)])
+        self.withdraw(5_000)
+        self.assertEqual(self.wallet()["balance_ngn"], 15_000)
+
+    def test_a_short_balance_is_still_insufficient_not_on_hold(self):
+        self.add(20_000, "card")
+        with self.assertRaises(ApiError) as caught:
+            self.withdraw(30_000)
+        self.assertEqual(caught.exception.code, "insufficient_balance")
 
 
 # --- crypto withdrawals -------------------------------------------------------------------
@@ -1040,16 +1282,17 @@ ADDRESS = "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE"
 class CryptoWithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def service(self, *, treasury=True, max_ngn=200_000, daily_ngn=10**12, rate=RATE_1500,
-                sandbox_naira=False):
+    def service(self, *, treasury=True, max_ngn=200_000, max_usdc=Decimal(10**6),
+                daily_ngn=10**12, user_daily_ngn=10**12, rate=RATE_1500, sandbox_naira=False):
         self.one_click = FakePayoutOneClick()
         self.treasury = FakeTreasury() if treasury else None
-        deposits = DepositService(self.db, self.receipts, self.vaults, None, self.one_click,
-                                  FundingSettings(None, "stark-treasury.near", RATE_1500))
-        ledger = WithdrawalService(self.db, self.receipts, self.vaults, None)
+        deposits = DepositService(
+            self.db, self.receipts, self.vaults, None, self.one_click,
+            FundingSettings(None, "stark-treasury.near", RATE_1500, CARD_HOLD_HOURS))
         self.payouts = CryptoWithdrawalService(
-            self.db, ledger, self.vaults, deposits, self.one_click, self.treasury,
-            CryptoPayoutSettings(rate, max_ngn, daily_ngn), sandbox_naira=sandbox_naira,
+            self.db, self.ledger(None), self.vaults, deposits, self.one_click, self.treasury,
+            CryptoPayoutSettings(rate, max_ngn, max_usdc, daily_ngn, user_daily_ngn),
+            sandbox_naira=sandbox_naira,
         )
         return self.payouts
 
@@ -1177,6 +1420,16 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(caught.exception.code, "not_available")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
+    def test_the_money_loop_signs_nothing_on_sandbox_naira(self):
+        # The loop sends every `sending` crypto row in the database, whoever made it.
+        # On a box with a Flutterwave test key (dev, a test run) it must not look.
+        self.service(sandbox_naira=True)
+        with mock.patch.object(self.payouts.db, "query",
+                               side_effect=AssertionError("read withdrawals")) as query:
+            self.payouts.advance()
+        query.assert_not_called()
+        self.assertEqual(self.treasury.signed, [])
+
     def test_naira_from_a_test_key_never_becomes_real_usdc(self):
         # A Flutterwave test key credits checkouts nobody paid for.
         self.service(sandbox_naira=True)
@@ -1188,7 +1441,7 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
     def test_the_daily_limit_counts_what_was_not_returned(self):
-        baseline = self.service()._sent_today()
+        baseline, _ = self.service()._sent_today(self.account.id)
         self.service(daily_ngn=baseline + 25_000)
         self.request(10_000)
         with self.assertRaises(ApiError) as caught:
@@ -1196,8 +1449,113 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(caught.exception.code, "daily_limit")
         self.assertEqual(self.wallet()["balance_ngn"], 40_000)
 
+    def test_one_account_cannot_use_up_the_day_for_everyone(self):
+        self.service(user_daily_ngn=25_000)
+        self.request(10_000)
+        with self.assertRaises(ApiError) as caught:
+            self.request(20_000)
+        self.assertEqual(caught.exception.code, "daily_limit")
+        self.assertIn("₦25,000", caught.exception.message)
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        # Someone else still has their whole day.
+        other = support.TempAccount(db=self.db)
+        try:
+            self.receipts.set_wallet(other.id, 30_000, 0)
+            self.payouts.request(other.id, 20_000, "nep141:tron-usdt", ADDRESS)
+            self.assertEqual(self.receipts.wallet(other.id)["balance_ngn"], 10_000)
+        finally:
+            other.close()
+
+    def test_a_bad_rate_cannot_multiply_the_usdc_sent(self):
+        # ₦20,000 should be ~13 USDC; at a rate of ₦15 it would be 1,333.
+        self.service(rate=UsdcRate(spread_ngn=Decimal(0), fixed=Decimal(15)),
+                     max_usdc=Decimal(200))
+        with self.assertRaises(ApiError) as caught:
+            self.request()
+        self.assertEqual(caught.exception.code, "over_limit")
+        self.assertEqual(self.one_click.payout_quotes, [])
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+
+    def test_a_paused_account_sends_nothing(self):
+        self.service()
+        self.pause()
+        with self.assertRaises(ApiError) as caught:
+            self.request()
+        self.assertEqual((caught.exception.status, caught.exception.code), (423, "paused"))
+        self.assertEqual(self.treasury.signed, [])
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+
+    def test_a_crash_before_the_vault_debit_is_caught_up_on_the_next_pass(self):
+        self.service()
+        self.treasury.send_error = near_tx.NearRpcError("timeout")
+        result = self.request()
+        self.db.query("DELETE FROM chain_ops WHERE id = $1",
+                      [f"debit:{self.account.id}:{result['id']}"])
+        self.chain.calls.clear()
+        # One row, not `advance()`: the shared database holds other tests' rows too.
+        self.payouts._send(self.payouts._row(result["id"]))
+        self.assertIn(result["id"], [c[1]["reference"] for c in self.chain.calls
+                                     if c[0] == "debit"])
+
 
 # --- the webhook ---------------------------------------------------------------------------
+
+
+class ScriptedRate(UsdcRate):
+    """Paycrest answering from a list, one rate per fetch."""
+
+    def __init__(self, *answers, spread_ngn=Decimal(10)):
+        super().__init__(spread_ngn=spread_ngn)
+        self.answers = list(answers)
+
+    def _fetch(self):
+        return Decimal(self.answers.pop(0))
+
+    def age(self, seconds):
+        """Pretend the accepted rate was fetched `seconds` ago."""
+        self._fetched_at = time.monotonic() - seconds
+
+
+class UsdcRateBoundsTests(unittest.TestCase):
+    def test_a_rate_outside_the_range_is_never_used(self):
+        for wild in ("1.38", "138056"):
+            with self.assertLogs("stark.rate", "ERROR"), self.assertRaises(RateUnavailable):
+                ScriptedRate(wild).market()
+
+    def test_a_jump_keeps_the_last_good_rate_then_refuses(self):
+        rate = ScriptedRate("1500", "3000", "3000")
+        self.assertEqual(rate.market(), Decimal(1500))
+        rate.age(120)
+        with self.assertLogs("stark.rate", "ERROR"):
+            self.assertEqual(rate.market(), Decimal(1500), "the last good rate, still fresh")
+        rate.age(STALE_SECONDS + 1)
+        with self.assertLogs("stark.rate", "ERROR"), self.assertRaises(RateUnavailable):
+            rate.market()
+
+    def test_a_move_within_the_limit_is_taken(self):
+        rate = ScriptedRate("1500", "1650")
+        rate.market()
+        rate.age(120)
+        self.assertEqual(rate.market(), Decimal(1650))
+
+    def test_a_spread_that_leaves_no_price_is_refused(self):
+        rate = UsdcRate(spread_ngn=Decimal(1500), fixed=Decimal(1500))
+        with self.assertRaises(RateUnavailable):
+            rate.buying()
+        self.assertEqual(rate.selling(), Decimal(3000))
+
+    def test_the_bounds_are_read_from_the_environment(self):
+        from app.shared.services.money_config import MoneyConfig
+        config = MoneyConfig.from_env({"STARK_USDC_RATE_MIN": "1000",
+                                       "STARK_USDC_RATE_MAX": "2000",
+                                       "STARK_USDC_RATE_MAX_MOVE": "0.05"})
+        usdc = config.funding.usdc_rate
+        self.assertEqual((usdc.floor, usdc.ceiling, usdc.max_move),
+                         (Decimal(1000), Decimal(2000), Decimal("0.05")))
+        self.assertIs(config.crypto_payouts.usdc_rate, usdc)
+        self.assertEqual(config.withdrawals, WithdrawalSettings(200_000, 20))
+        self.assertEqual((config.crypto_payouts.user_daily_ngn, config.crypto_payouts.max_usdc,
+                          config.funding.card_hold_hours), (200_000, Decimal(200), 72))
 
 
 class FlutterwaveClientTests(unittest.TestCase):
@@ -1223,8 +1581,42 @@ class FlutterwaveClientTests(unittest.TestCase):
 
 class WebhookTests(DepositTests):
     def webhooks(self, deposits):
-        withdrawals = WithdrawalService(self.db, self.receipts, self.vaults, self.flutterwave)
-        return FlutterwaveWebhookService(self.db, "whsec", deposits, withdrawals)
+        self.withdrawals = self.ledger(self.flutterwave)
+        return FlutterwaveWebhookService(self.db, "whsec", deposits, self.withdrawals)
+
+    def transfer_event(self, hook, reference, status):
+        """Post `transfer.completed` claiming `status`, as anyone with the hash could."""
+        event_id = f"{reference}-{status}"
+        body = json.dumps({"event": "transfer.completed",
+                           "data": {"id": event_id, "reference": reference,
+                                    "status": status}}).encode()
+        try:
+            hook.handle(body, {"verif-hash": "whsec"})
+        finally:
+            self.db.query("DELETE FROM processed_messages WHERE message_id = $1",
+                          [f"transfer.completed:{event_id}"])
+
+    def test_a_transfer_webhook_acts_on_flutterwaves_answer_not_the_body(self):
+        hook = self.webhooks(self.deposits())
+        self.receipts.set_wallet(self.account.id, 50_000, 0)
+        result = self.withdrawals.request(self.account.id, 10_000, "058", "0123456789")
+        self.flutterwave.transfer_status[result["id"]] = "SUCCESSFUL"
+        self.transfer_event(hook, result["id"], "FAILED")
+        self.assertEqual(self.withdrawals.recent(self.account.id)[0]["status"], "paid")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        self.assertEqual(self.flutterwave.lookups[-1], result["id"])
+
+    def test_a_forged_failure_for_a_transfer_still_in_flight_returns_nothing(self):
+        hook = self.webhooks(self.deposits())
+        self.receipts.set_wallet(self.account.id, 50_000, 0)
+        result = self.withdrawals.request(self.account.id, 10_000, "058", "0123456789")
+        self.transfer_event(hook, result["id"], "FAILED")
+        self.assertEqual(self.withdrawals.recent(self.account.id)[0]["status"], "processing")
+        self.assertEqual(self.wallet()["balance_ngn"], 40_000)
+        self.flutterwave.transfer_status[result["id"]] = "FAILED"
+        self.transfer_event(hook, result["id"], "SUCCESSFUL")
+        self.assertEqual(self.withdrawals.recent(self.account.id)[0]["status"], "returned")
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
     def test_a_charge_credits_and_a_redelivery_does_not(self):
         deposits = self.deposits()
@@ -1291,11 +1683,35 @@ class WalletRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json()["code"], "not_available")
 
+    def test_a_top_up_request_id_cannot_pose_as_a_refund_on_chain(self):
+        self.account.store.set_wallet(0, 0)
+        chain = FakeChain()
+        wallet = self.api.module.wallet
+        wallet.test_money = True
+        wallet.vaults = VaultService(self.account.db, chain, FakeAccounts(limits()),
+                                     RATE_1500.market)
+        response = self.api.client.post("/v1/wallet/topup",
+                                        json={"amount_ngn": 1500, "request_id": "refund:1"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(chain.calls[-1], ("fund", {"amount_usdc": 1_000_001,
+                                                    "reference": "topup:refund:1"}))
+
     def test_withdraw_without_flutterwave_is_not_available_and_takes_nothing(self):
         self.api.module.withdrawals.flutterwave = None
         response = self.api.client.post("/v1/wallet/withdraw", json={
             "amount_ngn": 5000, "bank_code": "058", "account_number": "0123456789"})
         self.assertEqual(response.status_code, 501)
+
+    def test_too_many_name_lookups_answer_429(self):
+        withdrawals = self.api.module.withdrawals
+        withdrawals.flutterwave = FakeFlutterwave()
+        withdrawals.settings = WithdrawalSettings(daily_ngn=10**12, lookups_per_day=1)
+        body = {"bank_code": "058", "account_number": "0123456789"}
+        first = self.api.client.post("/v1/wallet/bank-accounts/resolve", json=body)
+        self.assertEqual(first.json()["account_name"], "ADA OKAFOR")
+        second = self.api.client.post("/v1/wallet/bank-accounts/resolve", json=body)
+        self.assertEqual((second.status_code, second.json()["code"]),
+                         (429, "too_many_lookups"))
 
     def test_the_flutterwave_webhook_refuses_unsigned_requests(self):
         self.api.module.flutterwave_webhooks.secret_hash = "whsec"

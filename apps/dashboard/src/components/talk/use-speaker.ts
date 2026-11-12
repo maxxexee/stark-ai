@@ -73,7 +73,17 @@ export function useSpeaker(onFinished: () => void) {
         });
     };
 
-    play(api.speakStreamUrl(text), bufferedFallback);
+    // `stopSpeaking` does not bump the sequence, so a ticket that lands after it must not play.
+    api.speakStreamUrl(text).then(
+      (src) => {
+        if (seq === speakSeq.current && speaking.current) play(src, bufferedFallback);
+      },
+      () => {
+        if (seq !== speakSeq.current || !speaking.current) return;
+        speaking.current = false;
+        onFinished();
+      },
+    );
   };
 
   return { speak, stopSpeaking, speaking };

@@ -17,6 +17,7 @@ import type {
   Limits,
   LimitsPatch,
   LinkCode,
+  LinkedChat,
   NewBill,
   Payee,
   PaymentInput,
@@ -25,6 +26,7 @@ import type {
   Receipt,
   ResolvedAccount,
   SpeakReply,
+  SpeakTicket,
   StartDeposit,
   State,
   Suggestion,
@@ -142,6 +144,12 @@ export const api = {
   logout: () => request<{ logged_out: true }>("POST", "/v1/auth/logout", {}),
   /** A fresh single-use code for linking a chat. Every call mints a new one. */
   linkCode: () => request<LinkCode>("POST", "/v1/link/code", {}),
+  linkedChats: () => request<LinkedChat[]>("GET", "/v1/link/identities"),
+  unlinkChat: (chat: LinkedChat) =>
+    request<{ unlinked: true; channel: string; channel_user_id: string }>(
+      "DELETE",
+      `/v1/link/identities/${encodeURIComponent(chat.channel)}/${encodeURIComponent(chat.channel_user_id)}`,
+    ),
   voice: (transcript_hint: string, opts?: { speak?: boolean }) =>
     request<VoiceReply>("POST", "/v1/voice", {
       transcript_hint,
@@ -159,13 +167,13 @@ export const api = {
     }),
   speak: (text: string) => request<SpeakReply>("POST", "/v1/speak", { text }),
   /**
-   * Streams the voice from its first bytes; fall back to `speak` if it errors. An `<audio>` element
-   * cannot send an `Authorization` header, so the token rides along as `?token=`.
+   * A URL that streams the voice from its first bytes; fall back to `speak` if it errors. An
+   * `<audio>` element cannot send `Authorization`, so the URL carries a two-minute ticket for this
+   * text instead of the session token.
    */
-  speakStreamUrl: (text: string) => {
-    const params = new URLSearchParams({ text });
-    if (authToken) params.set("token", authToken);
-    return `${baseUrl}/v1/speak/stream?${params.toString()}`;
+  speakStreamUrl: async (text: string) => {
+    const { url } = await request<SpeakTicket>("POST", "/v1/speak/ticket", { text });
+    return `${baseUrl}${url}`;
   },
   /** Stub only: restores the seeded demo state. Never call it while someone is demoing. */
   resetDemo: () => request<unknown>("POST", "/v1/_stub/reset", {}),

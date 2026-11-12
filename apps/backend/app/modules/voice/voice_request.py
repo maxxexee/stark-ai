@@ -13,12 +13,14 @@ import binascii
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 from urllib.parse import parse_qs
 
 from app.common.api_error import ApiError
 
 MAX_AUDIO_BYTES = 8 * 1024 * 1024   # a minute of clipped speech, generously
+# The largest clip as base64 (4/3 of it) plus the JSON or multipart around it.
+MAX_BODY_BYTES = 12 * 1024 * 1024
 _TOO_LARGE = "That clip is too long. Keep it under a minute."
 
 
@@ -34,6 +36,20 @@ class VoiceRequest:
         return str(self.fields.get("speak", "true")).strip().lower() not in (
             "false", "0", "no", "off"
         )
+
+    @staticmethod
+    async def read_body(chunks: AsyncIterator[bytes]) -> bytes:
+        """The request body, refused as soon as it passes `MAX_BODY_BYTES`.
+
+        Read as a stream rather than `request.body()`, which would hold a body of
+        any size in memory before the clip's own limit could look at it.
+        """
+        body = bytearray()
+        async for chunk in chunks:
+            body += chunk
+            if len(body) > MAX_BODY_BYTES:
+                raise ApiError(413, "audio_too_large", _TOO_LARGE)
+        return bytes(body)
 
     @classmethod
     def parse(cls, raw: bytes, content_type: str) -> "VoiceRequest":

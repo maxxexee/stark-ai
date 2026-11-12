@@ -21,6 +21,16 @@ From the repo root:
 The dev and preview servers proxy `/v1` to the backend on `127.0.0.1:8000`, so the app
 calls the API on the same origin and no CORS setup is needed.
 
+### Content-Security-Policy
+
+`vite build` is followed by `scripts/content-security-policy.ts`, which writes a CSP
+`<meta>` into every built page: scripts only from this origin plus the shell's own
+prerendered inline scripts (by SHA-256, no `'unsafe-inline'`), and network access only to
+this origin, `VITE_STARK_API_URL` and `VITE_NEON_AUTH_URL`. Those are read at build time,
+so changing either needs a rebuild. The dev server has no CSP. A `<meta>` cannot set
+`frame-ancestors`, so the static host should also send
+`Content-Security-Policy: frame-ancestors 'none'` (or `X-Frame-Options: DENY`) as a header.
+
 ## Layout
 
 ```
@@ -45,6 +55,7 @@ balance, bills and activity keys so every screen stays in step.
 |---|---|---|
 | `VITE_STARK_API_URL` | empty (same origin, via the proxy) | API base URL for a deployed build |
 | `VITE_STARK_LIVE_PAYMENTS` | unset | set to `true` once tokens are real; until then tokens are labelled samples |
+| `VITE_STARK_NEAR_NETWORK` | `testnet` | the backend's `STARK_NETWORK` (`testnet` or `mainnet`), so a receipt's "View on NEAR" opens the right explorer |
 
 ## Rules
 
@@ -57,7 +68,8 @@ These come from [`docs/FRONTEND.md`](../../docs/FRONTEND.md) and are enforced in
 - Amounts are typed fields plus quick-pick chips. No sliders.
 - Every screen has a phone layout (bottom tab bar under `md`).
 - The Talk screen shows `VoiceReply` text **first** (it asks for `speak: false`), then
-  plays the streamed voice from `GET /v1/speak/stream`, which starts on the first bytes
+  plays the streamed voice from `GET /v1/speak/stream` (through a two-minute ticket from
+  `POST /v1/speak/ticket`, never the session token), which starts on the first bytes
   instead of waiting for a whole clip. If the stream errors it falls back to
   `POST /v1/speak`. When the mic fails or the wake gate ignores the user, the screen
   says why.

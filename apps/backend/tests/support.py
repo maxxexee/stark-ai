@@ -39,6 +39,7 @@ _ACCOUNT_SCOPED = frozenset({
     "create", "update", "get", "by_request_id", "has_pending", "find_pending",
     "recent", "count", "wallet", "set_wallet", "record_deposit",
     "record_debit", "added_this_month", "finish", "drop_hold", "replace_all",
+    "held_for_bills",
 })
 
 
@@ -126,6 +127,9 @@ class ApiHarness:
         # write the real row: each harness charges only the fees it names.
         named = {**dict.fromkeys(DEFAULT_FEES_NGN, 0), **(fees or {})}
         self.module.settings_service.fees = lambda: named
+        # No test holds a signer for real money: the treasury key signs USDC on
+        # mainnet whatever STARK_NETWORK says, and dev secrets carry one.
+        self.module.crypto_withdrawals.treasury = None
         # Every agent this app builds talks to the scripted model, never NEAR AI.
         self.module.accounts.build_agent = lambda account_id, limits: agent_layer.Agent(
             model=RegexModel(), toolbox=AccountToolbox(account_id, self.module),
@@ -207,6 +211,10 @@ class FakeBills:
         self.read: list[str] = []
         self.placed: set[str] = set()
         self.refuse: Any = None
+        # The order is placed but its answer never arrives (a timeout).
+        self.lose_answer = False
+        # Raised by every status read, e.g. Flutterwave unreachable.
+        self.refuse_reads: Any = None
 
     def ngn_balance(self) -> int:
         return 500_000
@@ -215,12 +223,17 @@ class FakeBills:
         if self.refuse is not None:
             raise self.refuse
         self.paid.append(order)
-        self.placed.add(f"CF-FLYAPI-{order['reference']}")
+        # A purchase reads back by Flutterwave's `tx_ref` or by our `reference`.
+        self.placed.update({f"CF-FLYAPI-{order['reference']}", order["reference"]})
+        if self.lose_answer:
+            raise self.error(0, "Could not reach Flutterwave: timed out")
         return {"tx_ref": f"CF-FLYAPI-{order['reference']}", "reference": "247891569224",
                 "amount": order["amount_ngn"], "code": "200"}
 
     def bill_status(self, tx_ref: str) -> dict[str, Any]:
         self.read.append(tx_ref)
+        if self.refuse_reads is not None:
+            raise self.refuse_reads
         if tx_ref not in self.placed:
             raise self.error(400, "Transaction not found")
         delivered = self.outcome == "successful"

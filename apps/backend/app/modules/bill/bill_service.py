@@ -23,6 +23,14 @@ from app.modules.reminder import reminders
 from app.modules.settings.settings_service import SettingsService
 from app.modules.vending import catalog
 
+# A label and a provider are names, and both are read to the agent as part of its
+# prompt: free text there is a place to hide instructions. Letters (any script),
+# digits, spaces and the punctuation a real name uses; nothing else.
+LABEL_MAX = 40
+# The longest disco, written out, is "Port Harcourt Electricity Distribution Company".
+PROVIDER_MAX = 48
+_NAME = re.compile(r"(?:[^\W_]|[ .,'&()/-])+")
+
 
 class BillService:
     def __init__(self, accounts: AccountService, repository: AccountRepository,
@@ -79,13 +87,11 @@ class BillService:
         if kind not in BillKind.values():
             raise ApiError(400, "bad_kind",
                            f"kind must be one of {', '.join(BillKind.values())}")
-        provider = dto.provider.strip()
-        if not provider:
-            raise ApiError(400, "bad_bill", "provider is required")
+        provider = self._name(dto.provider, "provider", PROVIDER_MAX)
         reference = re.sub(r"\s+", "", dto.reference)
         if not 4 <= len(reference) <= 32:
             raise ApiError(400, "bad_reference", "reference must be 4–32 characters")
-        label = dto.label.strip() or provider
+        label = self._name(dto.label, "label", LABEL_MAX) if dto.label.strip() else provider
         plan = dto.plan.strip() or None
         plan_price = None
         renews_on = self._renews_on(dto.renews_on) if dto.renews_on else None
@@ -143,10 +149,7 @@ class BillService:
         bill = self.get(account_id, bill_id)
         sent = dto.model_fields_set
         if "label" in sent:
-            label = (dto.label or "").strip()
-            if not label:
-                raise ApiError(400, "bad_bill", "label cannot be empty")
-            bill["label"] = label
+            bill["label"] = self._name(dto.label or "", "label", LABEL_MAX)
         if "plan" in sent:
             if bill["kind"] not in PLAN_KINDS:
                 raise ApiError(400, "bad_bill", "Only data and TV bills have plans.")
@@ -207,6 +210,20 @@ class BillService:
         bill["last_units"] = receipt.get("units")
         bill["last_paid_at"] = receipt["created_at"]
         self.repository.save_bill(account_id, bill)
+
+    @staticmethod
+    def _name(raw: str, field: str, longest: int) -> str:
+        """Refused, not trimmed: a name cut short or stripped of characters would be
+        saved as something the owner never typed. Only new writes are checked."""
+        name = re.sub(r"\s+", " ", raw).strip()
+        if not name:
+            raise ApiError(400, "bad_bill", f"{field} is required")
+        if len(name) > longest:
+            raise ApiError(400, "bad_bill", f"{field} must be at most {longest} characters")
+        if not _NAME.fullmatch(name):
+            raise ApiError(400, "bad_bill",
+                           f"{field} may use letters, numbers, spaces and - ' . , & ( ) /")
+        return name
 
     @staticmethod
     def _renews_on(raw: str) -> str:

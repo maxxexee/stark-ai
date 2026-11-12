@@ -2,6 +2,8 @@
 
 Shared by `POST /v1/payments` and the agent, so both refuse with the same codes in
 the same order: the per-payment cap first, then the monthly cap, then the balance.
+The monthly cap is this calendar month's (UTC) delivered spend plus what purchases
+still in flight hold, the month the vault contract caps.
 The purchase itself, and the charge that only follows a delivery, happen in
 `PaymentService`, which records the intent before it calls the vendor.
 """
@@ -9,6 +11,7 @@ The purchase itself, and the charge that only follows a delivery, happen in
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from typing import Any
 
@@ -16,6 +19,7 @@ from app.common.api_error import ApiError
 from app.common.clock import Clock
 from app.modules.account.account_service import AccountService
 from app.modules.agent import policy
+from app.modules.agent.agent import Limits
 from app.modules.bill.bill_service import BillService
 from app.modules.payment import payment_service
 from app.modules.payment.payment_service import PaymentService
@@ -37,6 +41,7 @@ class BillPaymentService:
         self.wallet = wallet
         self.payments = payments
         self.settings = settings
+        self._locks: dict[str, threading.Lock] = {}
 
     def pay(self, account_id: str, bill_id: str, amount: int, *,
             approved: bool = False) -> dict[str, Any]:
@@ -53,38 +58,63 @@ class BillPaymentService:
         if amount <= 0:
             raise ApiError(400, "bad_amount", "amount_ngn must be positive")
 
+        # The REST route, the agent (voice, Telegram) and approvals can all pay the
+        # same account at once. The balance hold is atomic but the caps are read
+        # first, so the check and the hold happen under one lock per account or two
+        # payments could each see room under the cap. One process only: a second
+        # replica would need the cap folded into the hold's SQL.
+        with self._lock_for(account_id):
+            try:
+                receipt = self._check_and_pay(account_id, bill, amount, state.limits,
+                                              approved=approved)
+            except payment_service.SpendError as err:
+                status = 409 if err.code == payment_service.INSUFFICIENT_BALANCE else 502
+                raise ApiError(status, err.code, err.message, err.detail) from err
+
+        if receipt.get("status") == "delivered":
+            self.bills.apply_delivery(account_id, receipt)
+        return receipt_repository.api_shape(receipt)
+
+    def _check_and_pay(self, account_id: str, bill: dict[str, Any], amount: int,
+                       limits: Limits, *, approved: bool) -> dict[str, Any]:
+        """The caps and the balance, then the purchase. Called under the account's lock.
+
+        A retry of a purchase still pending settles that one instead of buying
+        again, so it skips the checks: they passed when its money was held, and
+        that hold is already in the balance and the cap.
+        """
+        if self.payments.store.find_pending(account_id, bill["id"], amount) is not None:
+            return self.payments.pay(account_id, bill, amount, approved=approved)
+
         # The limits and the balance cover what the user actually pays: the bill
         # and Stark's fee on it.
         fee = self.settings.fee_for(bill["kind"])
         total = amount + fee
-        limits = state.limits
         wallet = self.wallet.balance(account_id)
         spent, balance = wallet["spent_ngn"], wallet["balance_ngn"]
         if not approved and total > limits.per_payment_cap_ngn:
             raise ApiError(409, "over_per_payment_cap",
                            "That's over the most you allow in one go.",
                            {"amount_ngn": total, "cap_ngn": limits.per_payment_cap_ngn})
-        if not approved and spent + total > limits.monthly_cap_ngn:
-            raise ApiError(409, "over_cap", "That would go over your monthly limit.", {
-                "cap_ngn": limits.monthly_cap_ngn,
-                "spent_ngn": spent,
-                "remaining_ngn": max(limits.monthly_cap_ngn - spent, 0),
-            })
+        if not approved:
+            # Purchases still in flight count against the month too (see
+            # `ReceiptRepository.held_for_bills`).
+            committed = spent + self.payments.store.held_for_bills(account_id)
+            if committed + total > limits.monthly_cap_ngn:
+                raise ApiError(409, "over_cap", "That would go over your monthly limit.", {
+                    "cap_ngn": limits.monthly_cap_ngn,
+                    "spent_ngn": spent,
+                    "remaining_ngn": max(limits.monthly_cap_ngn - committed, 0),
+                })
         if total > balance:
             raise ApiError(409, "insufficient_balance",
                            "Not enough in your wallet. Add money first.",
                            {"balance_ngn": balance, "amount_ngn": total})
+        return self.payments.pay(account_id, bill, amount, approved=approved, fee_ngn=fee)
 
-        try:
-            receipt = self.payments.pay(account_id, bill, amount, approved=approved,
-                                        fee_ngn=fee)
-        except payment_service.SpendError as err:
-            status = 409 if err.code == payment_service.INSUFFICIENT_BALANCE else 502
-            raise ApiError(status, err.code, err.message, err.detail) from err
-
-        if receipt.get("status") == "delivered":
-            self.bills.apply_delivery(account_id, receipt)
-        return receipt_repository.api_shape(receipt)
+    def _lock_for(self, account_id: str) -> threading.Lock:
+        # `setdefault` is atomic on a dict, so two threads get the same lock.
+        return self._locks.setdefault(account_id, threading.Lock())
 
     def settle_pending(self) -> None:
         """Settle purchases that came back pending, without waiting for a retry.

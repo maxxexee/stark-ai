@@ -6,7 +6,8 @@ Renames, removals and type changes mean bumping to `/v2`.
 
 The FastAPI app in `apps/backend` implements all of this, and serves the same
 surface as Swagger UI at **`/docs`** (spec at `/docs/openapi.json`), generated from
-the DTOs the routes use. This file stays the written contract: where they differ,
+the DTOs the routes use — **only with `STARK_DOCS=1`** (local dev; off in production,
+2026-11-12). This file stays the written contract: where they differ,
 this file is the rule and the code is the bug.
 
 ---
@@ -21,7 +22,7 @@ this file is the rule and the code is the bug.
 | IDs | Opaque strings. Don't parse them, don't assume numeric. |
 | Casing | `snake_case` everywhere. |
 | CORS | Open on the stub, so any dev port works. |
-| Auth | **Neon Auth session, enforced.** Sign up / sign in at the branch's Auth URL, then send `Authorization: Bearer <token>` on every `/v1` request — otherwise **401** `unauthorized`. `GET /v1/speak/stream` also accepts `?token=` (an `<audio>` element cannot set a header). The Telegram webhook is the only `/v1` route without it: it authenticates with `X-Telegram-Bot-Api-Secret-Token`. Every token resolves to its own account, wallet and receipts. |
+| Auth | **Neon Auth session, enforced.** Sign up / sign in at the branch's Auth URL, then send `Authorization: Bearer <token>` on every `/v1` request — otherwise **401** `unauthorized`. The token is accepted **only** from that header, never from `?token=` (2026-11-12); `GET /v1/speak/stream` takes a short-lived ticket from `POST /v1/speak/ticket` instead. The Telegram webhook is the only `/v1` route without it: it authenticates with `X-Telegram-Bot-Api-Secret-Token`. Every token resolves to its own account, wallet and receipts. |
 
 ### Error shape
 
@@ -50,12 +51,16 @@ Every non-2xx response has this body:
 | `over_per_payment_cap` | 409 | Payment exceeds the per-payment limit |
 | `over_cap` | 409 | Payment would exceed the monthly cap |
 | `insufficient_balance` | 409 | Payment or withdrawal exceeds the wallet balance |
+| `funds_on_hold` | 409 | A withdrawal only card money still on hold could cover; it can pay bills (additive, 2026-11-12) |
+| `too_many_lookups` | 429 | Too many bank-account name lookups from this account today (additive, 2026-11-12) |
 | `bad_kind` | 400 | Bill or plan `kind` is not one of the supported kinds |
 | `bad_reference` | 400 | Bill reference is not 4–32 characters |
-| `bad_bill` | 400 | A bill add/patch field is invalid (e.g. empty label) |
+| `bad_bill` | 400 | A bill add/patch field is invalid: an empty, too long (label over 40, provider over 48) or oddly spelled name — only letters, digits, spaces and `- ' . , & ( ) /` (2026-11-12) |
 | `bad_renews_on` | 400 | `renews_on` is not a date like `2026-11-03` |
 | `bad_audio` | 400 | `/v1/voice` `audio` is not valid base64 |
-| `audio_too_large` | 413 | `/v1/voice` clip is over 8 MB |
+| `audio_too_large` | 413 | `/v1/voice` clip is over 8 MB, or the request body is over 12 MB |
+| `bad_text` | 400 | `/v1/speak` or `/v1/speak/ticket` `text` is empty or over 2,000 characters |
+| `rate_limited` | 429 | Too many speak or telemetry calls this minute for this account; `detail.retry_after_seconds` says when to try again (additive, 2026-11-12) |
 | `unsupported_product` | 400 | No confirmed vendor product for that provider |
 | `plan_required` | 400 | A data/TV bill was sent without a `plan` |
 | `unknown_plan` | 400 | `plan` is not a code in the vendor catalogue |
@@ -65,11 +70,19 @@ Every non-2xx response has this body:
 | `no_route` | 404 | Unknown path |
 | `bad_request` | 400 | The body is not valid JSON, or a field has the wrong type (additive, 2026-10-27) |
 | `not_configured` | 409 | `POST /v1/link/code` while `STARK_TG_OWNER_EMAIL` names no account (additive, 2026-10-27) |
+| `unknown_identity` | 404 | `DELETE /v1/link/identities/...` names no chat linked to this account (additive, 2026-11-12) |
 
 > Ordering note: a **pause** beats everything. Otherwise the **per-payment** cap is checked first, then the **monthly** cap,
 > then the balance. An amount that breaches all three returns `over_per_payment_cap`.
 > Ordering matters when the caps differ: a ₦20,000 payment with a ₦10,000
 > per-payment limit returns `over_per_payment_cap`, not `over_cap`.
+>
+> The monthly cap is per calendar month, UTC (2026-11-12): it counts this month's
+> delivered payments plus any purchase still `pending`, and resets at midnight UTC on
+> the 1st, the same month the vault contract caps. In `over_cap`'s `detail`,
+> `spent_ngn` is delivered spend only and `remaining_ngn` also subtracts what pending
+> purchases hold. Payments to one account from the app, the agent and approvals are
+> checked one at a time, so two at once cannot both fit under the same room.
 
 ---
 
@@ -212,7 +225,9 @@ Add a bill. Returns **201** with the `Bill` object.
   2026-11-12); anything else is `unsupported_product`. `internet` and `water`
   can be saved, but paying them refuses and charges nothing.
 - `reference` — meter / phone / smartcard number; whitespace is stripped, 4–32 chars.
-- `label` — optional, defaults to `provider`.
+- `label` — optional, defaults to `provider`. At most 40 characters (provider: 48),
+  letters, digits, spaces and `- ' . , & ( ) /` only, else `bad_bill` (2026-11-12):
+  both are read to the agent, so free text there is a place to hide instructions.
 - `plan` — required when the product is sold as a plan (data, DStv/GOtv/Showmax).
   Take the `plan` value from `GET /v1/plans`; the price is stored server-side as
   `plan_price_ngn`, so the client never sends a price the user could edit.
@@ -222,7 +237,7 @@ Add a bill. Returns **201** with the `Bill` object.
 - Adding a bill updates the payer's meter allowlist immediately — the agent can pay
   the new bill in the next turn.
 
-Errors: `bad_kind`, `bad_reference`, `bad_renews_on`, `unsupported_product`,
+Errors: `bad_bill`, `bad_kind`, `bad_reference`, `bad_renews_on`, `unsupported_product`,
 `plan_required`, `unknown_plan`, and `duplicate_bill` (same `kind` + `reference`).
 
 ### `PATCH /v1/bills/{bill_id}`
@@ -235,7 +250,8 @@ Rename a bill, or change a data/TV plan. Every field is optional; returns the fu
 ```
 
 Changing `plan` also rewrites `plan_price_ngn`. Errors: `unknown_bill`,
-`bad_bill` (empty label, or a plan on a kind that has none), `unsupported_product`,
+`bad_bill` (a label that is empty or breaks the rules under `POST /v1/bills`, or a
+plan on a kind that has none), `unsupported_product`,
 `unknown_plan`, and `bad_renews_on`.
 
 `renews_on` is **additive** (2026-10-24) and has three states, because clearing a date
@@ -322,7 +338,12 @@ that purchase instead of buying a second time. Its amount is held (2026-11-11): 
 leaves `balance_ngn` when the purchase is recorded, so it cannot be spent twice, and it
 moves to `spent_ngn` on delivery or back to `balance_ngn` on failure. The server
 re-reads pending purchases in the background, so a receipt can turn `delivered` or
-`failed` without a retry; poll `/v1/activity` to see it change.
+`failed` without a retry; poll `/v1/activity` to see it change. A purchase whose
+order call got no answer at all is looked up at Flutterwave by its `request_id`
+(2026-11-12): if it went through it turns `delivered` and is charged, and it turns
+`failed` only once Flutterwave has no record of it 30 minutes after it was made. While
+Flutterwave cannot be reached it stays `pending`. A retry of a `pending` purchase is
+not checked against the caps or the balance again: its money is already held.
 
 Errors: `over_per_payment_cap` (409), `over_cap` (409), `insufficient_balance` (409),
 `unknown_bill` (404), `bad_amount` (400), and `vendor_failed` (502) when the bill
@@ -341,8 +362,10 @@ Two more refusals happen before anything is recorded or bought (2026-11-03):
   onchain caps refused it, or the chain could not be reached. `message` is plain
   English and ends "Nothing was charged."
 
-`tx_hash` is the vault's `pay` transaction whenever a chain is configured, on every
-path (the app's own `POST /v1/payments` included), not only on agent payments.
+`tx_hash` is the vault's `pay` transaction whenever a chain is configured and
+broadcasting (`STARK_BROADCAST=1`), on every path (the app's own `POST /v1/payments`
+included), not only on agent payments. With the chain configured but not broadcasting,
+`pay` is only signed offline, so `tx_hash` is `null`: there is no transaction to link.
 
 ### `GET /v1/activity`
 
@@ -375,7 +398,9 @@ never charged. `bill_id` is `"wallet"` for a `deposit` and a `withdrawal`.
 
 `remaining_cap_ngn` never goes negative. `spent_ngn` counts **delivered bill
 payments only** — deposits, withdrawals, autotop-ups and declined entries do not
-consume the cap.
+consume the cap. It is **this calendar month's** (UTC), and reads 0 again from
+midnight UTC on the 1st (2026-11-12); `GET /v1/wallet`, `GET /v1/state` and the
+agent report the same figure.
 
 ### `PATCH /v1/limits`
 
@@ -405,7 +430,9 @@ The owner's off switch (additive, 2026-11-03). All three return:
   Questions are still answered.
 - Pausing twice keeps the first `paused_at`; resuming an active account is a no-op.
 - Stored per account, so a restart keeps it. `/v1/state` mirrors it as `paused`.
-- A linked Telegram chat can send `/pause` and `/resume`.
+- A linked Telegram chat can send `/pause`. Resuming is app-only (2026-11-12): `/resume`
+  in a chat answers with a pointer to the app and changes nothing, so a chat linked with
+  a leaked code cannot undo the owner's pause.
 
 ### `GET /v1/approvals`, `POST /v1/approvals/{id}/approve`, `POST /v1/approvals/{id}/deny`
 
@@ -511,7 +538,9 @@ as real USDC.
 
 Returns **201** with `{ "wallet": { /* GET /v1/wallet */ }, "entry": { /* Receipt */ } }`.
 `entry.type` is `deposit`, `entry.status` is `received`, `entry.bill_id` is `"wallet"`.
-Repeating `request_id` returns **200** with the original entry and credits nothing.
+Repeating `request_id` returns **200** with the original entry and credits nothing,
+also when the two requests arrive at the same moment (2026-11-12: the second used to
+get a 500).
 Top-ups never count towards the monthly cap.
 
 ### `POST /v1/wallet/deposits` → `Deposit`
@@ -556,12 +585,20 @@ Errors: `bad_amount` (₦100–₦5,000,000), `bad_method`, `bad_asset` (400),
 
 ### `GET /v1/wallet/deposits/{id}` → `Deposit`, `GET /v1/wallet/deposits` → `Deposit[]`
 
-Reading an open deposit checks it with its rail first, so read it when something
-happens (the redirect lands, the user comes back) and never on a timer. Between
-reads, the `charge.completed` webhook settles a bank deposit, and Stark checks every
-open deposit itself: half its age apart, one to fifteen minutes. 1Click has no
-webhook, so that is what settles a crypto deposit. `404 unknown_deposit` for another
-account's id.
+Reading an open deposit checks it with its rail first, at most once every 15 seconds
+per deposit (a read inside that window returns the stored row), so read it when
+something happens (the redirect lands, the user comes back) and never on a tight
+timer. Between reads, the `charge.completed` webhook settles a bank deposit, and
+Stark checks every open deposit itself: half its age apart, one to fifteen minutes.
+1Click has no webhook, so that is what settles a crypto deposit. `404
+unknown_deposit` for another account's id.
+
+**Card money is held.** Naira added by card (any checkout not paid by bank transfer
+or USSD) is credited and spendable on bills at once, but cannot be withdrawn, by bank
+or as crypto, until `STARK_CARD_HOLD_HOURS` (72 by default) after it lands: a card
+charge can be disputed after the money has gone. A withdrawal that only the held
+money could cover is refused with `funds_on_hold` (409), whose message says how much
+can leave now.
 
 ### `POST /v1/wallet/deposits/{id}/tx`
 
@@ -622,7 +659,10 @@ crypto deposit locks its own rate when it is quoted, so this is a guide, not a p
 ```
 
 Show the resolved name before sending. `bad_account` (400) when the number does not
-match the bank or is not 10 digits.
+match the bank or is not 10 digits. Each account may look up
+`STARK_BANK_LOOKUPS_PER_DAY` names (20 by default) in any 24 hours, found or not;
+past that, **429** `too_many_lookups`. A malformed number is refused before it
+counts, and a withdrawal's own check of the account it pays does not count.
 
 ### `POST /v1/wallet/withdraw` → `Withdrawal`
 
@@ -642,9 +682,12 @@ Returns **201**. The money leaves the balance at once (an activity entry with
 same reference) → `processing` → `paid`, or `returned` — the money is back in the balance and `note`
 says why. The activity entry becomes `sent` or `failed` to match.
 
-Errors: `bad_amount` (below ₦100), `bad_account`, `insufficient_balance` (409),
-`not_available` (501), `provider_failed` (502). `GET /v1/wallet/withdrawals` lists recent ones,
-bank and crypto together.
+Errors: `bad_amount` (below ₦100), `bad_account`, `paused` (423, the owner paused
+Stark), `daily_limit` (409, over `STARK_WITHDRAW_DAILY_NGN`, ₦200,000 by default, sent
+to banks from this account in 24 hours, not counting returned ones), `funds_on_hold`
+(409, see card holds above), `insufficient_balance` (409), `not_available` (501),
+`provider_failed` (502). Nothing is taken on any refusal. `GET /v1/wallet/withdrawals`
+lists recent ones, bank and crypto together.
 
 ### `POST /v1/wallet/withdraw/crypto` → `Withdrawal`
 
@@ -669,10 +712,12 @@ Stark's rate (rounded down), and NEAR Intents swaps it into the asset and delive
 `crypto.amount` is what arrives: the quote, then the settled amount once `paid`.
 
 Errors: `bad_amount` (below ₦1,000, or too little for that asset), `over_limit` (400,
-over the per-withdrawal cap), `daily_limit` (409, Stark's daily crypto total is used up),
-`bad_asset`, `bad_address` (400, 1Click refused it for that chain),
-`insufficient_balance` (409), `not_available` (501, no treasury key),
-`provider_failed` (502). Nothing is taken on any refusal.
+over the per-withdrawal cap in naira, or in USDC at the current rate), `daily_limit`
+(409, this account's daily crypto total, or Stark's across everyone, is used up),
+`paused` (423), `funds_on_hold` (409), `bad_asset`, `bad_address` (400, 1Click refused
+it for that chain), `insufficient_balance` (409), `not_available` (501, no treasury
+key), `provider_failed` (502, also when Paycrest's rate is out of bounds). Nothing is
+taken on any refusal.
 
 ### `POST /v1/flutterwave/webhook`
 
@@ -680,7 +725,9 @@ Flutterwave calls this, not the app. No bearer token: the `verif-hash` header mu
 the secret hash set in Flutterwave's dashboard (`FLW_SECRET_HASH`); **401**
 `webhook_unverified` otherwise, `webhook_unconfigured` while it is unset. A
 `charge.completed` is never credited from its body: the deposit is verified with
-Flutterwave first. `transfer.completed` settles a withdrawal.
+Flutterwave first. `transfer.completed` is never settled from its body either: the
+transfer is re-read from Flutterwave by its reference, and only that answer marks a
+withdrawal paid or returns its money. A withdrawal already `paid` is never returned.
 
 ### `GET /v1/admin/overview`
 
@@ -883,27 +930,49 @@ of an answered `/v1/voice`.
 ```
 
 `audio` is a WAV data URL, or `null` when voice is off — **200 either way** (voice is
-an enhancement, never an error). Missing/empty `text` is **400 `bad_text`**.
+an enhancement, never an error). Missing/empty `text`, or more than **2,000
+characters**, is **400 `bad_text`**. Each call counts toward the account's speak limit
+(`STARK_SPEAK_PER_MINUTE`, default 30 a minute): over it is **429 `rate_limited`**.
+
+### `POST /v1/speak/ticket`
+
+**Additive** (2026-11-12). A link for an `<audio>` element, which cannot send
+`Authorization`. Same body and `bad_text` rules as `POST /v1/speak`:
+
+```json
+{ "text": "Your light bill is 5,000 naira." }
+```
+
+```json
+{ "url": "/v1/speak/stream?ticket=3q2-7wQ…", "expires_in_seconds": 120 }
+```
+
+`url` is relative to the API's base URL. The ticket opens only
+`GET /v1/speak/stream`, only for this text, for two minutes; the text stays on the
+server, so neither it nor the session token travels in a URL. It may be fetched more
+than once while it lives (browsers re-request an `src`). Counts toward the speak limit.
 
 ### `GET /v1/speak/stream`
 
 **Additive** (2026-10-24). The same voice, sent as it is produced, for a player that
-can start on partial data:
+can start on partial data. **Changed 2026-11-12:** it takes only a ticket from
+`POST /v1/speak/ticket` — no `?text=`, no `?token=`, no `Authorization`:
 
 ```
-GET /v1/speak/stream?text=Your%20light%20bill%20is%205%2C000%20naira.
+GET /v1/speak/stream?ticket=3q2-7wQ…
 ```
 
 - **200**, `Content-Type: audio/mpeg` when streaming (no `Content-Length` — the body
   is deliberately not buffered), `audio/wav` when a whole buffered clip is substituted.
-- **400 `bad_text`** with no text, **503 `no_voice`** (JSON) when no provider is
+- **401 `unauthorized`** for an unknown or expired ticket, **429 `rate_limited`**
+  when the account is over its speak limit (every fetch counts), **503 `no_voice`** (JSON) when no provider is
   configured at all, so a client expecting audio can tell "quiet" from "refused".
 - Measured 2026-10-24: first byte **~0.5s**, whole clip ~1.0s, against **~1.3s** for
   the buffered `POST /v1/speak` before a single sample could play.
 
 `POST /v1/speak` remains the simple contract — Telegram and anything that needs one
-complete `data:` URL should keep using it. The dashboard plays this stream and
-falls back to `POST /v1/speak` if it errors.
+complete `data:` URL should keep using it. The dashboard fetches a ticket, plays this
+stream and falls back to `POST /v1/speak` if it errors.
 
 ### `POST /v1/telemetry`
 
@@ -917,6 +986,8 @@ Stored per account, and stamped with the **server's** clock when it arrives: a `
 in the body is ignored (2026-10-27), because `units_left` and `days_left` are worked
 out from the gaps between readings, and a wrong device clock would move the meter.
 Post each sample as it is taken. `watts` must be a number of 0 or more (`bad_watts`).
+At most `STARK_TELEMETRY_PER_MINUTE` readings (default 120) a minute per account;
+beyond that **429 `rate_limited`** (2026-11-12).
 **It feeds `/v1/suggestions`** (2026-10-24):
 the `load_imbalance` line needs two or more `device_id`s in the last 24 hours, and
 reads each device's **average** watts — ten samples of one plug are one habit, not
@@ -940,10 +1011,19 @@ A verified update returns 200:
 ```
 
 `handled` is for debugging, not display: `agent` (the user asked something),
-`command` (`/link`, `/whoami`, `/unlink`, `/help`), `unlinked` (linking
+`command` (`/link`, `/whoami`, `/unlink`, `/pause`, `/help`), `unlinked` (linking
 instructions only — the agent was never called), `asleep` (a voice note without
-the word "stark"), `voice_unheard` (no STT configured), `duplicate` (a
-re-delivered update — processed once), or `ignored`.
+the word "stark"), `voice_unheard` (no STT configured), `forwarded` (a forwarded
+message: refused, never read as an instruction), `duplicate` (a re-delivered
+update — processed once), or `ignored`.
+
+**Only a person's own DM is read (2026-11-12).** The bot handles a `message`
+update in a `private` chat whose `from.id` is the chat. Everything else is
+`ignored` with no reply: groups, channel posts, edited messages, messages sent on
+behalf of a chat (`sender_chat`) and anonymous group admins (`GroupAnonymousBot`).
+Dedupe keys on `update_id`, which is unique per bot; it used to key on
+`message_id`, which counts per chat, so two chats' messages collided and the
+later one was dropped for good.
 
 How a linked user talks to the bot: send `link 482913` (the code comes from the
 app) to bind the chat, then ask in plain text or as a voice note. Voice notes go
@@ -989,9 +1069,39 @@ gets five redeem attempts before it is locked out. Redeeming it links the chat
 (`/start <code>` from the deep link, or `/link <code>` typed); an already-linked
 chat is never rebound and must `/unlink` first.
 
+Since 2026-11-12: minting a code cancels the account's earlier unredeemed codes,
+so an account has one live code at a time. Twenty failed redeems across all chats
+within ten minutes refuse every redeem until the window rolls over. When a chat
+links, the account's other linked chats are told, with the new chat's name.
+
 No request body. Errors: none specific — a failure to reach Telegram degrades to
 `deep_link: null` rather than an error, because the code is the part that
 matters.
+
+### `GET /v1/link/identities` → `LinkedChat[]`, `DELETE /v1/link/identities/{channel}/{channel_user_id}`
+
+**Additive (2026-11-12).** The chats that speak for this account, oldest first, so
+the owner can spot one they did not link and remove it.
+
+```json
+[
+  {
+    "channel": "telegram",
+    "channel_user_id": "5512094821",
+    "chat_hint": "•••• 4821",
+    "display_name": "Tunde",
+    "linked_at": "2026-11-12T09:12:00Z"
+  }
+]
+```
+
+Show `chat_hint`; `channel_user_id` is what `DELETE` names. `display_name` is the
+Telegram first name (or username) the chat had when it linked, and may be `null`.
+
+`DELETE` unlinks the chat at once — its next message gets linking instructions —
+and returns `{ "unlinked": true, "channel": "telegram", "channel_user_id": "5512094821" }`.
+Only this account's chats can be removed: any other id, linked to another account
+or to nobody, is **404 `unknown_identity`**.
 
 ### `GET /v1/turnlog`
 
@@ -1056,7 +1166,10 @@ into it, but it does contain what people said: treat it as user data.
 
 **Stub only — not part of the product contract, and off by default.** It exists
 only when the server runs with `STARK_STUB_RESET=1`; otherwise it answers **404**
-`no_route` like any unknown route. When on, it replaces the caller's data with the
+`no_route` like any unknown route. It also answers 404 whenever a real rail is
+configured (Flutterwave, the crypto treasury or the vault chain), whatever the flag
+says (2026-11-12): the seeded balance has no deposit behind it. When on, it replaces
+the caller's data, and unlinks the caller's Telegram chats (no one else's), with the
 artboard seed so smoke runs are repeatable: the three seed bills, limits
 `₦30,000` / `₦10,000`, balance `₦64,200`, spent `₦23,000`, the six seed activity rows
 (their 110 delivered units become `units_left`), and no readings. New accounts are
@@ -1108,4 +1221,9 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
+| 2026-11-12 | **API surface hardening.** The session token is read only from `Authorization: Bearer`; `?token=` is refused on every route. `GET /v1/speak/stream` now takes only `?ticket=` from the new `POST /v1/speak/ticket` (`?text=` and `?token=` are gone). `/v1/speak` and `/v1/speak/ticket` refuse `text` over 2,000 characters (`bad_text`); `/v1/voice` refuses a body over 12 MB (`audio_too_large`) while reading it. New code `rate_limited` (429) on speak routes and `/v1/telemetry`. Bill `label` (40) and `provider` (48) are length- and charset-checked (`bad_bill`). `/docs`, `/redoc` and the spec are served only with `STARK_DOCS=1`, and `GET /` no longer lists routes. The agent pays only an amount the user said (`amount_mismatch` on its reply `code`) and strips web links from its reply text. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
+| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |
+| 2026-11-12 | Receipts no longer carry a `tx_hash` for a `pay` that was only signed offline (a chain configured without `STARK_BROADCAST=1`); it is `null` there, as it already was with no chain. The backend warns at boot when the chain is not broadcasting. No shape changed. |
+| 2026-11-12 | Payment fixes. The monthly cap and `spent_ngn` (`/v1/wallet`, `/v1/state`, `/v1/limits`, `over_cap`) are this calendar month's (UTC) and reset on the 1st; the cap also counts purchases still `pending`, and an account's payments are checked one at a time. A purchase whose order call timed out is looked up at Flutterwave by `request_id` before it is failed. A racing repeat of a top-up `request_id` answers 200 instead of 500. `POST /v1/_stub/reset` is off while any real rail is configured and unlinks only the caller's chats. No shape changed. |
+| 2026-11-12 | Money-rail hardening. Bank and crypto withdrawals answer `paused` (423) while the owner has paused Stark, and new `funds_on_hold` (409) for money a card added in the last `STARK_CARD_HOLD_HOURS` (it still pays bills). Bank withdrawals gain a per-account daily cap (`daily_limit`, 409); crypto gains a per-account daily cap and a per-withdrawal USDC cap (`over_limit`) beside the existing ones. `POST /v1/wallet/bank-accounts/resolve` is limited per account per day (new `too_many_lookups`, 429). `transfer.completed` is re-read from Flutterwave instead of trusting its body, and a `paid` withdrawal is never returned. `GET /v1/wallet/deposits/{id}` asks its rail at most every 15 seconds. Paycrest rates outside the allowed range or move are refused (`provider_failed`). No shape changed. |

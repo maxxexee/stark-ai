@@ -1,5 +1,7 @@
 # FastAPI on uvicorn. ffmpeg transcodes Telegram voice notes and browser clips.
-FROM python:3.12-slim
+# Pinned to a patch release and its digest (Docker Hub, 2026-11-08) so a rebuild is the
+# same image. Bump both together: `docker buildx imagetools inspect python:3.12-slim`.
+FROM python:3.12.16-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates \

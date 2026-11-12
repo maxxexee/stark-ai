@@ -3,8 +3,12 @@
 | Event | Goes to |
 |---|---|
 | `charge.completed` | `DepositService.on_charge` — which re-verifies with Flutterwave |
-| `transfer.completed` | `WithdrawalService.on_transfer` |
+| `transfer.completed` | `WithdrawalService.on_transfer_event` — which re-reads the transfer from Flutterwave |
 | anything else | acknowledged and ignored (bills are re-read on the retry) |
+
+Only a reference is taken from the body. `verif-hash` is a shared secret sent back
+as is, not a signature over the body, so anyone who learns it could post any
+`status`; the outcome always comes from asking Flutterwave.
 
 `verif-hash` is checked before anything parses the body. Delivery is at least
 once, so `<event>:<data.id>` is recorded in `processed_messages` *after* it has
@@ -56,8 +60,7 @@ class FlutterwaveWebhookService:
         if event_type == "charge.completed":
             self.deposits.on_charge(data["tx_ref"])
         elif event_type == "transfer.completed":
-            self.withdrawals.on_transfer(data["reference"], data["status"],
-                                         data.get("complete_message"))
+            self.withdrawals.on_transfer_event(data["reference"])
 
         self.db.query(
             "INSERT INTO processed_messages (channel, message_id, processed_at)"

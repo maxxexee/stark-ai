@@ -511,6 +511,22 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_number TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_name TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bank_name TEXT;
 
+-- Card money pays bills at once but is not withdrawable until `hold_until`: a card
+-- charge can be disputed long after it lands. `checked_at` is the last time a read
+-- of the deposit asked its rail, so polling the route cannot hammer the provider.
+ALTER TABLE deposits ADD COLUMN IF NOT EXISTS hold_until TEXT;
+ALTER TABLE deposits ADD COLUMN IF NOT EXISTS checked_at TEXT;
+CREATE INDEX IF NOT EXISTS deposits_held ON deposits (user_id, hold_until)
+  WHERE hold_until IS NOT NULL;
+
+-- Bank-account name lookups in the last day, per account: the name behind an
+-- account number is personal data, so how many one account may read is limited.
+CREATE TABLE IF NOT EXISTS bank_lookups (
+    user_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bank_lookups_user ON bank_lookups (user_id, created_at);
+
 -- Business settings the owner edits on the admin page, such as the fee per bill kind.
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -520,6 +536,19 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- The service fee on a bill, held and settled with its amount.
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS fee_ngn BIGINT NOT NULL DEFAULT 0;
+
+-- `spent_ngn` is the delivered bill spend of the calendar month in `spent_period`
+-- (`YYYY-MM`, UTC), the month the vault contract caps. Another month reads as 0.
+-- Before this column it was a lifetime total, so those rows are rebuilt once from
+-- the delivered receipts of this month, counted the way `finish` counts them.
+-- (No semicolons or quotes in these comments: `_statements` splits on them.)
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS spent_period TEXT;
+UPDATE wallets SET spent_period = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM'),
+    spent_ngn = (SELECT COALESCE(SUM(r.amount_ngn + r.fee_ngn), 0) FROM receipts r
+        WHERE r.user_id = wallets.user_id AND r.status = 'delivered'
+          AND COALESCE(r.entry_type, 'bill') IN ('bill', 'autotopup')
+          AND LEFT(r.created_at, 7) = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM'))
+    WHERE spent_period IS NULL;
 """
 
 

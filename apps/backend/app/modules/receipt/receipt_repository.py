@@ -20,15 +20,20 @@ INSERT INTO receipts ... SELECT ... FROM w`. If the balance cannot cover a charg
 `UPDATE` matches no row, the `INSERT` has nothing to select from, and nothing is
 written. Never split one of those into two queries.
 
+**`spent_ngn` is this month's spend.** The wallet row keeps it with the month it
+belongs to (`spent_period`, `YYYY-MM` UTC, the month the vault contract caps), and
+a row from an earlier month reads as 0, so the monthly cap resets on the first
+without a job to reset it. The first delivery of a new month starts the count again.
+
 Money is integer naira. Units are a float because the tariff is fractional, and
 units are not money.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from app.common.clock import Clock
 from app.database import neon
 
 RECEIPT_COLUMNS = (
@@ -73,6 +78,16 @@ def _typed(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row.get(column) is not None:
             row[column] = int(row[column])
     return row
+
+
+def _period() -> str:
+    """This calendar month in UTC, `YYYY-MM`: the period `spent_ngn` counts."""
+    return Clock.month_start()[:7]
+
+
+def _spent(period_param: str) -> str:
+    """`spent_ngn` as read: the stored total if it is this month's, else 0."""
+    return f"CASE WHEN spent_period = {period_param} THEN spent_ngn ELSE 0 END"
 
 
 def _values(receipt: dict[str, Any], user_id: str) -> list[Any]:
@@ -172,7 +187,9 @@ class ReceiptRepository:
 
     def wallet(self, user_id: str) -> dict[str, int] | None:
         row = self.db.one(
-            "SELECT balance_ngn, spent_ngn FROM wallets WHERE user_id = $1", [user_id]
+            f"SELECT balance_ngn, {_spent('$2')} AS spent_ngn FROM wallets"
+            " WHERE user_id = $1",
+            [user_id, _period()],
         )
         if row is None:
             return None
@@ -180,10 +197,11 @@ class ReceiptRepository:
 
     def set_wallet(self, user_id: str, balance_ngn: int, spent_ngn: int) -> None:
         self.db.query(
-            "INSERT INTO wallets (user_id, balance_ngn, spent_ngn) VALUES ($1, $2, $3)"
+            "INSERT INTO wallets (user_id, balance_ngn, spent_ngn, spent_period)"
+            " VALUES ($1, $2, $3, $4)"
             " ON CONFLICT (user_id) DO UPDATE SET balance_ngn = EXCLUDED.balance_ngn,"
-            " spent_ngn = EXCLUDED.spent_ngn",
-            [user_id, int(balance_ngn), int(spent_ngn)],
+            " spent_ngn = EXCLUDED.spent_ngn, spent_period = EXCLUDED.spent_period",
+            [user_id, int(balance_ngn), int(spent_ngn), _period()],
         )
 
     def record_deposit(
@@ -195,10 +213,11 @@ class ReceiptRepository:
         row = self.db.one(
             f"WITH r AS ({head} RETURNING *)"
             f", w AS (UPDATE wallets SET balance_ngn = balance_ngn + ${amount_index}"
-            f" WHERE user_id = ${user_index} RETURNING balance_ngn, spent_ngn)"
+            f" WHERE user_id = ${user_index}"
+            f" RETURNING balance_ngn, {_spent(f'${amount_index + 1}')} AS spent_ngn)"
             " SELECT (SELECT row_to_json(r) FROM r) AS receipt,"
             " (SELECT row_to_json(w) FROM w) AS wallet",
-            [*values, int(amount_ngn)],
+            [*values, int(amount_ngn), _period()],
         )
         # The wallet CTE matched nothing, so nothing was written: no account row.
         if row is None or row.get("wallet") is None:
@@ -222,11 +241,11 @@ class ReceiptRepository:
         row = self.db.one(
             f"WITH w AS (UPDATE wallets SET balance_ngn = balance_ngn - ${amount_index}"
             f" WHERE user_id = ${user_index} AND balance_ngn >= ${amount_index}"
-            " RETURNING balance_ngn, spent_ngn)"
+            f" RETURNING balance_ngn, {_spent(f'${amount_index + 1}')} AS spent_ngn)"
             f", r AS ({head} RETURNING *)"
             " SELECT (SELECT row_to_json(r) FROM r) AS receipt,"
             " (SELECT row_to_json(w) FROM w) AS wallet",
-            [*values, amount],
+            [*values, amount, _period()],
         )
         # A short wallet matches no row in `w`, so `r` inserted nothing and both
         # sub-selects come back NULL. That is the refusal, not an empty result.
@@ -237,16 +256,54 @@ class ReceiptRepository:
             "spent_ngn": int(row["wallet"]["spent_ngn"]),
         }
 
+    def record_withdrawal(self, user_id: str, receipt: dict[str, Any], amount_ngn: int, *,
+                          keep_ngn: int, withdrawal: dict[str, Any]) -> None:
+        """`record_debit` plus the `withdrawals` row, in the same statement.
+
+        Written as one so a crash cannot leave money held with no withdrawal to send
+        or return it. `keep_ngn` must stay in the balance afterwards (card money
+        still on hold: spendable, not withdrawable). Raises if that cannot be met.
+        """
+        head, user_index, amount_index = _insert_sql(from_wallet=True)
+        keep_index = amount_index + 1
+        columns = list(withdrawal)
+        first = keep_index + 1
+        placeholders = ", ".join(f"${first + i}" for i in range(len(columns)))
+        row = self.db.one(
+            f"WITH w AS (UPDATE wallets SET balance_ngn = balance_ngn - ${amount_index}"
+            f" WHERE user_id = ${user_index}"
+            f" AND balance_ngn - ${keep_index} >= ${amount_index} RETURNING balance_ngn)"
+            f", r AS ({head} RETURNING id)"
+            f", d AS (INSERT INTO withdrawals ({', '.join(columns)})"
+            f" SELECT {placeholders} FROM r RETURNING id)"
+            " SELECT id FROM d",
+            [*_values(receipt, user_id), int(amount_ngn), int(keep_ngn),
+             *withdrawal.values()],
+        )
+        if row is None:
+            raise ValueError("insufficient_balance")
+
     def added_this_month(self, user_id: str) -> int:
         """Deposits that landed since the first of the current UTC month."""
-        month_start = datetime.now(timezone.utc).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         return int(self.db.value(
             "SELECT COALESCE(SUM(amount_ngn), 0) FROM receipts"
             " WHERE user_id = $1 AND entry_type = 'deposit' AND status = 'received'"
             " AND created_at >= $2",
-            [user_id, month_start],
+            [user_id, Clock.month_start()],
+        ) or 0)
+
+    def held_for_bills(self, user_id: str) -> int:
+        """What this account's bill purchases still in flight hold, fee included.
+
+        Held is not spend, so `spent_ngn` leaves it out. The monthly cap counts it
+        anyway: the vault already signed it against the month, and if it is
+        delivered later it becomes spend that a cap check made meanwhile never saw.
+        """
+        return int(self.db.value(
+            "SELECT COALESCE(SUM(amount_ngn + fee_ngn), 0) FROM receipts"
+            " WHERE user_id = $1 AND status = 'pending'"
+            " AND COALESCE(entry_type, 'bill') IN ('bill', 'autotopup')",
+            [user_id],
         ) or 0)
 
     def units_bought(self, user_id: str) -> tuple[float, str | None]:
@@ -279,27 +336,36 @@ class ReceiptRepository:
         """Close a pending purchase and settle the money it held, in one statement.
 
         The amount left the balance when the purchase was recorded (`record_debit`).
-        `delivered` turns it into spend; `failed` puts it back in the balance. Only a
-        receipt that is still `pending` moves, so when a retry and the background
-        check settle the same purchase at once, exactly one of them does and the
-        other gets None.
+        `delivered` turns it into this month's spend, starting the count again when
+        the stored one is an earlier month's; `failed` puts it back in the balance.
+        Only a receipt that is still `pending` moves, so when a retry and the
+        background check settle the same purchase at once, exactly one of them does
+        and the other gets None.
         """
-        wallet = {
-            "delivered": "spent_ngn = spent_ngn + r.amount_ngn + r.fee_ngn",
-            "failed": "balance_ngn = balance_ngn + r.amount_ngn + r.fee_ngn",
-        }[status]
         unknown = set(fields) - UPDATABLE
         if unknown:
             raise ValueError(f"cannot update {sorted(unknown)}")
         assignments = "".join(
             f", {name} = ${index + 4}" for index, name in enumerate(fields)
         )
+        params = [receipt_id, user_id, status, *fields.values()]
+        if status == "delivered":
+            # Postgres refuses a parameter the statement never uses, so the month is
+            # only passed when it is written.
+            params.append(_period())
+            period = f"${len(params)}"
+            wallet = (f"spent_ngn = {_spent(period)} + r.amount_ngn + r.fee_ngn,"
+                      f" spent_period = {period}")
+        elif status == "failed":
+            wallet = "balance_ngn = balance_ngn + r.amount_ngn + r.fee_ngn"
+        else:
+            raise ValueError(f"cannot finish a purchase as {status!r}")
         return _typed(self.db.one(
             f"WITH r AS (UPDATE receipts SET status = $3{assignments}"
             " WHERE id = $1 AND user_id = $2 AND status = 'pending' RETURNING *)"
             f", w AS (UPDATE wallets SET {wallet} FROM r WHERE wallets.user_id = r.user_id)"
             " SELECT * FROM r",
-            [receipt_id, user_id, status, *fields.values()],
+            params,
         ))
 
     def drop_hold(self, user_id: str, receipt_id: str) -> None:

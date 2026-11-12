@@ -138,6 +138,67 @@ class AccountDataTest(unittest.TestCase):
         self.assertNotIn("renews_on", bill)
         self.assertNotIn("plan", bill)
 
+    def test_a_repeated_top_up_request_id_credits_once(self):
+        """The second request is the one that loses the race: its insert hits the
+        unique `(user_id, request_id)` and it answers with the first one's entry."""
+        self.account.store.set_wallet(0, 0)
+        self.api.module.wallet.test_money = True
+        vault = CreditLog()
+        self.api.module.wallet.vaults = vault
+        body = {"amount_ngn": 2_000, "request_id": "dep_twice"}
+        first = self.client.post("/v1/wallet/topup", json=body)
+        second = self.client.post("/v1/wallet/topup", json=body)
+        self.assertEqual((first.status_code, second.status_code), (201, 200))
+        self.assertEqual(second.json()["entry"]["id"], first.json()["entry"]["id"])
+        self.assertEqual(second.json()["wallet"]["balance_ngn"], 2_000)
+        self.assertEqual(vault.credits, ["dep_twice"])
+
+
+class CreditLog:
+    """The vault, as far as a test top-up uses it."""
+
+    def __init__(self) -> None:
+        self.credits: list[str] = []
+
+    def credit(self, user_id: str, amount_ngn: int, reference: str) -> None:
+        self.credits.append(reference)
+
+
+class StubResetTest(unittest.TestCase):
+    def setUp(self):
+        self.account = test_support.TempAccount()
+        self.addCleanup(self.account.close)
+        self.other = test_support.TempAccount(db=self.account.db)
+        self.addCleanup(self.other.close)
+        self.api = test_support.ApiHarness(self.account, stub_reset_enabled=True)
+        self.addCleanup(self.api.restart)
+        self.api.module.stub.live_rails = False
+        for account in (self.account, self.other):
+            self.account.db.query(
+                "INSERT INTO channel_identities"
+                " (channel, channel_user_id, user_id, display_name, linked_at, last_seen_at)"
+                " VALUES ('telegram', $1, $1, 'Test', $2, $2)",
+                [account.id, "2026-11-01T00:00:00Z"])
+
+    def links(self, account: test_support.TempAccount) -> list[dict]:
+        return self.api.module.identities.identities_for(account.id)
+
+    def test_reset_unlinks_only_the_callers_chats(self):
+        response = self.api.client.post("/v1/_stub/reset")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.account.store.wallet()["balance_ngn"], 64_200)
+        self.assertEqual(self.links(self.account), [])
+        self.assertEqual(len(self.links(self.other)), 1)
+
+    def test_reset_is_off_while_a_real_rail_is_configured(self):
+        self.account.store.set_wallet(1_000, 0)
+        self.api.module.stub.live_rails = True
+        response = self.api.client.post("/v1/_stub/reset")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], "no_route")
+        self.assertEqual(self.account.store.wallet(), {"balance_ngn": 1_000, "spent_ngn": 0})
+        self.assertEqual(len(self.links(self.account)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

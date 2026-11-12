@@ -118,6 +118,12 @@ export type SpeakReply = {
   audio: string | null;
 };
 
+/** `url` is relative to the API's base URL and works for `expires_in_seconds`. */
+export type SpeakTicket = {
+  url: string;
+  expires_in_seconds: number;
+};
+
 export type NewBill = {
   kind: BillKind;
   provider: string;
@@ -139,6 +145,15 @@ export type LinkCode = {
   bot_username: string | null;
   deep_link: string | null;
   user_id?: string;
+};
+
+/** A chat that speaks for this account. Show `chat_hint`; `channel_user_id` is what Remove names. */
+export type LinkedChat = {
+  channel: string;
+  channel_user_id: string;
+  chat_hint: string;
+  display_name: string | null;
+  linked_at: string;
 };
 
 export type LimitsPatch = {

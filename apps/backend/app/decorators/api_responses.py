@@ -39,6 +39,7 @@ class ApiResponses:
         "duplicate_bill": 409,
         "bill_in_flight": 409,
         "not_configured": 409,
+        "unknown_identity": 404,
         "webhook_unconfigured": 401,
         "webhook_unverified": 401,
         "not_available": 501,
@@ -54,9 +55,12 @@ class ApiResponses:
         "over_limit": 400,
         "below_minimum": 400,
         "daily_limit": 409,
+        "funds_on_hold": 409,
+        "too_many_lookups": 429,
         "authorisation_failed": 502,
         "provider_failed": 502,
         "float_low": 503,
+        "rate_limited": 429,
     }
 
     @staticmethod
