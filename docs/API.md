@@ -51,6 +51,8 @@ Every non-2xx response has this body:
 | `over_per_payment_cap` | 409 | Payment exceeds the per-payment limit |
 | `over_cap` | 409 | Payment would exceed the monthly cap |
 | `insufficient_balance` | 409 | Payment or withdrawal exceeds the wallet balance |
+| `funds_on_hold` | 409 | A withdrawal only card money still on hold could cover; it can pay bills (additive, 2026-11-12) |
+| `too_many_lookups` | 429 | Too many bank-account name lookups from this account today (additive, 2026-11-12) |
 | `bad_kind` | 400 | Bill or plan `kind` is not one of the supported kinds |
 | `bad_reference` | 400 | Bill reference is not 4–32 characters |
 | `bad_bill` | 400 | A bill add/patch field is invalid: an empty, too long (label over 40, provider over 48) or oddly spelled name — only letters, digits, spaces and `- ' . , & ( ) /` (2026-11-12) |
@@ -583,12 +585,20 @@ Errors: `bad_amount` (₦100–₦5,000,000), `bad_method`, `bad_asset` (400),
 
 ### `GET /v1/wallet/deposits/{id}` → `Deposit`, `GET /v1/wallet/deposits` → `Deposit[]`
 
-Reading an open deposit checks it with its rail first, so read it when something
-happens (the redirect lands, the user comes back) and never on a timer. Between
-reads, the `charge.completed` webhook settles a bank deposit, and Stark checks every
-open deposit itself: half its age apart, one to fifteen minutes. 1Click has no
-webhook, so that is what settles a crypto deposit. `404 unknown_deposit` for another
-account's id.
+Reading an open deposit checks it with its rail first, at most once every 15 seconds
+per deposit (a read inside that window returns the stored row), so read it when
+something happens (the redirect lands, the user comes back) and never on a tight
+timer. Between reads, the `charge.completed` webhook settles a bank deposit, and
+Stark checks every open deposit itself: half its age apart, one to fifteen minutes.
+1Click has no webhook, so that is what settles a crypto deposit. `404
+unknown_deposit` for another account's id.
+
+**Card money is held.** Naira added by card (any checkout not paid by bank transfer
+or USSD) is credited and spendable on bills at once, but cannot be withdrawn, by bank
+or as crypto, until `STARK_CARD_HOLD_HOURS` (72 by default) after it lands: a card
+charge can be disputed after the money has gone. A withdrawal that only the held
+money could cover is refused with `funds_on_hold` (409), whose message says how much
+can leave now.
 
 ### `POST /v1/wallet/deposits/{id}/tx`
 
@@ -649,7 +659,10 @@ crypto deposit locks its own rate when it is quoted, so this is a guide, not a p
 ```
 
 Show the resolved name before sending. `bad_account` (400) when the number does not
-match the bank or is not 10 digits.
+match the bank or is not 10 digits. Each account may look up
+`STARK_BANK_LOOKUPS_PER_DAY` names (20 by default) in any 24 hours, found or not;
+past that, **429** `too_many_lookups`. A malformed number is refused before it
+counts, and a withdrawal's own check of the account it pays does not count.
 
 ### `POST /v1/wallet/withdraw` → `Withdrawal`
 
@@ -669,9 +682,12 @@ Returns **201**. The money leaves the balance at once (an activity entry with
 same reference) → `processing` → `paid`, or `returned` — the money is back in the balance and `note`
 says why. The activity entry becomes `sent` or `failed` to match.
 
-Errors: `bad_amount` (below ₦100), `bad_account`, `insufficient_balance` (409),
-`not_available` (501), `provider_failed` (502). `GET /v1/wallet/withdrawals` lists recent ones,
-bank and crypto together.
+Errors: `bad_amount` (below ₦100), `bad_account`, `paused` (423, the owner paused
+Stark), `daily_limit` (409, over `STARK_WITHDRAW_DAILY_NGN`, ₦200,000 by default, sent
+to banks from this account in 24 hours, not counting returned ones), `funds_on_hold`
+(409, see card holds above), `insufficient_balance` (409), `not_available` (501),
+`provider_failed` (502). Nothing is taken on any refusal. `GET /v1/wallet/withdrawals`
+lists recent ones, bank and crypto together.
 
 ### `POST /v1/wallet/withdraw/crypto` → `Withdrawal`
 
@@ -696,10 +712,12 @@ Stark's rate (rounded down), and NEAR Intents swaps it into the asset and delive
 `crypto.amount` is what arrives: the quote, then the settled amount once `paid`.
 
 Errors: `bad_amount` (below ₦1,000, or too little for that asset), `over_limit` (400,
-over the per-withdrawal cap), `daily_limit` (409, Stark's daily crypto total is used up),
-`bad_asset`, `bad_address` (400, 1Click refused it for that chain),
-`insufficient_balance` (409), `not_available` (501, no treasury key),
-`provider_failed` (502). Nothing is taken on any refusal.
+over the per-withdrawal cap in naira, or in USDC at the current rate), `daily_limit`
+(409, this account's daily crypto total, or Stark's across everyone, is used up),
+`paused` (423), `funds_on_hold` (409), `bad_asset`, `bad_address` (400, 1Click refused
+it for that chain), `insufficient_balance` (409), `not_available` (501, no treasury
+key), `provider_failed` (502, also when Paycrest's rate is out of bounds). Nothing is
+taken on any refusal.
 
 ### `POST /v1/flutterwave/webhook`
 
@@ -707,7 +725,9 @@ Flutterwave calls this, not the app. No bearer token: the `verif-hash` header mu
 the secret hash set in Flutterwave's dashboard (`FLW_SECRET_HASH`); **401**
 `webhook_unverified` otherwise, `webhook_unconfigured` while it is unset. A
 `charge.completed` is never credited from its body: the deposit is verified with
-Flutterwave first. `transfer.completed` settles a withdrawal.
+Flutterwave first. `transfer.completed` is never settled from its body either: the
+transfer is re-read from Flutterwave by its reference, and only that answer marks a
+withdrawal paid or returns its money. A withdrawal already `paid` is never returned.
 
 ### `GET /v1/admin/overview`
 
@@ -1206,3 +1226,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |
 | 2026-11-12 | Receipts no longer carry a `tx_hash` for a `pay` that was only signed offline (a chain configured without `STARK_BROADCAST=1`); it is `null` there, as it already was with no chain. The backend warns at boot when the chain is not broadcasting. No shape changed. |
 | 2026-11-12 | Payment fixes. The monthly cap and `spent_ngn` (`/v1/wallet`, `/v1/state`, `/v1/limits`, `over_cap`) are this calendar month's (UTC) and reset on the 1st; the cap also counts purchases still `pending`, and an account's payments are checked one at a time. A purchase whose order call timed out is looked up at Flutterwave by `request_id` before it is failed. A racing repeat of a top-up `request_id` answers 200 instead of 500. `POST /v1/_stub/reset` is off while any real rail is configured and unlinks only the caller's chats. No shape changed. |
+| 2026-11-12 | Money-rail hardening. Bank and crypto withdrawals answer `paused` (423) while the owner has paused Stark, and new `funds_on_hold` (409) for money a card added in the last `STARK_CARD_HOLD_HOURS` (it still pays bills). Bank withdrawals gain a per-account daily cap (`daily_limit`, 409); crypto gains a per-account daily cap and a per-withdrawal USDC cap (`over_limit`) beside the existing ones. `POST /v1/wallet/bank-accounts/resolve` is limited per account per day (new `too_many_lookups`, 429). `transfer.completed` is re-read from Flutterwave instead of trusting its body, and a `paid` withdrawal is never returned. `GET /v1/wallet/deposits/{id}` asks its rail at most every 15 seconds. Paycrest rates outside the allowed range or move are refused (`provider_failed`). No shape changed. |

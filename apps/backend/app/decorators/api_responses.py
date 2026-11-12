@@ -55,6 +55,8 @@ class ApiResponses:
         "over_limit": 400,
         "below_minimum": 400,
         "daily_limit": 409,
+        "funds_on_hold": 409,
+        "too_many_lookups": 429,
         "authorisation_failed": 502,
         "provider_failed": 502,
         "float_low": 503,

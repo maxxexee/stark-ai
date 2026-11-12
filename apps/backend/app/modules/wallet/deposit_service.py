@@ -19,10 +19,19 @@ A bank deposit is only ever credited from Flutterwave's own verify call, never f
 a webhook body or the redirect's query string: the charge must be `successful`, in
 NGN, for at least the amount asked.
 
+**Card money is held.** A card charge can be disputed weeks later, long after the
+naira has been withdrawn, and a stolen card's chargeback would land on Stark. So a
+charge Flutterwave reports with any `payment_type` other than a push payment
+(`bank_transfer`, `ussd`, `account`) sets the deposit's `hold_until`,
+`STARK_CARD_HOLD_HOURS` ahead, before it is credited. The money pays bills at
+once; withdrawals leave it in the balance until the hold passes.
+
 **Due checks, not a scan.** 1Click has no webhook and a Flutterwave webhook can be
 missed, so each deposit in flight carries its own `next_check_at`, half its age from
 now (one minute at least, fifteen at most). One thread sleeps until the earliest of
 those, so with nothing in flight it makes no calls at all. `/tx` pulls the check in.
+Reading a deposit checks it too, but at most once every `READ_CHECK_SECONDS`, so a
+client polling the route cannot turn into a stream of provider calls.
 
 A crypto deposit is credited at the rate locked when it was quoted (Stark's
 buying rate: Paycrest's market rate less the spread, see `usdc_rate`), and never
@@ -59,6 +68,9 @@ WINDOW_MINUTES = 60
 MIN_CHECK_SECONDS = 60
 MAX_CHECK_SECONDS = 15 * 60
 SOON_SECONDS = 30
+READ_CHECK_SECONDS = 15
+# Push payments: the payer sent the money and cannot claw it back with a dispute.
+UNHELD_PAYMENT_TYPES = frozenset({"bank_transfer", "ussd", "account"})
 UNIQUE_VIOLATION = "23505"
 
 
@@ -67,6 +79,7 @@ class FundingSettings:
     app_url: Optional[str]
     treasury_account: Optional[str]
     usdc_rate: UsdcRate
+    card_hold_hours: int
 
 
 class DepositService:
@@ -233,12 +246,21 @@ class DepositService:
         return [shape(row) for row in rows]
 
     def get(self, account_id: str, deposit_id: str) -> dict[str, Any]:
-        """One deposit, checked with its rail first if it is still open."""
+        """One deposit, checked with its rail first if it is still open and was not
+        read-checked in the last `READ_CHECK_SECONDS` (claimed in one statement, so
+        concurrent reads check it once)."""
         row = self._row(account_id, deposit_id)
-        if row["status"] in ("open", "confirming"):
-            self._check(row)
-            row = self._row(account_id, deposit_id)
-        return shape(row)
+        if row["status"] not in ("open", "confirming"):
+            return shape(row)
+        claimed = self.db.one(
+            "UPDATE deposits SET checked_at = $3 WHERE id = $1 AND user_id = $2"
+            " AND (checked_at IS NULL OR checked_at <= $4) RETURNING *",
+            [deposit_id, account_id, Clock.now_iso(), Clock.since_seconds(READ_CHECK_SECONDS)],
+        )
+        if claimed is None:
+            return shape(row)
+        self._check(claimed)
+        return shape(self._row(account_id, deposit_id))
 
     def submit_tx(self, account_id: str, deposit_id: str, tx_hash: str) -> dict[str, Any]:
         row = self._row(account_id, deposit_id)
@@ -334,6 +356,12 @@ class DepositService:
             return
         paid_in_full = whole_naira(charge["amount"]) >= int(row["amount_ngn"])
         if charge["status"] == "successful" and paid_in_full:
+            if charge.get("payment_type") not in UNHELD_PAYMENT_TYPES:
+                # Before the credit, so the money is never withdrawable unheld.
+                self.db.query(
+                    "UPDATE deposits SET hold_until = $2 WHERE id = $1 AND hold_until IS NULL",
+                    [row["id"], Clock.in_minutes(self.settings.card_hold_hours * 60)],
+                )
             self._credit(row, int(row["amount_ngn"]))
         elif charge["status"] == "failed":
             self._set_status(row["id"], "failed", charge.get("processor_response"))
