@@ -9,7 +9,10 @@ import { ReceiptStats } from "@/components/activity/receipt-stats";
 import { TokenLine } from "@/components/pay/token-line";
 import { Receipts } from "@/lib/receipts/receipts";
 
-/** Opens while `receipt` is set; a bottom sheet on phones, a side panel wider up. */
+/**
+ * Opens while `receipt` is set; a bottom sheet on phones, a side panel wider up.
+ * Keeps showing the last receipt while it animates closed.
+ */
 export function ReceiptSheet({
   receipt,
   onClose,
@@ -18,7 +21,6 @@ export function ReceiptSheet({
   onClose: () => void;
 }) {
   const isMobile = useIsMobile();
-  // Keeps the last receipt on screen while the sheet animates closed.
   const last = useRef(receipt);
   if (receipt) last.current = receipt;
   const shown = receipt ?? last.current;
