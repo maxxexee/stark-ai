@@ -127,6 +127,9 @@ class ApiHarness:
         # write the real row: each harness charges only the fees it names.
         named = {**dict.fromkeys(DEFAULT_FEES_NGN, 0), **(fees or {})}
         self.module.settings_service.fees = lambda: named
+        # No test holds a signer for real money: the treasury key signs USDC on
+        # mainnet whatever STARK_NETWORK says, and dev secrets carry one.
+        self.module.crypto_withdrawals.treasury = None
         # Every agent this app builds talks to the scripted model, never NEAR AI.
         self.module.accounts.build_agent = lambda account_id, limits: agent_layer.Agent(
             model=RegexModel(), toolbox=AccountToolbox(account_id, self.module),

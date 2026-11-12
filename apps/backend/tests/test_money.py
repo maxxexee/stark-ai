@@ -1420,6 +1420,16 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(caught.exception.code, "not_available")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
+    def test_the_money_loop_signs_nothing_on_sandbox_naira(self):
+        # The loop sends every `sending` crypto row in the database, whoever made it.
+        # On a box with a Flutterwave test key (dev, a test run) it must not look.
+        self.service(sandbox_naira=True)
+        with mock.patch.object(self.payouts.db, "query",
+                               side_effect=AssertionError("read withdrawals")) as query:
+            self.payouts.advance()
+        query.assert_not_called()
+        self.assertEqual(self.treasury.signed, [])
+
     def test_naira_from_a_test_key_never_becomes_real_usdc(self):
         # A Flutterwave test key credits checkouts nobody paid for.
         self.service(sandbox_naira=True)
@@ -1479,7 +1489,8 @@ class CryptoWithdrawalTests(MoneyCase):
         self.service()
         self.treasury.send_error = near_tx.NearRpcError("timeout")
         result = self.request()
-        self.db.query("DELETE FROM chain_ops WHERE id = $1", [f"debit:{result['id']}"])
+        self.db.query("DELETE FROM chain_ops WHERE id = $1",
+                      [f"debit:{self.account.id}:{result['id']}"])
         self.chain.calls.clear()
         # One row, not `advance()`: the shared database holds other tests' rows too.
         self.payouts._send(self.payouts._row(result["id"]))

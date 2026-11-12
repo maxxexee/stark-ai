@@ -180,8 +180,14 @@ class CryptoWithdrawalService:
     # --- moving it along ------------------------------------------------------------
 
     def advance(self) -> None:
-        """The money loop's pass: send what is held, then follow each swap to the end."""
-        if self.treasury is None:
+        """The money loop's pass: send what is held, then follow each swap to the end.
+
+        Gated on `available()`, not on the key alone: the pass signs every crypto
+        withdrawal still `sending` in the database, whoever asked for it, and the
+        treasury signs on mainnet. A box whose naira is sandbox money (a Flutterwave
+        test key: a dev server, a test run on the shared dev database) must never
+        turn a row into a real USDC transfer."""
+        if not self.available():
             return
         for row in self.db.query(
             "SELECT * FROM withdrawals WHERE method = 'crypto'"
