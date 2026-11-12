@@ -120,7 +120,33 @@ class VaultService:
                 self._record_vault(user_id, vault_id, "failed", None, str(err))
                 raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
             self._record_vault(user_id, vault_id, "ready", result.tx_hash, None)
+            self._queue_opening_deposit(user_id, vault_id)
             return vault_id
+
+    def _queue_opening_deposit(self, user_id: str, vault_id: str) -> None:
+        """Back a new vault with the balance the wallet already holds, so an existing
+        account can spend from day one. Queued deposits and withdrawals are left out:
+        they reach the vault on their own."""
+        wallet = self.db.one("SELECT balance_ngn FROM wallets WHERE user_id = $1", [user_id])
+        opening = int(wallet["balance_ngn"]) if wallet else 0
+        for op in self.db.query(
+            "SELECT method, args FROM chain_ops WHERE user_id = $1 AND status = 'pending'"
+            " AND method IN ('fund', 'debit')",
+            [user_id],
+        ):
+            amount = int(json.loads(op["args"])["amount_ngn"])
+            opening += -amount if op["method"] == "fund" else amount
+        if opening <= 0:
+            return
+        reference = f"opening:{vault_id}"
+        self.db.query(
+            "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
+            " VALUES ($1, $2, 'fund', $3, 'pending', 0, $4) ON CONFLICT (id) DO NOTHING",
+            [f"fund:{reference}", user_id,
+             json.dumps({"amount_ngn": str(opening), "reference": reference,
+                         "amount_usdc": str(self.usdc_for(opening))}),
+             Clock.now_iso()],
+        )
 
     # --- outbox ---------------------------------------------------------------
 
@@ -189,7 +215,8 @@ class VaultService:
         """Send pending ops in order. Returns how many are still pending.
 
         A user's queue stops at its first transient failure, because order matters:
-        a debit sent ahead of the deposit it depends on would be refused.
+        deposits go first, since a debit sent ahead of the deposit it depends on
+        would be refused, and a deposit never fails for want of balance.
         A user's first money movement creates their vault here; if that fails, the
         ops wait for the next pass.
         """
@@ -214,7 +241,8 @@ class VaultService:
         assert self.chain is not None
         ops = self.db.query(
             "SELECT id, method, args FROM chain_ops"
-            " WHERE user_id = $1 AND status = 'pending' ORDER BY seq",
+            " WHERE user_id = $1 AND status = 'pending'"
+            " ORDER BY CASE WHEN method = 'fund' THEN 0 ELSE 1 END, seq",
             [user_id],
         )
         for op in ops:

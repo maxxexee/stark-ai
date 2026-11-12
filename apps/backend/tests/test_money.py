@@ -139,6 +139,11 @@ class FakeChain:
     def methods(self):
         return [c[0] for c in self.calls]
 
+    def deposits(self):
+        """Deposits other than the balance a new vault opens with."""
+        return [c for c in self.calls
+                if c[0] == "fund" and not c[1]["reference"].startswith("opening:")]
+
 
 class FakeFlutterwave:
     """Flutterwave's checkout, verify, banks, resolve, transfers and balance."""
@@ -492,6 +497,21 @@ class VaultServiceTests(MoneyCase):
         self.vaults.authorise_payment(self.account.id, METER, 1000)
         self.assertEqual(self.chain.calls[-2], ("set_rate", {"usdc_per_kngn": "666667"}))
 
+    def test_a_new_vault_opens_with_the_wallet_balance(self):
+        self.receipts.set_wallet(self.account.id, 7_500, 0)
+        self.vaults.ensure(self.account.id)
+        self.vaults.flush(self.account.id)
+        self.assertEqual(self.chain.calls[-1], ("fund", {
+            "amount_usdc": 5_000_003, "reference": f"opening:{self.vaults.vault_account(self.account.id)}"}))
+
+    def test_the_opening_deposit_leaves_out_what_is_already_queued(self):
+        self.receipts.set_wallet(self.account.id, 7_500, 0)
+        self.chain.fail_with = near_tx.NearRpcError("vault not made yet")
+        self.vaults.credit(self.account.id, 1_500, "dep_1")
+        self.vaults.flush(self.account.id)
+        funds = [c[1] for c in self.chain.calls if c[0] == "fund"]
+        self.assertEqual(sorted(f["amount_usdc"] for f in funds), [1_000_001, 4_000_002])
+
     def test_a_vault_made_under_another_funder_is_not_reused(self):
         old = self.vaults.ensure(self.account.id)
         self.chain.funder_id = "stark.near"
@@ -598,6 +618,7 @@ class PaymentPathTests(MoneyCase):
 
     def test_a_vault_refusal_stops_the_purchase(self):
         self.vaults.ensure(self.account.id)
+        self.vaults.flush(self.account.id)
         self.chain.fail_with = near_tx.ContractRefused("That meter isn't on your list.")
         gateway = ScriptedGateway()
         with self.assertRaises(payment_service.SpendError) as caught:
@@ -652,7 +673,7 @@ class DepositTests(MoneyCase):
         service.on_charge(deposit["id"])
         self.assertEqual(self.wallet()["balance_ngn"], 20_000)
         self.assertEqual(service.get(self.account.id, deposit["id"])["status"], "credited")
-        self.assertEqual([c[0] for c in self.chain.calls].count("fund"), 1)
+        self.assertEqual(len(self.chain.deposits()), 1)
 
     def make_due(self, *deposits):
         for deposit in deposits:
@@ -914,7 +935,7 @@ class WithdrawalTests(MoneyCase):
         returned = service.recent(self.account.id)[0]
         self.assertEqual((returned["status"], returned["note"]),
                          ("returned", "Account is invalid"))
-        self.assertEqual([c[0] for c in self.chain.calls].count("fund"), 1)
+        self.assertEqual(len(self.chain.deposits()), 1)
 
     def test_a_missed_webhook_is_caught_by_the_poll(self):
         service = self.withdrawals()
@@ -1074,7 +1095,7 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(latest["status"], "returned")
         self.assertEqual(latest["note"], "no liquidity")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
-        self.assertEqual([c for c in self.chain.calls if c[0] == "fund"],
+        self.assertEqual(self.chain.deposits(),
                          [("fund", {"amount_usdc": 13_333_340, "reference": f"{result['id']}-r"})])
 
     def test_a_timeout_that_landed_is_not_sent_again(self):
