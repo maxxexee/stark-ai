@@ -21,7 +21,12 @@ Inside "this", in order:
    a retry and the background check (`settle`, from the money loop) can race on the
    same purchase and only one of them settles it.
 
-A held amount is not spend: the monthly cap counts only delivered payments.
+A held amount is not spend: `spent_ngn` counts only delivered payments. The monthly
+cap counts the holds as well (`BillPaymentService`), as the vault did when it signed.
+
+A purchase whose order call got no answer (a timeout) may still have been placed.
+It is looked up at Flutterwave by our own reference before anything is given back,
+so one that went through is charged as delivered rather than refunded.
 """
 
 from __future__ import annotations
@@ -45,8 +50,8 @@ log = logging.getLogger("stark.payments")
 VENDOR_FAILED = "vendor_failed"
 INSUFFICIENT_BALANCE = "insufficient_balance"
 AUTHORISATION_FAILED = "authorisation_failed"
-# A purchase Flutterwave never answered is given up after this long. It leaves the
-# user uncharged whichever way it went; if it did land, Stark paid for it.
+# A purchase Flutterwave never answered, and still holds no record of by our
+# reference, is given up after this long and the user is not charged.
 NO_ANSWER_MINUTES = 30
 
 
@@ -143,17 +148,23 @@ class PaymentService:
         """Ask the vendor about a pending purchase and settle it if it has an answer.
 
         Called by a retry of the same intent and by the money loop. A purchase the
-        vendor never acknowledged is given up after `NO_ANSWER_MINUTES`.
+        vendor never acknowledged is looked up by our reference; only once
+        Flutterwave has no record of it after `NO_ANSWER_MINUTES` is it given up.
         """
         if pending["vendor_ref"] is not None:
             outcome = self.gateway.requery(pending["vendor_ref"], pending["amount_ngn"],
                                            token_required=token_required)
-        elif pending["created_at"] > Clock.ago(minutes=NO_ANSWER_MINUTES):
-            return pending
         else:
-            outcome = VendingOutcome(status=vending_mod.FAILED, code="no_answer",
-                                     message="That payment didn't go through. "
-                                             "Nothing was charged.")
+            found = self.gateway.find(pending["request_id"], pending["amount_ngn"],
+                                      token_required=token_required)
+            if found is not None:
+                outcome = found
+            elif pending["created_at"] > Clock.ago(minutes=NO_ANSWER_MINUTES):
+                return pending
+            else:
+                outcome = VendingOutcome(status=vending_mod.FAILED, code="no_answer",
+                                         message="That payment didn't go through. "
+                                                 "Nothing was charged.")
         return self._apply(user_id, pending, outcome)
 
     def _apply(self, user_id: str, receipt: dict, outcome: VendingOutcome) -> dict:

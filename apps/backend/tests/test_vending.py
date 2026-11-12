@@ -513,6 +513,10 @@ class ScriptedGateway:
         self.requeried.append(request_id)
         return self.outcomes.pop(0)
 
+    def find(self, request_id, amount_ngn, *, token_required):
+        """Flutterwave has no record of a purchase it never answered."""
+        return None
+
 
 def _receipt(
     receipt_id: str,

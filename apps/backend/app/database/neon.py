@@ -520,6 +520,19 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- The service fee on a bill, held and settled with its amount.
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS fee_ngn BIGINT NOT NULL DEFAULT 0;
+
+-- `spent_ngn` is the delivered bill spend of the calendar month in `spent_period`
+-- (`YYYY-MM`, UTC), the month the vault contract caps. Another month reads as 0.
+-- Before this column it was a lifetime total, so those rows are rebuilt once from
+-- the delivered receipts of this month, counted the way `finish` counts them.
+-- (No semicolons or quotes in these comments: `_statements` splits on them.)
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS spent_period TEXT;
+UPDATE wallets SET spent_period = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM'),
+    spent_ngn = (SELECT COALESCE(SUM(r.amount_ngn + r.fee_ngn), 0) FROM receipts r
+        WHERE r.user_id = wallets.user_id AND r.status = 'delivered'
+          AND COALESCE(r.entry_type, 'bill') IN ('bill', 'autotopup')
+          AND LEFT(r.created_at, 7) = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM'))
+    WHERE spent_period IS NULL;
 """
 
 
