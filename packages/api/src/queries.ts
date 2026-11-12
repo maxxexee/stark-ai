@@ -21,6 +21,7 @@ export const queryKeys = {
     ["wallet", "deposit-preview", input] as const,
   deposit: (id: string) => ["wallet", "deposits", id] as const,
   banks: ["wallet", "banks"] as const,
+  linkedChats: ["linked-chats"] as const,
 };
 
 export const stateQuery = () =>
@@ -102,6 +103,10 @@ export const depositQuery = (id: string) =>
     queryKey: queryKeys.deposit(id),
     queryFn: () => api.deposit(id),
   });
+
+/** A chat links from Telegram, not from here, so it shows up when the page is refocused. */
+export const linkedChatsQuery = () =>
+  queryOptions({ queryKey: queryKeys.linkedChats, queryFn: api.linkedChats });
 
 export const banksQuery = () =>
   queryOptions({

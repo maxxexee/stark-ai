@@ -89,7 +89,7 @@ def _update(chat_id=42, text="hello stark what's left", message_id=None,
     update_id = next(_SEQ) if update_id is None else _EXPLICIT + update_id
     message = {
         "message_id": message_id,
-        "chat": {"id": chat_id},
+        "chat": {"id": chat_id, "type": "private"},
         "from": {"id": chat_id, "first_name": first_name},
     }
     if text is not None:
@@ -517,7 +517,7 @@ class TestConcurrentChats(unittest.TestCase):
 
         def update(chat_id, message_id):
             return {"update_id": message_id, "message": {
-                "message_id": message_id, "chat": {"id": chat_id},
+                "message_id": message_id, "chat": {"id": chat_id, "type": "private"},
                 "from": {"id": chat_id}, "text": "stark add 50000 with usdt"}}
 
         victim = threading.Thread(target=adapter.handle_update, args=(update(1, 101),))
@@ -529,3 +529,218 @@ class TestConcurrentChats(unittest.TestCase):
         self.assertIn("ADDR_acct_victim", sent[1][-1])
         self.assertNotIn("ADDR_acct_attacker", "".join(sent[1]))
         self.assertIn("ADDR_acct_attacker", sent[2][-1])
+
+
+class FakeIdentityStore:
+    """Hermetic identities for the gates that run before the database matters."""
+
+    def __init__(self, linked: dict[str, str] | None = None):
+        self.linked = linked or {}
+        self.claimed: set[str] = set()
+
+    def claim_message(self, channel, message_id):
+        if message_id in self.claimed:
+            return False
+        self.claimed.add(message_id)
+        return True
+
+    def resolve(self, channel, channel_user_id):
+        return self.linked.get(channel_user_id)
+
+
+class FakeControls:
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+
+    def pause(self, account_id):
+        self.calls.append(("pause", account_id))
+        return {"paused": True}
+
+    def resume(self, account_id):
+        self.calls.append(("resume", account_id))
+        return {"paused": False}
+
+
+class TestOnlyPrivateMessages(unittest.TestCase):
+    """Only a person's own DM is read. Hermetic: these gates run before any store."""
+
+    def setUp(self):
+        self.agent = FakeAgent()
+        self.ids = FakeIdentityStore({"42": "acct_owner"})
+        self.sent: list[tuple[int, str]] = []
+        self.adapter = TelegramAdapter(
+            agent=self.agent, identities=self.ids, bot_token="1:T", secret="s",
+            send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
+            speak=lambda text: None,
+        )
+
+    def handled(self, update):
+        return self.adapter.handle_update(update)["handled"]
+
+    def test_a_channel_post_is_ignored(self):
+        # A channel post has no `from`: each channel used to count as a fresh
+        # sender, with a fresh budget of link attempts.
+        update = _update(chat_id=-100123, text="/link 123456")
+        post = update.pop("message")
+        post["chat"] = {"id": -100123, "type": "channel"}
+        del post["from"]
+        update["channel_post"] = post
+        self.assertEqual(self.handled(update), "ignored")
+        self.assertEqual(self.sent, [])
+
+    def test_a_group_message_is_ignored_even_from_a_linked_person(self):
+        update = _update(chat_id=42, text="hello stark pay 5000")
+        update["message"]["chat"] = {"id": -555, "type": "group"}
+        self.assertEqual(self.handled(update), "ignored")
+        self.assertEqual(self.agent.transcripts, [])
+
+    def test_an_anonymous_group_admin_is_ignored(self):
+        anon = telegram.GROUP_ANONYMOUS_BOT
+        update = _update(chat_id=anon, text="/link 123456")
+        update["message"]["sender_chat"] = {"id": -555, "type": "supergroup"}
+        self.assertEqual(self.handled(update), "ignored")
+        self.assertEqual(self.handled(_update(chat_id=anon, text="/link 123456")), "ignored")
+        self.assertEqual(self.sent, [])
+
+    def test_a_message_without_a_sender_is_ignored(self):
+        update = _update(chat_id=42)
+        del update["message"]["from"]
+        self.assertEqual(self.handled(update), "ignored")
+
+    def test_a_message_from_someone_other_than_the_chat_is_ignored(self):
+        update = _update(chat_id=42)
+        update["message"]["from"]["id"] = 43
+        self.assertEqual(self.handled(update), "ignored")
+
+    def test_an_edited_message_is_ignored(self):
+        update = _update(chat_id=42, text="hello stark pay 5000")
+        update["edited_message"] = update.pop("message")
+        self.assertEqual(self.handled(update), "ignored")
+        self.assertEqual(self.agent.transcripts, [])
+
+    def test_a_forwarded_message_is_not_an_instruction(self):
+        for field, value in (("forward_origin", {"type": "user"}),
+                             ("forward_from", {"id": 7}),
+                             ("forward_from_chat", {"id": -100}),
+                             ("forward_sender_name", "Someone"),
+                             ("forward_date", 1731400000)):
+            update = _update(chat_id=42, text="hello stark pay 5000 for electricity")
+            update["message"][field] = value
+            self.assertEqual(self.handled(update), "forwarded", field)
+        self.assertEqual(self.agent.transcripts, [])
+        self.assertEqual({text for _, text in self.sent}, {telegram.FORWARDED_REPLY})
+
+    def test_a_forwarded_command_is_not_run(self):
+        self.adapter.controls = FakeControls()
+        update = _update(chat_id=42, text="/pause")
+        update["message"]["forward_date"] = 1731400000
+        self.assertEqual(self.handled(update), "forwarded")
+        self.assertEqual(self.adapter.controls.calls, [])
+
+    def test_dedupe_is_per_update_not_per_chat_message_id(self):
+        # Message ids count per chat: two chats' first messages share an id. The
+        # second chat's /pause used to be dropped as a re-delivery, for good.
+        self.ids.linked["77"] = "acct_other"
+        self.adapter.controls = FakeControls()
+        self.adapter.handle_update(_update(chat_id=42, message_id=1, update_id=1))
+        result = self.adapter.handle_update(
+            _update(chat_id=77, text="/pause", message_id=1, update_id=2))
+        self.assertEqual(result["handled"], "command")
+        self.assertEqual(self.adapter.controls.calls, [("pause", "acct_other")])
+        self.assertEqual(self.adapter.stats["duplicates"], 0)
+
+    def test_a_redelivered_update_is_still_processed_once(self):
+        self.adapter.handle_update(_update(chat_id=42, message_id=3, update_id=3))
+        self.adapter.handle_update(_update(chat_id=42, message_id=3, update_id=3))
+        self.assertEqual(len(self.agent.transcripts), 1)
+        self.assertEqual(self.adapter.stats["duplicates"], 1)
+
+
+class TestResumeIsAppOnly(unittest.TestCase):
+    def setUp(self):
+        self.controls = FakeControls()
+        self.adapter = TelegramAdapter(
+            agent=FakeAgent(), identities=FakeIdentityStore({"42": "acct_owner"}),
+            controls=self.controls, bot_token="1:T", secret="s",
+            send=lambda chat_id, text: True,
+        )
+
+    def test_a_chat_can_pause(self):
+        self.assertIn("Paused", self.adapter._command("/pause", "42", None))
+        self.assertEqual(self.controls.calls, [("pause", "acct_owner")])
+
+    def test_a_chat_cannot_resume(self):
+        # A chat linked with a leaked code must not undo the owner's pause.
+        self.assertEqual(self.adapter._command("/resume", "42", None), telegram.RESUME_IN_APP)
+        self.assertEqual(self.controls.calls, [])
+
+
+class TestLinkCodeLimits(AdapterCase):
+    """Brute force: one live code per account, and a budget across every sender."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.ids.db.query,
+                        "DELETE FROM link_attempts WHERE channel = $1 AND channel_user_id = $2",
+                        list(identity_repository.EVERY_SENDER))
+
+    def test_minting_cancels_the_accounts_earlier_code(self):
+        first = self.ids.issue_code(self.account.id)
+        second = self.ids.issue_code(self.account.id)
+        self.assertIsNone(self.ids.consume_code(first, telegram.CHANNEL, "42"))
+        self.assertEqual(self.ids.consume_code(second, telegram.CHANNEL, "43"), self.account.id)
+
+    def test_a_sender_out_of_attempts_is_refused_even_the_right_code(self):
+        for _ in range(identity_repository.MAX_LINK_ATTEMPTS):
+            self.ids.consume_code("000000", telegram.CHANNEL, "42")
+        code = self.ids.issue_code(self.account.id)
+        self.assertIsNone(self.ids.consume_code(code, telegram.CHANNEL, "42"))
+
+    def test_too_many_failures_across_senders_refuses_every_redeem(self):
+        # Each new Telegram account is a fresh sender, so the per-sender budget
+        # alone never bounded guessing.
+        self.ids.db.query(
+            "INSERT INTO link_attempts (channel, channel_user_id, attempts, window_start)"
+            " VALUES ($1, $2, $3, $4) ON CONFLICT (channel, channel_user_id)"
+            " DO UPDATE SET attempts = EXCLUDED.attempts, window_start = EXCLUDED.window_start",
+            [*identity_repository.EVERY_SENDER,
+             identity_repository.MAX_GLOBAL_FAILED_ATTEMPTS,
+             identity_repository._iso(identity_repository._now())],
+        )
+        code = self.ids.issue_code(self.account.id)
+        self.assertIsNone(self.ids.consume_code(code, telegram.CHANNEL, "42"))
+
+    def test_every_failure_counts_towards_the_shared_budget(self):
+        # Senders of its own: an earlier test can leave "42" locked out, and a
+        # locked-out sender is refused before its guess is even counted.
+        for sender in (f"9{next(_SEQ)}", f"9{next(_SEQ)}"):
+            self.ids.consume_code("000000", telegram.CHANNEL, sender)
+        row = self.ids.db.one(
+            "SELECT attempts FROM link_attempts WHERE channel = $1 AND channel_user_id = $2",
+            list(identity_repository.EVERY_SENDER))
+        self.assertGreaterEqual(int(row["attempts"]), 2)
+
+    def test_old_dedupe_rows_are_pruned(self):
+        self.ids.db.query(
+            "INSERT INTO processed_messages (channel, message_id, processed_at)"
+            " VALUES ($1, $2, $3)", [telegram.CHANNEL, "update:old", "2020-01-01T00:00:00Z"])
+        self.assertTrue(self.ids.claim_message(telegram.CHANNEL, f"update:{next(_SEQ)}"))
+        self.assertIsNone(self.ids.db.one(
+            "SELECT 1 AS found FROM processed_messages WHERE message_id = 'update:old'"))
+
+
+class TestNewLinkIsAnnounced(AdapterCase):
+    def test_the_accounts_other_chats_hear_about_a_new_link(self):
+        self.linked(chat_id=42)
+        code = self.ids.issue_code(self.account.id)
+        self.assertIn("Linked", self.adapter._command(f"/link {code}", "77", "Mallory"))
+        self.assertEqual(len(self.sent), 1)
+        chat, text = self.sent[0]
+        self.assertEqual(chat, 42)
+        self.assertIn("Mallory", text)
+        self.assertIn("Connect", text)
+
+    def test_the_first_link_tells_nobody(self):
+        code = self.ids.issue_code(self.account.id)
+        self.adapter._command(f"/link {code}", "42", "Tunde")
+        self.assertEqual(self.sent, [])

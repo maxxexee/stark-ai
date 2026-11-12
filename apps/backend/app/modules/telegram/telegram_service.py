@@ -1,10 +1,11 @@
 """The Telegram door, wired to this server: one bot, speaking for any linked chat.
 
 A chat speaks for the account whose link code it spent,
-so every read and payment is scoped to that account. `STARK_TG_OWNER_EMAIL` is
-only a fallback for a code minted without an account (the reminder loop's own
-nudges); it is no longer what decides whose money a chat can move. It refuses
-every update until both Telegram secrets are set (fail closed).
+so every read and payment is scoped to that account. The bot owner
+(`STARK_TG_OWNER_ACCOUNT_ID`, else `STARK_TG_OWNER_EMAIL`) only decides where
+operator alerts and the reminder loop's nudges go; it is no longer what decides
+whose money a chat can move. It refuses every update until both Telegram secrets
+are set (fail closed).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class TelegramService:
         self.config = config
         self.db = db
         self.accounts = accounts
+        self.identities = identities
         self._owner_id: Optional[str] = None
         self.adapter = telegram.TelegramAdapter(
             agent=self,
@@ -50,11 +52,23 @@ class TelegramService:
         )
 
     def owner_account_id(self) -> str:
-        """The bot's account, looked up by email. Only a hit is cached, so an owner
-        who signs up after boot is found on the next update."""
+        """The bot's account: the configured id, else the one account with the
+        owner's email **verified**.
+
+        Email sign-up does not verify the address, so matching on email alone let
+        anyone sign up as `STARK_TG_OWNER_EMAIL` and receive the operator alerts.
+        Only a hit is cached, so an owner who signs up after boot is found on the
+        next update.
+        """
+        if self.config.telegram_owner_account_id:
+            return self.config.telegram_owner_account_id
         if self._owner_id is None and self.config.telegram_owner_email:
-            row = self.db.one("SELECT id FROM accounts WHERE lower(email) = $1",
-                              [self.config.telegram_owner_email])
+            row = self.db.one(
+                "SELECT a.id FROM accounts a"
+                ' JOIN neon_auth."user" u ON u.id::text = a.auth_user_id'
+                ' WHERE lower(a.email) = $1 AND u."emailVerified" IS TRUE',
+                [self.config.telegram_owner_email],
+            )
             self._owner_id = row["id"] if row else None
         return self._owner_id or ""
 
@@ -76,7 +90,7 @@ class TelegramService:
         return sent
 
     def tell_owner(self, text: str) -> int:
-        """Operator alerts: the bot owner's (`STARK_TG_OWNER_EMAIL`) linked chats."""
+        """Operator alerts: the bot owner's (`owner_account_id`) linked chats."""
         owner = self.owner_account_id()
         return self.tell(owner, text) if owner else 0
 
@@ -91,6 +105,30 @@ class TelegramService:
             raise ApiError(err.status, err.code, err.message) from err
         payload["user_id"] = account_id
         return payload
+
+    def linked_chats(self, account_id: str) -> list[dict[str, Any]]:
+        """The chats that speak for this account, as the Connect screen lists them.
+
+        `chat_hint` keeps only the last four digits for display. The full id comes
+        back too, because it is what Remove names; it is this account's own chat.
+        """
+        return [
+            {
+                "channel": ident["channel"],
+                "channel_user_id": ident["channel_user_id"],
+                "chat_hint": f"•••• {ident['channel_user_id'][-4:]}",
+                "display_name": ident["display_name"],
+                "linked_at": ident["linked_at"],
+            }
+            for ident in self.identities.identities_for(account_id)
+        ]
+
+    def unlink_chat(self, account_id: str, channel: str, channel_user_id: str) -> dict[str, Any]:
+        """Remove a chat from this account, from the app. Another account's chat is
+        `unknown_identity`, exactly like one that does not exist."""
+        if not self.identities.unlink_for(account_id, channel, channel_user_id):
+            raise ApiError(404, "unknown_identity", "No linked chat with that id.")
+        return {"unlinked": True, "channel": channel, "channel_user_id": channel_user_id}
 
     def webhook(self, raw: bytes, secret_header: Optional[str]) -> dict[str, Any]:
         """Verified before parsing: the secret check runs on exactly what was sent."""

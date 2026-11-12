@@ -27,7 +27,8 @@ class OpenApiTest(unittest.TestCase):
         for route in ("GET /v1/state", "POST /v1/bills", "PATCH /v1/bills/{bill_id}",
                       "POST /v1/payments", "GET /v1/plans", "PATCH /v1/limits",
                       "POST /v1/wallet/topup", "POST /v1/voice", "GET /v1/speak/stream",
-                      "POST /v1/tg/webhook", "POST /v1/link/code"):
+                      "POST /v1/tg/webhook", "POST /v1/link/code", "GET /v1/link/identities",
+                      "DELETE /v1/link/identities/{channel}/{channel_user_id}"):
             self.assertIn(route, documented)
         # A test seam, not part of the product.
         self.assertNotIn("POST /v1/_stub/reset", documented)

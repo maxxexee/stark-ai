@@ -17,6 +17,7 @@ import type {
   Limits,
   LimitsPatch,
   LinkCode,
+  LinkedChat,
   NewBill,
   Payee,
   PaymentInput,
@@ -142,6 +143,12 @@ export const api = {
   logout: () => request<{ logged_out: true }>("POST", "/v1/auth/logout", {}),
   /** A fresh single-use code for linking a chat. Every call mints a new one. */
   linkCode: () => request<LinkCode>("POST", "/v1/link/code", {}),
+  linkedChats: () => request<LinkedChat[]>("GET", "/v1/link/identities"),
+  unlinkChat: (chat: LinkedChat) =>
+    request<{ unlinked: true; channel: string; channel_user_id: string }>(
+      "DELETE",
+      `/v1/link/identities/${encodeURIComponent(chat.channel)}/${encodeURIComponent(chat.channel_user_id)}`,
+    ),
   voice: (transcript_hint: string, opts?: { speak?: boolean }) =>
     request<VoiceReply>("POST", "/v1/voice", {
       transcript_hint,

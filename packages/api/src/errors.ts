@@ -28,6 +28,7 @@ export type ApiErrorCode =
   | "daily_limit"
   | "float_low"
   | "authorisation_failed"
+  | "unknown_identity"
   | "network";
 
 /** Every non-2xx response. Branch on `code`; `message` is copy and may change. */
@@ -92,6 +93,8 @@ export function errorCopy(error: unknown): string {
       return error.message;
     case "bad_asset":
       return "Pick what you’re paying with.";
+    case "unknown_identity":
+      return "That chat is no longer linked.";
     case "network":
       return "Can’t reach Stark right now. Check your connection.";
     default:
