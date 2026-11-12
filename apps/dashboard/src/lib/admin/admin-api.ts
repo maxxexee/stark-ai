@@ -56,6 +56,17 @@ export interface VaultRow {
   last_error: string | null;
 }
 
+/** A chain op that has not gone through: what holds a user's payments up, and why. */
+export interface StuckChainOp {
+  id: string;
+  user_id: string;
+  method: string;
+  status: "pending" | "failed";
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+}
+
 export interface AdminOverview {
   treasury: TreasuryReport;
   deposits: StatusCount[];
@@ -65,6 +76,8 @@ export interface AdminOverview {
   /** null when no chain is configured and payments book off-chain. */
   chain: ChainSetup | null;
   vaults: VaultRow[];
+  /** Absent from an API deployed before it was added; the dashboard and API deploy apart. */
+  chain_ops_stuck?: StuckChainOp[];
   /** The server's outbound IP, for Flutterwave's whitelist; null when it couldn't be read. */
   egress_ip: string | null;
   /** Absent from an API deployed before fees existed; the dashboard and API deploy apart. */

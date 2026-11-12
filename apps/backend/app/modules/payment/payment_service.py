@@ -26,6 +26,7 @@ A held amount is not spend: the monthly cap counts only delivered payments.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Callable
@@ -37,6 +38,8 @@ from app.modules.vault.vault_service import AuthorisationFailed, VaultService
 from app.modules.vending import vending as vending_mod
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.vending.vending import VendingGateway, VendingOutcome
+
+log = logging.getLogger("stark.payments")
 
 # Errors the HTTP layer turns into a response.
 VENDOR_FAILED = "vendor_failed"
@@ -122,6 +125,8 @@ class PaymentService:
                     user_id, str(bill.get("reference") or ""), total_ngn, approved=approved
                 )
             except AuthorisationFailed as err:
+                log.warning("payment not authorised user=%s receipt=%s bill=%s total=%s: %s",
+                            user_id, receipt["id"], bill.get("id"), total_ngn, err.message)
                 self.store.drop_hold(user_id, receipt["id"])
                 raise SpendError(AUTHORISATION_FAILED, err.message) from err
             if authorisation is not None:  # None: no chain configured

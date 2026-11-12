@@ -433,7 +433,9 @@ class TelegramAdapter:
                         reply="I can only read text and voice notes for now.")
 
         self.stats["agent"] += 1
-        self.log(f"telegram user={user_id} transcript={transcript!r}")
+        # What was said stays out of the platform's logs: it can carry phone and
+        # meter numbers. The turn log (operator-only) keeps it when switched on.
+        self.log(f"telegram turn user={user_id} voice={from_voice} chars={len(said)}")
         # The chat is the thread: a bare "500" is only an amount because the
         # previous line asked how much. Memory is per chat, so two people
         # messaging the bot cannot answer each other's questions.

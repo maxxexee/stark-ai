@@ -34,6 +34,7 @@ payments book off-chain, as they always have offline.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ from app.modules.account.account_service import AccountService
 from app.modules.agent import agent as agent_layer
 from app.modules.chain import near_tx
 from app.modules.chain.vault_chain import ChainResult, VaultChain
+
+log = logging.getLogger("stark.vault")
 
 
 class AuthorisationFailed(Exception):
@@ -117,6 +120,7 @@ class VaultService:
                     meters=sorted(limits.allowed_meters),
                 )
             except (near_tx.NearRpcError, near_tx.ContractRefused) as err:
+                log.error("vault creation failed user=%s vault=%s: %s", user_id, vault_id, err)
                 self._record_vault(user_id, vault_id, "failed", None, str(err))
                 raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
             self._record_vault(user_id, vault_id, "ready", result.tx_hash, None)
@@ -237,6 +241,15 @@ class VaultService:
             else ("WHERE status = 'pending'", [])
         return int(self.db.value(f"SELECT COUNT(*) FROM chain_ops {where}", params) or 0)
 
+    def stuck_ops(self, user_id: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Chain ops that have not gone through, oldest first: still pending, or
+        refused by the contract. What blocks a user's payments, and why."""
+        where, params = ("WHERE status <> 'done' AND user_id = $1", [user_id]) if user_id \
+            else ("WHERE status <> 'done'", [])
+        return self.db.query(
+            "SELECT id, user_id, method, status, attempts, last_error, created_at"
+            f" FROM chain_ops {where} ORDER BY seq LIMIT {int(limit)}", params)
+
     def _flush_one(self, user_id: str, vault_id: str) -> None:
         assert self.chain is not None
         ops = self.db.query(
@@ -249,9 +262,13 @@ class VaultService:
             try:
                 result = self._send_op(vault_id, op["method"], json.loads(op["args"]))
             except near_tx.ContractRefused as err:
+                log.error("chain op %s (%s) refused by the contract, marked failed: %s",
+                          op["id"], op["method"], err.message)
                 self._finish(op["id"], "failed", None, err.message)
                 continue
             except near_tx.NearRpcError as err:
+                log.warning("chain op %s (%s) for user=%s not sent, will retry: %s",
+                            op["id"], op["method"], user_id, err)
                 self.db.query(
                     "UPDATE chain_ops SET attempts = attempts + 1, last_error = $2"
                     " WHERE id = $1",
@@ -300,17 +317,30 @@ class VaultService:
         vault_id = self.ensure(user_id)
         assert vault_id is not None
         if self.flush(user_id):
+            # The queue runs in order, so a payment cannot go ahead of a deposit that
+            # has not reached the vault yet. Say which op is stuck and why: an
+            # unfunded treasury reads exactly like this from the outside.
+            for op in self.stuck_ops(user_id):
+                log.warning("payment blocked user=%s vault=%s: %s %s still pending after "
+                            "%s attempt(s): %s", user_id, vault_id, op["method"], op["id"],
+                            op["attempts"], op["last_error"] or "not sent yet")
             raise AuthorisationFailed(_COULD_NOT_AUTHORISE)
         try:
             self._sync_policy(vault_id, self.accounts.state(user_id).limits)
             result = (self.chain.pay_approved(vault_id, meter, amount_ngn) if approved
                       else self.chain.pay(vault_id, meter, amount_ngn))
         except near_tx.ContractRefused as err:
+            log.info("payment refused by the vault user=%s vault=%s: %s",
+                     user_id, vault_id, err.message)
             raise AuthorisationFailed(f"{err.message} Nothing was charged.") from err
         except near_tx.NearRpcError as err:
+            log.warning("payment authorisation failed user=%s vault=%s: rpc %s",
+                        user_id, vault_id, err)
             raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
         outcome = result.value if isinstance(result.value, dict) else {}
         if result.broadcast and not outcome.get("settled"):
+            log.warning("payment not settled user=%s vault=%s tx=%s",
+                        user_id, vault_id, result.tx_hash)
             raise AuthorisationFailed(_NOT_SETTLED)
         return PaymentAuthorisation(result.tx_hash, outcome.get("payment_id"))
 

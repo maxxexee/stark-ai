@@ -142,7 +142,7 @@ class AppModule:
             near_tx.NearRpc(near_tx.MAINNET_RPC),
             TreasuryWatch(money.watch, self.telegram.tell_owner),
         )
-        self.admin = AdminService(db, self.treasury, self.vaults.chain, self.settings_service)
+        self.admin = AdminService(db, self.treasury, self.vaults, self.settings_service)
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)
         self.state = StateService(self.accounts, self.wallet, self.telemetry, self.bills)

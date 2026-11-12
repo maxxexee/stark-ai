@@ -14,6 +14,7 @@ from app.database import neon
 from app.modules.chain.vault_chain import VaultChain
 from app.modules.settings.settings_service import SettingsService
 from app.modules.treasury.treasury_service import TreasuryService
+from app.modules.vault.vault_service import VaultService
 
 IN_FLIGHT_LIMIT = 50
 VAULT_LIMIT = 100
@@ -22,10 +23,11 @@ EGRESS_ECHO = "https://api.ipify.org"
 
 class AdminService:
     def __init__(self, db: neon.Database, treasury: TreasuryService,
-                 chain: Optional[VaultChain], settings: SettingsService) -> None:
+                 vaults: VaultService, settings: SettingsService) -> None:
         self.db = db
         self.treasury = treasury
-        self.chain = chain
+        self.vaults = vaults
+        self.chain: Optional[VaultChain] = vaults.chain
         self.settings = settings
 
     def overview(self) -> dict[str, Any]:
@@ -54,6 +56,7 @@ class AdminService:
                 " ORDER BY created_at DESC LIMIT $1",
                 [VAULT_LIMIT],
             )
+            stuck = pool.submit(self.vaults.stuck_ops) if self.vaults.enabled else None
             ip = pool.submit(egress_ip)
             fees = pool.submit(self.settings.fees)
         treasury = report.result()
@@ -70,6 +73,8 @@ class AdminService:
                 "usdc": self.chain.usdc_id,
             },
             "vaults": vaults.result(),
+            # What is holding payments up on chain, with the chain's own reason.
+            "chain_ops_stuck": stuck.result() if stuck is not None else [],
             "egress_ip": ip.result(),
             "fees_ngn": fees.result(),
         }

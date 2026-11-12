@@ -7,11 +7,14 @@ always in `/v1/state` and the agent's snapshot, so nothing depends on this loop.
 
 from __future__ import annotations
 
+import logging
 import threading
 
 from app.modules.account.account_service import AccountService
 from app.modules.reminder import reminders
 from app.modules.telegram.telegram_service import TelegramService
+
+log = logging.getLogger("stark.reminders")
 
 
 class ReminderService:
@@ -58,8 +61,8 @@ class ReminderService:
                     owner = self.telegram.owner_account_id()
                     if owner:  # no account configured: nowhere to push
                         self.push_due(owner)
-                except Exception as err:  # a broken tick must not kill the server
-                    print(f"  reminder tick failed: {err}")
+                except Exception:  # a broken tick must not kill the server
+                    log.exception("reminder tick failed")
 
         threading.Thread(target=run, daemon=True, name="reminders").start()
         return stop
