@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from unittest import mock
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -99,7 +100,7 @@ class FakeChain:
         self.payment_id += 1
         self.calls.append(("pay", meter, amount))
         return ChainResult("cd" * 32, {"payment_id": self.payment_id,
-                                       "settled": self.settled}, True)
+                                       "settled": self.settled}, self.broadcast)
 
     def pay_approved(self, vault_id, meter, amount):
         self._maybe_fail()
@@ -417,6 +418,21 @@ class VaultChainTests(unittest.TestCase):
         self.assertFalse(chain.broadcast)
         self.assertEqual(chain.code, "global:stark.testnet")
         self.assertEqual(chain.storage_yocto, 2 * 10 ** 23)
+        self.assertIsNone(ChainResult("ab", None, False).sent_tx_hash)
+        self.assertEqual(ChainResult("ab", None, True).sent_tx_hash, "ab")
+
+    def test_a_dry_chain_says_so_at_boot(self):
+        keys = {
+            "STARK_FUNDER_ACCOUNT": "stark.testnet",
+            "STARK_FUNDER_KEY": "ed25519:" + near_tx.b58encode(bytes(range(32))),
+            "STARK_AGENT_KEY": "ed25519:" + near_tx.b58encode(bytes(range(1, 33))),
+        }
+        with self.assertLogs("stark.vault", "WARNING") as logged:
+            vault_chain.chain_from_env(keys)
+        self.assertIn("on-chain enforcement is off", logged.output[0])
+        with mock.patch.object(vault_chain.log, "warning") as warning:
+            vault_chain.chain_from_env({**keys, "STARK_BROADCAST": "1"})
+        warning.assert_not_called()
 
 
 # --- the vault and Postgres stay in step ------------------------------------------
@@ -652,6 +668,13 @@ class PaymentPathTests(MoneyCase):
         receipt = self.service(gateway).pay(self.account.id, ELECTRICITY, 5000)
         self.assertEqual(receipt["tx_hash"], "cd" * 32)
         self.assertEqual(self.wallet()["balance_ngn"], 59_200)
+        self.assertEqual(self.chain.methods()[-1], "pay")
+
+    def test_a_dry_chain_leaves_no_tx_hash_on_the_receipt(self):
+        self.chain.broadcast = False
+        gateway = ScriptedGateway(vending.VendingOutcome(status=vending.DELIVERED, token="1234"))
+        receipt = self.service(gateway).pay(self.account.id, ELECTRICITY, 5000)
+        self.assertIsNone(receipt["tx_hash"], "a dry signature names no real transaction")
         self.assertEqual(self.chain.methods()[-1], "pay")
 
     def test_a_vendor_failure_refunds_the_vault(self):

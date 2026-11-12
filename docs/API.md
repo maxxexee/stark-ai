@@ -341,8 +341,10 @@ Two more refusals happen before anything is recorded or bought (2026-11-03):
   onchain caps refused it, or the chain could not be reached. `message` is plain
   English and ends "Nothing was charged."
 
-`tx_hash` is the vault's `pay` transaction whenever a chain is configured, on every
-path (the app's own `POST /v1/payments` included), not only on agent payments.
+`tx_hash` is the vault's `pay` transaction whenever a chain is configured and
+broadcasting (`STARK_BROADCAST=1`), on every path (the app's own `POST /v1/payments`
+included), not only on agent payments. With the chain configured but not broadcasting,
+`pay` is only signed offline, so `tx_hash` is `null`: there is no transaction to link.
 
 ### `GET /v1/activity`
 
@@ -1109,3 +1111,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
+| 2026-11-12 | Receipts no longer carry a `tx_hash` for a `pay` that was only signed offline (a chain configured without `STARK_BROADCAST=1`); it is `null` there, as it already was with no chain. The backend warns at boot when the chain is not broadcasting. No shape changed. |

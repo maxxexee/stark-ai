@@ -68,7 +68,9 @@ class AuthorisationFailed(Exception):
 
 @dataclass(frozen=True)
 class PaymentAuthorisation:
-    tx_hash: str
+    # None when the chain is not broadcasting: a dry signature names no transaction,
+    # so a receipt must not link one.
+    tx_hash: Optional[str]
     # None when the transaction was signed dry and never sent.
     payment_id: Optional[int]
 
@@ -130,7 +132,7 @@ class VaultService:
                 log.error("vault creation failed user=%s vault=%s: %s", user_id, vault_id, err)
                 self._record_vault(user_id, vault_id, "failed", None, str(err))
                 raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
-            self._record_vault(user_id, vault_id, "ready", result.tx_hash, None)
+            self._record_vault(user_id, vault_id, "ready", result.sent_tx_hash, None)
             self._queue_opening_deposit(user_id, vault_id)
             return vault_id
 
@@ -287,7 +289,7 @@ class VaultService:
                     [op["id"], str(err)[:300]],
                 )
                 return
-            self._finish(op["id"], "done", result.tx_hash, None)
+            self._finish(op["id"], "done", result.sent_tx_hash, None)
 
     def _send_op(self, vault_id: str, method: str, args: dict) -> ChainResult:
         """Ops written before the vault held USDC carry naira only; they are priced now."""
@@ -354,7 +356,7 @@ class VaultService:
             log.warning("payment not settled user=%s vault=%s tx=%s",
                         user_id, vault_id, result.tx_hash)
             raise AuthorisationFailed(_NOT_SETTLED)
-        return PaymentAuthorisation(result.tx_hash, outcome.get("payment_id"))
+        return PaymentAuthorisation(result.sent_tx_hash, outcome.get("payment_id"))
 
     def _sync_policy(self, vault_id: str, limits: agent_layer.Limits) -> None:
         """Push the account's caps, meters and the naira rate where the vault differs.

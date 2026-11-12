@@ -19,7 +19,10 @@ inside a user's caps and do nothing more.
 
 Dry by default: with `STARK_BROADCAST` unset, transactions are
 signed offline (nonce 0, zero block hash) and never sent, so the money paths run
-without a network. A dry signature proves the encoding, not that the chain agreed.
+without a network. A dry signature proves the encoding, not that the chain agreed,
+so nothing enforces the caps on chain: `chain_from_env` warns at boot, and a dry
+hash is never stored (`ChainResult.sent_tx_hash`) — a receipt carries no tx hash
+rather than one for a transaction that never existed.
 
 Configuration (env only, never commit any of it):
 
@@ -38,6 +41,7 @@ Configuration (env only, never commit any of it):
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
@@ -46,6 +50,8 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from app.modules.chain import near_tx
+
+log = logging.getLogger("stark.vault")
 
 YOCTO_PER_NEAR = 10 ** 24
 CREATE_GAS = 100_000_000_000_000
@@ -70,6 +76,12 @@ class ChainResult:
     tx_hash: str
     value: object
     broadcast: bool
+
+    @property
+    def sent_tx_hash(self) -> Optional[str]:
+        """The hash, only if the transaction was sent. A dry signature's hash names a
+        transaction that never reached the chain, so nothing may store or link it."""
+        return self.tx_hash if self.broadcast else None
 
 
 @dataclass
@@ -171,8 +183,8 @@ class VaultChain:
 
     def pay_approved(self, vault_id: str, meter: str, amount_ngn: int) -> ChainResult:
         """An over-the-cap payment the owner approved. Owner-signed, so it only works
-        while Stark's funder is still the vault's owner — after `set_owner`, the
-        user's own key would have to approve it."""
+        while Stark's funder is still the vault's owner — once `accept_owner` hands
+        it over, the user's own key would have to approve it."""
         action = near_tx.function_call_action("pay_approved",
                                               near_tx.pay_args(meter, amount_ngn))
         return self._send(self.funder_id, self.funder_key, vault_id, [action])
@@ -263,6 +275,11 @@ def chain_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[VaultCha
     code = (source.get("STARK_VAULT_CODE") or f"global:{funder_id}").strip()
     default_storage = "0.2" if code.startswith("global:") else "3"
     storage = Decimal(source.get("STARK_VAULT_STORAGE_NEAR") or default_storage)
+    broadcast = (source.get("STARK_BROADCAST") or "").strip().lower() in ("1", "true", "yes")
+    if not broadcast:
+        # Said once at boot: a dry chain looks configured, yet no cap binds on chain.
+        log.warning("STARK_BROADCAST is off: vault transactions are signed but never sent, "
+                    "so on-chain enforcement is off and receipts carry no tx hash")
 
     return VaultChain(
         rpc=near_tx.NearRpc(near_tx.MAINNET_RPC if network == "mainnet"
@@ -274,8 +291,7 @@ def chain_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[VaultCha
         usdc_id=(source.get("STARK_USDC_TOKEN") or USDC_TOKENS[network]).strip(),
         code=code,
         storage_yocto=int(storage * YOCTO_PER_NEAR),
-        broadcast=(source.get("STARK_BROADCAST") or "").strip().lower()
-        in ("1", "true", "yes"),
+        broadcast=broadcast,
         network=network,
     )
 
