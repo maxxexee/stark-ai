@@ -67,7 +67,8 @@ export interface AdminOverview {
   vaults: VaultRow[];
   /** The server's outbound IP, for Flutterwave's whitelist; null when it couldn't be read. */
   egress_ip: string | null;
-  fees_ngn: Fees;
+  /** Absent from an API deployed before fees existed; the dashboard and API deploy apart. */
+  fees_ngn?: Fees;
 }
 
 /** Stark's service fee on each kind of bill, in naira. */

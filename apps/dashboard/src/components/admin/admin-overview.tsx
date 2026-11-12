@@ -50,7 +50,13 @@ export function AdminOverview({
       {data ? (
         <>
           <AdminPots report={data.treasury} />
-          <AdminFees key={JSON.stringify(data.fees_ngn)} adminKey={adminKey} fees={data.fees_ngn} />
+          {data.fees_ngn ? (
+            <AdminFees
+              key={JSON.stringify(data.fees_ngn)}
+              adminKey={adminKey}
+              fees={data.fees_ngn}
+            />
+          ) : null}
           <div className="grid gap-6 md:grid-cols-2">
             <AdminStatusTable title="Deposits" rows={data.deposits} />
             <AdminStatusTable title="Withdrawals" rows={data.withdrawals} />
