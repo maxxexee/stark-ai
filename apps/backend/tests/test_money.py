@@ -380,6 +380,15 @@ class VaultChainTests(unittest.TestCase):
         self.assertEqual(init["usdc_per_kngn"], "666667")
         self.assertEqual(init["allowed_meters"], [METER])
 
+    def test_a_short_treasury_leaves_the_deposit_queued_not_failed(self):
+        class Rpc:
+            def view(self, account_id, method, args):
+                return "999"
+
+        chain = self.chain(rpc=Rpc(), broadcast=True)
+        with self.assertRaises(near_tx.NearRpcError):
+            chain.deposit("u-1.stark.testnet", 1_000, "dep_1")
+
     def test_pay_is_signed_as_the_vault_with_the_agent_key(self):
         captured = {}
         original = near_tx.sign_transaction

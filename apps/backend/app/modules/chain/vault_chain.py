@@ -144,7 +144,17 @@ class VaultChain:
 
     def deposit(self, vault_id: str, amount_usdc: int, msg: str) -> ChainResult:
         """Send the treasury's USDC into a vault. `msg` is the deposit's reference, or
-        `refund:<payment_id>` to return a failed bill's USDC."""
+        `refund:<payment_id>` to return a failed bill's USDC.
+
+        A treasury short of USDC raises `NearRpcError`, so the deposit stays queued and
+        lands once the treasury is topped up, instead of failing for good.
+        """
+        if self.broadcast:
+            held = int(self.rpc.view(self.usdc_id, "ft_balance_of",  # type: ignore[arg-type]
+                                     {"account_id": self.funder_id}))
+            if held < amount_usdc:
+                raise near_tx.NearRpcError(
+                    f"treasury holds {held} USDC units, a deposit needs {amount_usdc}")
         action = near_tx.function_call_action(
             "ft_transfer_call",
             near_tx.json_args({"receiver_id": vault_id, "amount": str(amount_usdc),
