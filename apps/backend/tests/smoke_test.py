@@ -322,7 +322,7 @@ status, pay, _ = call("POST", "/v1/voice",
 check("voice pay returns token", status == 200 and bool(pay.get("token")),
       str(pay.get("reply"))[:80])
 
-# The reply comes back spoken when the TTS sidecar is up (STARK_TTS_URL), and
+# The reply comes back spoken when ElevenLabs is keyed (ELEVENLABS_API_KEY), and
 # the additive `audio` field is present either way — null when voice is off.
 audio_field = answer.get("audio", "missing")
 check("voice reply carries audio field", audio_field != "missing")
@@ -333,7 +333,7 @@ check("audio is a WAV data URL or null",
       ), str(audio_field)[:60])
 if isinstance(audio_field, str) and audio_field.startswith("data:audio/wav;base64,"):
     spoken = base64.b64decode(audio_field.split(",", 1)[1])
-    check("sidecar audio decodes to a real WAV",
+    check("spoken audio decodes to a real WAV",
           spoken[:4] == b"RIFF" and len(spoken) > 1000, f"len={len(spoken)}")
 check("ignored reply never carries audio", ig.get("audio") is None, str(ig.get("audio"))[:40])
 

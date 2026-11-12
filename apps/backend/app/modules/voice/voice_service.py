@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import itertools
-import os
 import time
 from typing import Any, Iterator, Optional
 
@@ -111,7 +110,8 @@ class VoiceService:
 
         Peeks at the first chunk: a key that cannot pay for the call, or one that is
         not there, must not reach the client as a 200 of nothing. Falls back to a
-        whole local clip, and refuses with 503 when no voice exists at all.
+        whole buffered clip, and refuses with 503 when no voice exists at all, so
+        the client keeps the text it already shows.
         """
         text = text.strip()
         if not text:
@@ -123,9 +123,9 @@ class VoiceService:
             turnlog.record(turnlog.speak(text=text, ms=TurnLogger.ms(since), reason=tts.OK,
                                          stream=True, provider="elevenlabs"))
             return "audio/mpeg", itertools.chain([first], chunks)
-        wav, why = tts.synthesize(text)   # Kokoro (or nothing at all)
+        wav, why = tts.synthesize(text)
         turnlog.record(turnlog.speak(text=text, ms=TurnLogger.ms(since), reason=why,
-                                     stream=True, provider="kokoro" if wav else None))
+                                     stream=True, provider="elevenlabs" if wav else None))
         if wav:
             return "audio/wav", iter([wav])
         raise ApiError(503, "no_voice", "No voice provider is available.")
@@ -136,11 +136,5 @@ class VoiceService:
 
     @staticmethod
     def _provider(why: str) -> str:
-        """The voice believed to have spoken: which one is *configured*.
-
-        `tts.synthesize` reports ok/failure, not which provider answered, so this is
-        a first-configured guess, not a measurement. `why` when nothing spoke.
-        """
-        if why != tts.OK:
-            return why
-        return "elevenlabs" if os.environ.get("ELEVENLABS_API_KEY") else "kokoro"
+        """The voice that spoke, or `why` when nothing did."""
+        return "elevenlabs" if why == tts.OK else why

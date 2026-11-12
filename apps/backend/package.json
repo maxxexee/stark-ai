@@ -7,7 +7,6 @@
     "setup": "python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt",
     "dev": "infisical secrets-manager run --env=dev --path=/backend --silent -- .venv/bin/python -m app",
     "test": ".venv/bin/python -m unittest discover -s tests -t .",
-    "smoke": ".venv/bin/python -m tests.smoke_test",
-    "tts": "exec ../../.venv-tts/bin/python -u tts_server.py"
+    "smoke": ".venv/bin/python -m tests.smoke_test"
   }
 }

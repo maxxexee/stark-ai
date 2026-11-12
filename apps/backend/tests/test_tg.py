@@ -126,7 +126,7 @@ class AdapterCase(unittest.TestCase):
             send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
             on_turn=self.turns.append,
             # Voice stays off unless a test turns it on: unit tests never
-            # reach for a sidecar, whatever is in the environment.
+            # reach for a voice provider, whatever is in the environment.
             speak=lambda text: None,
         )
 

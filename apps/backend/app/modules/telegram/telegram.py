@@ -26,9 +26,9 @@ Nothing here is live until `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`
 are set. With no `NEAR_AI_API_KEY`, voice notes are answered with a plain
 sentence saying they cannot be heard — never a guessed transcript.
 
-A **voice note gets a voice note back**: when the reply answers one, the local
-TTS sidecar (`tts.voice_note`, `STARK_TTS_URL`) speaks it and it ships as
-OGG/Opus via `sendVoice`. Every failure of that path — no sidecar, no ffmpeg,
+A **voice note gets a voice note back**: when the reply answers one,
+ElevenLabs (`tts.voice_note`, `ELEVENLABS_API_KEY`) speaks it and it ships as
+OGG/Opus via `sendVoice`. Every failure of that path — no key, no ffmpeg,
 a Telegram refusal — lands on the ordinary text reply, because a spoken
 answer is a delight, not a dependency. Typed messages keep typed replies.
 """
@@ -344,7 +344,7 @@ class TelegramAdapter:
     def _deliver(self, chat_id: int, text: str, *, spoken: bool) -> None:
         """Voice note when Stark was spoken to and the voice works; text otherwise.
 
-        Fail-closed like everything else here: no sidecar, no ffmpeg, or a
+        Fail-closed like everything else here: no voice, no ffmpeg, or a
         Telegram refusal, and the reply still arrives — as text.
         """
         if spoken:

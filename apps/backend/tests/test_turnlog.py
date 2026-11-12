@@ -257,7 +257,7 @@ class ServerTurnLogTests(unittest.TestCase):
         self.assertEqual(entry["spoken"], "You have 64,200 naira.")
         self.assertFalse(entry["stream"])
         self.assertEqual(entry["tts"], "ok")
-        self.assertIn(entry["provider"], {"elevenlabs", "kokoro"})
+        self.assertEqual(entry["provider"], "elevenlabs")
         self.assertIsInstance(entry["ms"], int)
 
 
