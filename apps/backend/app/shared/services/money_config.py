@@ -50,7 +50,6 @@ class MoneyConfig:
             watch=WatchSettings(
                 float_low_ngn=float_low_ngn,
                 treasury_low_usdc=Decimal(source.get("STARK_TREASURY_LOW_USDC") or "100"),
-                summary_hour=int(source.get("STARK_SUMMARY_HOUR") or 8),
             ),
             withdrawals=WithdrawalSettings(
                 daily_ngn=int(source.get("STARK_WITHDRAW_DAILY_NGN") or 200_000),

@@ -40,6 +40,7 @@ from app.modules.telegram.telegram_service import TelegramService
 from app.modules.telemetry.telemetry_repository import TelemetryRepository
 from app.modules.telemetry.telemetry_service import TelemetryService
 from app.modules.treasury.treasury_service import TreasuryService
+from app.modules.treasury.operator_alerts import OperatorAlerts
 from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.modules.vault.vault_service import VaultService
 from app.modules.vending.catalog import CATALOG
@@ -132,6 +133,7 @@ class AppModule:
         self.telegram = TelegramService(
             config, db, self.identities, self.accounts, self.controls
         )
+        self.operator_alerts = OperatorAlerts(db)
         self.treasury = TreasuryService(
             db,
             self.vaults,
@@ -143,9 +145,10 @@ class AppModule:
             money.funding.treasury_account,
             self.usdc_rate,
             near_tx.NearRpc(near_tx.MAINNET_RPC),
-            TreasuryWatch(money.watch, self.telegram.tell_owner),
+            TreasuryWatch(money.watch, self.operator_alerts),
         )
-        self.admin = AdminService(db, self.treasury, self.vaults, self.settings_service)
+        self.admin = AdminService(db, self.treasury, self.vaults, self.settings_service,
+                                  self.operator_alerts)
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)
         self.state = StateService(self.accounts, self.wallet, self.telemetry, self.bills)

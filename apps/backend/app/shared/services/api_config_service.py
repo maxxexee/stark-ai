@@ -25,8 +25,6 @@ class ApiConfigService:
     reminder_tick_seconds: int
     telegram_bot_token: Optional[str]
     telegram_webhook_secret: Optional[str]
-    telegram_owner_email: str
-    telegram_owner_account_id: Optional[str]
     admin_key: Optional[str]
     # Swagger, ReDoc and the spec are a map of every route; local dev only.
     docs_enabled: bool
@@ -46,9 +44,6 @@ class ApiConfigService:
             reminder_tick_seconds=int(os.environ.get("STARK_REMINDER_TICK", "300")),
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
             telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET"),
-            telegram_owner_email=(os.environ.get("STARK_TG_OWNER_EMAIL") or "").strip().lower(),
-            telegram_owner_account_id=(os.environ.get("STARK_TG_OWNER_ACCOUNT_ID") or "").strip()
-            or None,
             admin_key=_admin_key(os.environ.get("STARK_ADMIN_KEY")),
             docs_enabled=os.environ.get("STARK_DOCS") == "1",
             speak_per_minute=int(os.environ.get("STARK_SPEAK_PER_MINUTE", "30")),

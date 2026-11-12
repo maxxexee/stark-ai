@@ -13,6 +13,7 @@ from typing import Any, Optional
 from app.database import neon
 from app.modules.chain.vault_chain import VaultChain
 from app.modules.settings.settings_service import SettingsService
+from app.modules.treasury.operator_alerts import OperatorAlerts
 from app.modules.treasury.treasury_service import TreasuryService
 from app.modules.vault.vault_service import VaultService
 
@@ -23,12 +24,14 @@ EGRESS_ECHO = "https://api.ipify.org"
 
 class AdminService:
     def __init__(self, db: neon.Database, treasury: TreasuryService,
-                 vaults: VaultService, settings: SettingsService) -> None:
+                 vaults: VaultService, settings: SettingsService,
+                 alerts: OperatorAlerts) -> None:
         self.db = db
         self.treasury = treasury
         self.vaults = vaults
         self.chain: Optional[VaultChain] = vaults.chain
         self.settings = settings
+        self.alerts = alerts
 
     def overview(self) -> dict[str, Any]:
         """Every part is an independent query or network call, so they run at once."""
@@ -57,6 +60,7 @@ class AdminService:
                 [VAULT_LIMIT],
             )
             stuck = pool.submit(self.vaults.stuck_ops) if self.vaults.enabled else None
+            alerts = pool.submit(self.alerts.recent)
             ip = pool.submit(egress_ip)
             fees = pool.submit(self.settings.fees)
         treasury = report.result()
@@ -72,6 +76,9 @@ class AdminService:
                 "funder": self.chain.funder_id,
                 "usdc": self.chain.usdc_id,
             },
+            # What needs the operator now, and what did recently: raised by the money
+            # loop's watch, shown here rather than sent to anyone's chat.
+            "alerts": alerts.result(),
             "vaults": vaults.result(),
             # What is holding payments up on chain, with the chain's own reason.
             "chain_ops_stuck": stuck.result() if stuck is not None else [],

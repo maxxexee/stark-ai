@@ -208,6 +208,11 @@ class IdentityRepository:
         )
         return row is not None
 
+    def linked_accounts(self, channel: str) -> list[str]:
+        """Every account with at least one chat linked on `channel`."""
+        return [row["user_id"] for row in self.db.query(
+            "SELECT DISTINCT user_id FROM channel_identities WHERE channel = $1", [channel])]
+
     def identities_for(self, user_id: str) -> list[dict]:
         return self.db.query(
             "SELECT channel, channel_user_id, display_name, linked_at"

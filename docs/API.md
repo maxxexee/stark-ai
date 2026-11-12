@@ -69,7 +69,6 @@ Every non-2xx response has this body:
 | `bad_limits` | 400 | A limit is not positive, or per-payment exceeds monthly |
 | `no_route` | 404 | Unknown path |
 | `bad_request` | 400 | The body is not valid JSON, or a field has the wrong type (additive, 2026-10-27) |
-| `not_configured` | 409 | `POST /v1/link/code` while `STARK_TG_OWNER_EMAIL` names no account (additive, 2026-10-27) |
 | `unknown_identity` | 404 | `DELETE /v1/link/identities/...` names no chat linked to this account (additive, 2026-11-12) |
 
 > Ordering note: a **pause** beats everything. Otherwise the **per-payment** cap is checked first, then the **monthly** cap,
@@ -752,9 +751,18 @@ key configured every request is **403** `admin_disabled`.
                              "created_at": "…", "updated_at": "…"}],
   "deposits_open": [{"id": "dep_…", "user_id": "…", "method": "crypto",
                      "amount_ngn": 15000, "status": "open", "created_at": "…",
-                     "expires_at": "…"}]
+                     "expires_at": "…"}],
+  "alerts": [{"kind": "treasury", "message": "Treasury holds 0.00 USDC, under 100 USDC. …",
+              "raised_at": "…", "cleared_at": null, "cleared_message": null,
+              "updated_at": "…"}]
 }
 ```
+
+`alerts` (**additive, 2026-11-12**) is what the money loop wants the operator to act on:
+`flutterwave` (the float under `STARK_FLOAT_LOW_NGN`), `treasury` (USDC under
+`STARK_TREASURY_LOW_USDC`) and `coverage` (Stark holds less than it owes). A raised
+alarm has `cleared_at: null`; one that ended in the last week keeps its
+`cleared_message`. Raised alarms come first. Nothing is sent to Telegram.
 
 A balance that could not be read is `null`, not zero, and `coverage_ngn` then counts
 only what was read. `treasury_usdc` is a decimal string. The in-flight lists hold at
@@ -1223,7 +1231,8 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
 | 2026-11-12 | **API surface hardening.** The session token is read only from `Authorization: Bearer`; `?token=` is refused on every route. `GET /v1/speak/stream` now takes only `?ticket=` from the new `POST /v1/speak/ticket` (`?text=` and `?token=` are gone). `/v1/speak` and `/v1/speak/ticket` refuse `text` over 2,000 characters (`bad_text`); `/v1/voice` refuses a body over 12 MB (`audio_too_large`) while reading it. New code `rate_limited` (429) on speak routes and `/v1/telemetry`. Bill `label` (40) and `provider` (48) are length- and charset-checked (`bad_bill`). `/docs`, `/redoc` and the spec are served only with `STARK_DOCS=1`, and `GET /` no longer lists routes. The agent pays only an amount the user said (`amount_mismatch` on its reply `code`) and strips web links from its reply text. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
-| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |
+| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. |
 | 2026-11-12 | Receipts no longer carry a `tx_hash` for a `pay` that was only signed offline (a chain configured without `STARK_BROADCAST=1`); it is `null` there, as it already was with no chain. The backend warns at boot when the chain is not broadcasting. No shape changed. |
 | 2026-11-12 | Payment fixes. The monthly cap and `spent_ngn` (`/v1/wallet`, `/v1/state`, `/v1/limits`, `over_cap`) are this calendar month's (UTC) and reset on the 1st; the cap also counts purchases still `pending`, and an account's payments are checked one at a time. A purchase whose order call timed out is looked up at Flutterwave by `request_id` before it is failed. A racing repeat of a top-up `request_id` answers 200 instead of 500. `POST /v1/_stub/reset` is off while any real rail is configured and unlinks only the caller's chats. No shape changed. |
 | 2026-11-12 | Money-rail hardening. Bank and crypto withdrawals answer `paused` (423) while the owner has paused Stark, and new `funds_on_hold` (409) for money a card added in the last `STARK_CARD_HOLD_HOURS` (it still pays bills). Bank withdrawals gain a per-account daily cap (`daily_limit`, 409); crypto gains a per-account daily cap and a per-withdrawal USDC cap (`over_limit`) beside the existing ones. `POST /v1/wallet/bank-accounts/resolve` is limited per account per day (new `too_many_lookups`, 429). `transfer.completed` is re-read from Flutterwave instead of trusting its body, and a `paid` withdrawal is never returned. `GET /v1/wallet/deposits/{id}` asks its rail at most every 15 seconds. Paycrest rates outside the allowed range or move are refused (`provider_failed`). No shape changed. |
+| 2026-11-12 | No bot owner. Operator alerts (float, treasury, coverage) are stored and returned as `alerts` on `GET /v1/admin/overview` instead of sent to a Telegram chat, and the daily summary is gone. Renewal reminders go to every linked account's chats. `STARK_TG_OWNER_EMAIL`, `STARK_TG_OWNER_ACCOUNT_ID` and `STARK_SUMMARY_HOUR` are no longer read, and `POST /v1/link/code` no longer answers `not_configured`. |
