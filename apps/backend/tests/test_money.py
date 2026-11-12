@@ -1040,7 +1040,8 @@ ADDRESS = "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE"
 class CryptoWithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def service(self, *, treasury=True, max_ngn=200_000, daily_ngn=10**12, rate=RATE_1500):
+    def service(self, *, treasury=True, max_ngn=200_000, daily_ngn=10**12, rate=RATE_1500,
+                sandbox_naira=False):
         self.one_click = FakePayoutOneClick()
         self.treasury = FakeTreasury() if treasury else None
         deposits = DepositService(self.db, self.receipts, self.vaults, None, self.one_click,
@@ -1048,7 +1049,7 @@ class CryptoWithdrawalTests(MoneyCase):
         ledger = WithdrawalService(self.db, self.receipts, self.vaults, None)
         self.payouts = CryptoWithdrawalService(
             self.db, ledger, self.vaults, deposits, self.one_click, self.treasury,
-            CryptoPayoutSettings(rate, max_ngn, daily_ngn),
+            CryptoPayoutSettings(rate, max_ngn, daily_ngn), sandbox_naira=sandbox_naira,
         )
         return self.payouts
 
@@ -1174,6 +1175,16 @@ class CryptoWithdrawalTests(MoneyCase):
         with self.assertRaises(ApiError) as caught:
             self.request()
         self.assertEqual(caught.exception.code, "not_available")
+        self.assertEqual(self.wallet()["balance_ngn"], 50_000)
+
+    def test_naira_from_a_test_key_never_becomes_real_usdc(self):
+        # A Flutterwave test key credits checkouts nobody paid for.
+        self.service(sandbox_naira=True)
+        self.assertFalse(self.payouts.available())
+        with self.assertRaises(ApiError) as caught:
+            self.request()
+        self.assertEqual(caught.exception.code, "not_available")
+        self.assertEqual(self.treasury.signed, [])
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
     def test_the_daily_limit_counts_what_was_not_returned(self):

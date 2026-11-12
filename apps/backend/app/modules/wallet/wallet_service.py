@@ -2,8 +2,9 @@
 
 Real money arrives through `DepositService` and leaves through `WithdrawalService`.
 Test money exists for local runs and demos, and only while no payment rail is
-configured: with Flutterwave keyed, `POST /v1/wallet/topup` refuses, so a deployed app
-cannot mint balance. A test top-up still credits the vault, so the two ledgers
+configured: with Flutterwave keyed or a treasury key set, `POST /v1/wallet/topup`
+refuses, so a deployed app cannot mint balance, and minted balance can never be
+withdrawn as real USDC. A test top-up still credits the vault, so the two ledgers
 agree even in a demo.
 """
 

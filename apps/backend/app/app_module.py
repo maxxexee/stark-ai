@@ -87,14 +87,18 @@ class AppModule:
             money.funding,
         )
         self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.flutterwave)
+        treasury = treasury_chain.treasury_from_env()
+        # Real USDC leaves only against real naira. A Flutterwave test key credits
+        # checkouts nobody paid for, so it switches crypto payouts off.
         self.crypto_withdrawals = CryptoWithdrawalService(
             db,
             self.withdrawals,
             self.vaults,
             self.deposits,
             one_click_client,
-            treasury_chain.treasury_from_env(),
+            treasury,
             money.crypto_payouts,
+            sandbox_naira=self.flutterwave is not None and self.flutterwave.test_mode,
         )
         self.flutterwave_webhooks = FlutterwaveWebhookService(
             db, money.flutterwave_secret_hash, self.deposits, self.withdrawals
@@ -106,8 +110,11 @@ class AppModule:
         self.bills = BillService(self.accounts, self.account_repository, self.receipts,
                                  self.settings_service)
         self.plans = PlanService()
+        # Free test money only on a box with no rail at all: with a treasury key it
+        # could be withdrawn as real USDC.
         self.wallet = WalletService(
-            self.accounts, self.receipts, self.vaults, test_money=self.flutterwave is None
+            self.accounts, self.receipts, self.vaults,
+            test_money=self.flutterwave is None and treasury is None,
         )
         self.telemetry = TelemetryService(self.readings, self.receipts)
         self.bill_payments = BillPaymentService(
