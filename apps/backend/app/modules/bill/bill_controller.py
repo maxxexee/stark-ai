@@ -48,6 +48,15 @@ def update_bill(bill_id: str, dto: UpdateBillDto, account: AuthUser,
     return JSONResponse(module.bills.update(account.id, bill_id, dto))
 
 
+@router.post("/{bill_id}/confirm", response_model=BillDto,
+             summary="Confirm a bill Stark saved from a chat",
+             responses=ApiResponses.errors("unknown_bill"))
+def confirm_bill(bill_id: str, account: AuthUser, module: Module) -> JSONResponse:
+    """A bill saved by the agent cannot be paid until its owner confirms it here,
+    signed in. Confirming an already confirmed bill changes nothing."""
+    return JSONResponse(module.bills.confirm(account.id, bill_id))
+
+
 @router.delete("/{bill_id}", response_model=DeletedBillDto, summary="Remove a bill",
                responses=ApiResponses.errors("unknown_bill", "bill_in_flight"))
 def delete_bill(bill_id: str, account: AuthUser, module: Module) -> JSONResponse:

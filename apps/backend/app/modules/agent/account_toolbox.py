@@ -60,7 +60,7 @@ class AccountToolbox:
 
     def add_bill(self, dto: CreateBillDto) -> dict:
         try:
-            return self.module.bills.add(self.account_id, dto)
+            return self.module.bills.add(self.account_id, dto, by_agent=True)
         except ApiError as err:
             raise agent_layer.ToolRefusal(err.code, err.message) from err
 

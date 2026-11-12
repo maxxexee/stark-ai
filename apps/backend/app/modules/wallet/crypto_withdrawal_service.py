@@ -60,7 +60,8 @@ class CryptoPayoutSettings:
 class CryptoWithdrawalService:
     def __init__(self, db: neon.Database, ledger: WithdrawalService, vaults: VaultService,
                  deposits: DepositService, one_click_client: OneClickClient,
-                 treasury: Optional[TreasuryChain], settings: CryptoPayoutSettings) -> None:
+                 treasury: Optional[TreasuryChain], settings: CryptoPayoutSettings,
+                 *, sandbox_naira: bool = False) -> None:
         self.db = db
         self.ledger = ledger
         self.vaults = vaults
@@ -68,10 +69,13 @@ class CryptoWithdrawalService:
         self.one_click = one_click_client
         self.treasury = treasury
         self.settings = settings
+        # The naira balance can hold money nobody paid (a Flutterwave test key's
+        # checkouts), so it must never become mainnet USDC.
+        self.sandbox_naira = sandbox_naira
         self._lock = threading.Lock()
 
     def available(self) -> bool:
-        return self.treasury is not None
+        return self.treasury is not None and not self.sandbox_naira
 
     # --- the withdrawal -----------------------------------------------------------
 

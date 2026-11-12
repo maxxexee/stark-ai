@@ -28,3 +28,8 @@ class BillDto(BaseModel):
         default=None, description="YYYY-MM-DD; absent (not null) when unset.",
         examples=["2026-11-03"],
     )
+    needs_confirmation: Optional[bool] = Field(
+        default=None, description=(
+            "true on a bill Stark saved from a chat, until the owner confirms it with "
+            "POST /v1/bills/{id}/confirm. Absent otherwise. Such a bill cannot be paid."),
+        examples=[None])

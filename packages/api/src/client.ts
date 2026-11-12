@@ -100,6 +100,7 @@ export const api = {
   addBill: (input: NewBill) => request<Bill>("POST", "/v1/bills", input),
   updateBill: (id: string, patch: BillPatch) =>
     request<Bill>("PATCH", `/v1/bills/${encodeURIComponent(id)}`, patch),
+  confirmBill: (id: string) => request<Bill>("POST", `/v1/bills/${encodeURIComponent(id)}/confirm`),
   deleteBill: (id: string) =>
     request<{ deleted: true; bill_id: string }>("DELETE", `/v1/bills/${encodeURIComponent(id)}`),
   plans: (params: { kind?: Extract<BillKind, "data" | "tv">; provider?: string } = {}) => {

@@ -877,6 +877,27 @@ class SetupToolTests(unittest.TestCase):
             "method": "crypto", "amount_ngn": 5_000, "asset": "USDT"}), {})
         self.assertEqual(result["error"]["code"], "pick_chain")
 
+    def test_a_bill_the_agent_saved_is_not_paid_until_confirmed(self):
+        unconfirmed = {"id": "bill_new", "kind": "airtime", "provider": "MTN",
+                       "label": "New line", "reference": "08031112222",
+                       "needs_confirmation": True}
+        toolbox = FakeToolbox(bills=[*BILLS, unconfirmed])
+        limits = agent_mod.Limits(MONTHLY, PER_PAYMENT, ALLOWED | {"08031112222"})
+        effect: dict = {}
+        result = make_agent(toolbox, limits=limits)._pay_bill(
+            {"bill_id": "bill_new", "amount_ngn": 1_000}, effect, "pay 1000 to the new line")
+        self.assertEqual(result["error"]["code"], "bill_unconfirmed")
+        self.assertEqual(toolbox.pay_calls, [])
+        self.assertEqual(toolbox.requests, [])     # not even filed for approval
+
+    def test_an_unconfirmed_bill_is_off_the_allowlist(self):
+        from app.modules.account.account_service import AccountService
+        meters = AccountService._meters({
+            "a": {"reference": "111"},
+            "b": {"reference": "222", "needs_confirmation": True},
+        })
+        self.assertEqual(meters, frozenset({"111"}))
+
     def test_add_bill_saves_through_the_toolbox(self):
         toolbox = FakeToolbox()
         result = make_agent(toolbox)._run_tool(agent_mod.ToolCall("add_bill", {
