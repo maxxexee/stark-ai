@@ -8,7 +8,9 @@ newer (the Docker image runs 3.12).
 The HTTP contract the frontend relies on is [`docs/API.md`](../../docs/API.md). It is
 **frozen**: additive changes only. **Swagger UI is at
 [`/docs`](http://127.0.0.1:8000/docs)** (ReDoc at `/redoc`, the spec at
-`/docs/openapi.json`), generated from the same DTOs the routes use. For the full
+`/docs/openapi.json`), generated from the same DTOs the routes use. They are served
+only with `STARK_DOCS=1`: set it in Infisical `dev`, never in `prod`, where the spec
+would map every route for anyone. For the full
 backend state, environment traps and what to do next, read
 [`docs/HANDOFF.md`](../../docs/HANDOFF.md).
 
@@ -51,7 +53,7 @@ app/
   setup_swagger.py       /docs, /redoc, /docs/openapi.json (no fake 422s)
   common/                ApiError, Clock, dto/ (ErrorDto, ContractField)
   decorators/            AuthUser (the signed-in account), Module (the AppModule), ApiResponses
-  guards/auth_guard.py   bearer (or ?token=) → Neon Auth session → Account, else 401
+  guards/auth_guard.py   bearer only → Neon Auth session → Account, else 401
   filters/               every failure → the contract's {code, message, detail}
   shared/services/       ApiConfigService: the settings the HTTP layer reads
   database/neon.py       Neon Postgres over HTTPS: connection pool, schema
@@ -137,7 +139,10 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
   both written after a live session on 2026-10-24 where "recharge my airtime number"
   bought ₦1,000 **twice, 29 seconds apart**, with the model choosing the figure both
   times. With no amount spoken and no plan price, it refuses with `amount_required`
-  ("How much would you like to pay? Nothing has been charged yet."). The same bill for
+  ("How much would you like to pay? Nothing has been charged yet."), and a figure the
+  user did not say — "pay 500" sent as ₦5,000 — refuses with `amount_mismatch`
+  (2026-11-12; every figure in the transcript counts, so "home 5000 and office 3000"
+  still pays both). The same bill for
   the same figure, delivered or pending within five minutes, refuses with
   `duplicate_payment` unless the transcript says again / yes / confirm, so a refused
   repeat can still be confirmed. A plan-priced bill needs no figure because the plan
@@ -293,7 +298,8 @@ If ElevenLabs is down or unkeyed, the text is already on screen. The key is opti
 and the demo works without it.
 
 **Streaming.** `POST /v1/speak` hands over a whole clip, which cannot start playing
-until synthesis finishes (~1.3s). `GET /v1/speak/stream?text=…` sends the MP3 as
+until synthesis finishes (~1.3s). `GET /v1/speak/stream?ticket=…` (the ticket from `POST /v1/speak/ticket`, so an
+`<audio>` element needs no token in its URL) sends the MP3 as
 ElevenLabs produces it, and the Talk screen plays that first. Measured **first byte
 0.53 to 0.82s** against **1.25 to 1.30s** buffered, so speech starts while the clip is
 still being built. The stream falls back to `POST /v1/speak` in the browser, and on the
