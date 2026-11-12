@@ -2,7 +2,7 @@
 
 | Kind | Flutterwave | Shape |
 |---|---|---|
-| electricity | Ikeja prepaid (`IKEDC  PREPAID`) | amount, ₦500 minimum |
+| electricity | every disco's prepaid meter item (see `catalog.DISCOS`) | amount, ₦500 minimum |
 | airtime | MTN, Airtel, Glo, 9mobile | amount |
 | data | `… DATA BUNDLE` | **plan** (an `MD…` item) |
 | tv | DSTV, GOTV, STARTIMES | **plan** (a `CB…` item) |

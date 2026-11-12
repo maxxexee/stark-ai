@@ -21,7 +21,18 @@ export class BillKinds {
   };
 
   static readonly providers: Record<BillKind, string[]> = {
-    electricity: ["Ikeja Electric"],
+    electricity: [
+      "Ikeja Electric",
+      "Eko Electric",
+      "Abuja Electric",
+      "Ibadan Electric",
+      "Enugu Electric",
+      "Benin Electric",
+      "Port Harcourt Electric",
+      "Kano Electric",
+      "Kaduna Electric",
+      "Jos Electric",
+    ],
     airtime: ["MTN", "Airtel", "Glo", "9mobile"],
     data: ["MTN", "Airtel", "Glo", "9mobile"],
     tv: ["DStv", "GOtv", "Startimes"],

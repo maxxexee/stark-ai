@@ -168,6 +168,11 @@ CATALOGUE = [
     catalogue_row("BIL123", "STARTIMES", "CB260", "BASIC - One Month", 1700),
     catalogue_row("BIL113", "IKEJA DISCO ELECTRICITY BILLS", "UB159", "IKEDC  PREPAID", 0),
     catalogue_row("BIL113", "IKEJA DISCO ELECTRICITY BILLS", "UB160", "IKEDC  POSTPAID", 0),
+    # Live mode (2026-11-12) names discos differently, and Jos says "Prepaid" only in
+    # the item name.
+    catalogue_row("BIL112", "EKEDC PREPAID TOPUP", "UB157", "EKEDC PREPAID TOPUP", 0),
+    catalogue_row("BIL116", "PHC DISCO  PREPAID TOPUP", "UB633", "PHC DISCO  PREPAID TOPUP", 0),
+    catalogue_row("BIL215", "JOS DISCO ELECTRICITY BILLS", "UB676", "JOS DISCO Prepaid", 0),
     catalogue_row("BIL130", "Federal Inland Revenue Service", "TP214", "FIRS Tax", 0),
 ]
 

@@ -460,9 +460,21 @@ class CatalogTests(unittest.TestCase):
         mtn = self.catalog.product("data", "MTN")
         self.assertEqual([plan.code for plan in self.catalog.plans(mtn)], ["MD107", "MD108"])
 
-    def test_electricity_is_ikeja_prepaid_only(self):
+    def test_electricity_is_ikejas_prepaid_item(self):
         ikeja = self.catalog.product("electricity", "Ikeja Electric")
         self.assertEqual((ikeja.biller_code, ikeja.item_code), ("BIL113", "UB159"))
+
+    def test_every_disco_is_found_by_its_name_or_abbreviation(self):
+        for provider, biller in [("Eko Electric", "BIL112"), ("EKEDC", "BIL112"),
+                                 ("IKEDC", "BIL113"), ("Port Harcourt Electric", "BIL116"),
+                                 ("Jos Electricity", "BIL215")]:
+            with self.subTest(provider=provider):
+                self.assertEqual(self.catalog.product("electricity", provider).biller_code,
+                                 biller)
+
+    def test_a_disco_is_never_vended_on_another_discos_item(self):
+        self.assertIsNone(self.catalog.product("electricity", "Kano Electric"))
+        self.assertIsNone(self.catalog.product("electricity", "Electric"))
 
     def test_plan_prices_come_from_the_catalogue(self):
         dstv = self.catalog.product("tv", "DStv")
