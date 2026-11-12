@@ -1,12 +1,21 @@
 import { CopyButton } from "@stark/ui/components/copy-button";
+import { cn } from "@stark/ui/utils/cn";
 import { formatToken } from "@stark/utils/format";
 import { PaymentMode } from "@/lib/receipts/payment-mode";
 
-export function TokenLine({ token, note }: { token: string; note?: string }) {
+export function TokenLine({
+  token,
+  note,
+  className,
+}: {
+  token: string;
+  note?: string;
+  className?: string;
+}) {
   return (
-    <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-      <span className="flex min-w-0 flex-[1_1_0] flex-col">
-        <span className="tabular text-base font-medium whitespace-nowrap sm:text-lg">
+    <div className={cn("flex items-center gap-3 px-4 py-3", className)}>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="tabular text-base font-medium text-balance sm:text-lg">
           {formatToken(token)}
         </span>
         <span className="text-sm text-muted-foreground">

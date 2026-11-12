@@ -33,7 +33,9 @@ export function ReceiptSheet({
           <ReceiptHeader status={Receipts.status(shown)} />
           <ReceiptAmount receipt={shown} />
           <ReceiptNote status={shown.status} />
-          {shown.token && shown.status === "delivered" ? <TokenLine token={shown.token} /> : null}
+          {shown.token && shown.status === "delivered" ? (
+            <TokenLine token={shown.token} className="rounded-lg bg-muted px-4 py-3" />
+          ) : null}
           <ReceiptStats receipt={shown} />
         </SheetContent>
       ) : null}
