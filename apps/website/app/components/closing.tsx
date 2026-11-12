@@ -36,14 +36,16 @@ const floaters = [
   },
 ];
 
-/** Three true things, one at a time. The first line is the one reduced motion keeps. */
+/** The first line is the one reduced motion keeps. */
 const statuses = ["Pause it in one tap", "Asks you before it goes over", "Built on NEAR"];
 
+/**
+ * The chips start visible, so without JS they stay put, and are armed hidden on mount. A section
+ * already on screen is revealed at once, since the observer would never fire and leave them at
+ * opacity 0.
+ */
 export function Closing() {
   const ref = useRef<HTMLElement>(null);
-  // The section sits below the fold, so the markup starts visible: on mount the
-  // observer arms the chips into their hidden state and then reveals them once
-  // the section is in view. No JS means no arming either — the chips stay put.
   const [phase, setPhase] = useState<"idle" | "armed" | "in">("idle");
 
   useEffect(() => {
@@ -53,9 +55,6 @@ export function Closing() {
       return;
     }
 
-    // Already on screen (a short page, a tall monitor, a deep link): reveal now.
-    // Arming here would leave the chips at opacity 0 forever, because there is
-    // nothing left to scroll and the observer would never cross its margin.
     const rect = node.getBoundingClientRect();
     if (rect.top < window.innerHeight && rect.bottom > 0) {
       setPhase("in");
