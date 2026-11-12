@@ -13,9 +13,7 @@ export function MintedCode({ minted }: { minted: LinkCode }) {
       </span>
       <span className="text-xs text-muted-foreground">
         Expires in {Math.round(minted.expires_in / 60)} minutes.{" "}
-        {minted.deep_link
-          ? "One chat only, and /unlink ends it."
-          : "Type it by hand — the server has no bot token, so there is no one-tap link."}
+        {minted.deep_link ? "One chat only, and /unlink ends it." : "Type it into the bot by hand."}
       </span>
       {minted.deep_link ? (
         <TelegramDeepLink href={minted.deep_link} botUsername={minted.bot_username} />

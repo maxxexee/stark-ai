@@ -89,9 +89,7 @@ export function useVoiceSession(q: string | undefined) {
                 console.debug("[wake] ignored (audio):", res.transcript);
               }
               closeIdle();
-              setNotice(
-                "Start with “Hey Stark” — then say what you need; typos and accents are fine.",
-              );
+              setNotice("Start with “Hey Stark”, then say what you need.");
               return;
             }
             // The recorded-audio path never reaches `submit`, so the dismissal
@@ -101,7 +99,7 @@ export function useVoiceSession(q: string | undefined) {
               go("idle");
               setHeard(res.transcript);
               setNotice("Asleep. Tap the mic when you need me.");
-              speak("Okay. I'll be here — tap the mic when you need me.");
+              speak("Okay. Tap the mic when you need me.");
               return;
             }
             setHeard(res.transcript);
@@ -131,7 +129,7 @@ export function useVoiceSession(q: string | undefined) {
       go("idle");
       setHeard(said);
       setNotice("Asleep. Tap the mic when you need me.");
-      speak("Okay. I'll be here — tap the mic when you need me.");
+      speak("Okay. Tap the mic when you need me.");
       return;
     }
     stopSpeaking();
@@ -149,7 +147,7 @@ export function useVoiceSession(q: string | undefined) {
           // wake.py's alias set is tuned against.
           if (import.meta.env.DEV) console.debug("[wake] ignored:", said);
           closeIdle();
-          setNotice("Start with “Hey Stark” — then say what you need; typos and accents are fine.");
+          setNotice("Start with “Hey Stark”, then say what you need.");
           return;
         }
         setReply(res);
@@ -183,7 +181,7 @@ export function useVoiceSession(q: string | undefined) {
       }
       micWanted.current = false;
       go("idle");
-      setNotice("This browser can’t listen — type what you need below.");
+      setNotice("This browser can’t listen. Type what you need below.");
       document.getElementById("type-instead")?.focus();
       return;
     }
@@ -236,7 +234,7 @@ export function useVoiceSession(q: string | undefined) {
       // the orb just going idle: say what happened instead.
       recognition.current = null;
       go("idle");
-      setNotice("The mic didn’t restart — tap the orb, or type below.");
+      setNotice("The mic stopped. Tap the orb, or type below.");
       closeIdle();
     }
   };
@@ -292,7 +290,7 @@ export function useVoiceSession(q: string | undefined) {
       if (document.visibilityState !== "hidden" || !awake.current) return;
       endSession();
       go("idle");
-      setNotice("Asleep — the mic stops while this tab is hidden. Tap to wake me.");
+      setNotice("Asleep while this tab is hidden. Tap to wake me.");
     };
     document.addEventListener("visibilitychange", handleTabHidden);
     return () => document.removeEventListener("visibilitychange", handleTabHidden);
