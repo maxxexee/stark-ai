@@ -12,8 +12,8 @@ export function QueryError({ error }: ErrorComponentProps) {
 
   return (
     <Card className="items-start">
-      <span className="font-serif text-2xl">Can’t load this right now</span>
-      <p className="m-0 text-[13px] text-fg-2">{errorCopy(error)}</p>
+      <span className="text-lg font-semibold">Can’t load this right now</span>
+      <p className="m-0 text-sm text-fg-2">{errorCopy(error)}</p>
       <Button variant="secondary" onClick={() => router.invalidate()}>
         Try again
       </Button>

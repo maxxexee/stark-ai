@@ -16,7 +16,7 @@ export function BillsHeader() {
       >
         Bills
       </PageTitle>
-      <p className="m-0 -mt-2 text-fg-2">
+      <p className="m-0 -mt-4 text-base text-muted-foreground">
         Stark watches these and tells you before anything runs out.
       </p>
     </>

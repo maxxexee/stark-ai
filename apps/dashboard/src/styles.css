@@ -1,10 +1,149 @@
 @import "tailwindcss";
 @import "@stark/ui/globals.css";
 
+/* ---------------------------------------------------------------------------
+  The app's design system. One of each, and nothing in between:
+
+  Type     12 caption · 13 secondary · 14 body · 16 section · 20 page · 32 figure.
+           One family (Inter). Weight carries hierarchy: 400 body, 500 labels,
+           600 titles. No uppercase eyebrows, no letter-spacing tricks.
+  Space    A 4px grid. Rows 8 apart, blocks 16, sections 24–32.
+  Shape    One radius, 8px, for everything with a corner: buttons, fields,
+           selects, tabs, chips, badges, nav items, rows, cards, dialogs. Every
+           rounded-* step resolves to it, so no size can drift. Fully round is
+           reserved for things that are circles: avatars, status dots, the mic.
+  Height   Controls are 32px (sm) or 36px (default), 40px for a form's main
+           action. A field and the button beside it are always the same height.
+  Colour   Neutral greys carry the interface. Burnt orange is the one accent:
+           the main action, the current selection, focus. Never decoration.
+
+  These override the shared tokens for the dashboard only; the website keeps
+  its own paper-and-ink look from @stark/ui/globals.css.
+--------------------------------------------------------------------------- */
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 18px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 22px;
+  --text-xl: 20px;
+  --text-xl--line-height: 26px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 30px;
+  --text-3xl: 32px;
+  --text-3xl--line-height: 38px;
+
+  --color-brand: #c2410c;
+  --color-brand-warm: #c2410c;
+  --color-brand-soft: #9a3412;
+  --color-brand-deep: #7c2d12;
+  --color-brand-tint: rgb(194 65 12 / 0.1);
+  --color-brand-wash: rgb(194 65 12 / 0.06);
+  --color-brand-line: rgb(194 65 12 / 0.35);
+
+  --color-canvas: #ffffff;
+  --color-canvas-deep: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-surface-2: #f5f5f7;
+  --color-surface-3: #ebebef;
+  --color-surface-selected: #fdf3ee;
+  --color-track: #e5e5ea;
+  --color-bar: #f3d6c7;
+  --color-fg: #1d1d1f;
+  --color-fg-2: #424245;
+  --color-faint: #aeaeb2;
+  --color-idle: #8e8e93;
+  --color-line: rgb(0 0 0 / 0.08);
+  --color-line-2: rgb(0 0 0 / 0.14);
+
+  --radius-xs: var(--radius-control);
+  --radius-sm: var(--radius-control);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-control);
+  --radius-xl: var(--radius-control);
+  --radius-2xl: var(--radius-control);
+  --radius-3xl: var(--radius-control);
+  --radius-4xl: var(--radius-control);
+  --radius-card: var(--radius-control);
+  --radius-row: var(--radius-control);
+
+  --shadow-control: 0 1px 1px rgb(0 0 0 / 0.04);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
+}
+
+:root {
+  --radius: 0.5rem;
+  --radius-control: 8px;
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --card: #ffffff;
+  --card-foreground: #1d1d1f;
+  --popover: #ffffff;
+  --popover-foreground: #1d1d1f;
+  --primary: #c2410c;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f7;
+  --secondary-foreground: #1d1d1f;
+  --muted: #f5f5f7;
+  --muted-foreground: #6e6e73;
+  --accent: #ebebef;
+  --accent-foreground: #1d1d1f;
+  --destructive: #c81e1e;
+  --border: #e5e5ea;
+  --input: #d9d9de;
+  --ring: #c2410c;
+  --sidebar: #f5f5f7;
+  --sidebar-foreground: #1d1d1f;
+  --sidebar-accent: #e8e8ed;
+  --sidebar-accent-foreground: #1d1d1f;
+  --sidebar-border: #e5e5ea;
+}
+
+/* Talk is the one immersive, dark screen: it re-declares the palette it was
+   designed in, so its orb, glow and cards keep their contrast. */
+.talk-scope {
+  --background: #111214;
+  --foreground: #f2f3f1;
+  --card: #17181b;
+  --card-foreground: #f2f3f1;
+  --popover: #1f2024;
+  --popover-foreground: #f2f3f1;
+  --secondary: #1f2024;
+  --secondary-foreground: #f2f3f1;
+  --muted: #1f2024;
+  --muted-foreground: #a3a8a3;
+  --accent: #26272b;
+  --border: rgb(255 255 255 / 0.08);
+  --input: rgb(255 255 255 / 0.12);
+  --ring: #f08a4b;
+  --color-brand-warm: #f08a4b;
+  --color-brand-soft: #f7a773;
+  --color-brand-tint: rgb(194 65 12 / 0.18);
+  --color-brand-wash: rgb(194 65 12 / 0.12);
+  --color-brand-line: rgb(240 138 75 / 0.5);
+  --color-canvas: #111214;
+  --color-canvas-deep: #0b0b0c;
+  --color-surface: #17181b;
+  --color-surface-2: #1f2024;
+  --color-surface-3: #26272b;
+  --color-track: #2a2b30;
+  --color-fg: #f2f3f1;
+  --color-fg-2: #c9cdc9;
+  --color-faint: #5b5f66;
+  --color-idle: #8e9299;
+  --color-line: rgb(255 255 255 / 0.06);
+  --color-line-2: rgb(255 255 255 / 0.1);
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body {
-    @apply min-h-full bg-canvas font-sans text-sm leading-normal text-fg antialiased;
+    @apply min-h-full bg-canvas font-sans text-base text-fg antialiased;
   }
 
   /* Rubber-band overscroll drags the sticky header and tab bar away from the screen edges. */
@@ -13,7 +152,7 @@
   }
 
   a {
-    color: var(--color-brand-warm);
+    color: var(--color-brand);
   }
 
   a:hover {

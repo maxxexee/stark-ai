@@ -27,9 +27,7 @@ export function FundForm({ onDone }: { onDone: () => void }) {
         presets={[10000, 20000, 50000]}
       />
       <TestMoneyNote />
-      {topUp.error ? (
-        <FieldError className="text-[13px]">{errorCopy(topUp.error)}</FieldError>
-      ) : null}
+      {topUp.error ? <FieldError className="text-sm">{errorCopy(topUp.error)}</FieldError> : null}
       <Button
         size="lg"
         block

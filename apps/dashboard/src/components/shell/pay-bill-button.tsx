@@ -8,7 +8,7 @@ export function PayBillButton() {
       size="sm"
       nativeButton={false}
       render={<Link to="/pay" aria-label="Pay a bill" />}
-      className="size-9.5 px-0 sm:size-auto sm:px-4"
+      className="w-8 px-0 text-white hover:text-white sm:w-auto sm:px-3"
     >
       <Icons.Add size={14} />
       <span className="hidden sm:inline">Pay a bill</span>

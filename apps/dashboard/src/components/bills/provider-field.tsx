@@ -28,7 +28,7 @@ export function ProviderField({
 
   return (
     <Field>
-      <FieldLabel htmlFor={providerId} className="font-normal text-fg-2">
+      <FieldLabel htmlFor={providerId} className="text-sm font-medium text-fg-2">
         Provider
       </FieldLabel>
       <Select value={provider} onValueChange={handleProviderChange}>

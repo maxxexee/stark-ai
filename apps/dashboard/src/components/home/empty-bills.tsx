@@ -11,7 +11,7 @@ import { Link } from "@tanstack/react-router";
 
 export function EmptyBills() {
   return (
-    <Empty className="rounded-row border border-dashed border-white/12 p-6">
+    <Empty className="rounded-card border border-dashed border-border p-6">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <Icons.Bills size={16} />

@@ -10,7 +10,7 @@ export function ApprovalHistoryRow({ request }: { request: PaymentRequest }) {
         title={`${formatNaira(request.amount_ngn)} to ${request.bill_label}`}
         subtitle={`${Approvals.reason(request)} · ${formatActivityTime(request.created_at)}`}
       />
-      <span className="text-xs text-muted-foreground">{Approvals.outcome(request)}</span>
+      <span className="text-sm text-muted-foreground">{Approvals.outcome(request)}</span>
     </ListRow>
   );
 }

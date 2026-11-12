@@ -27,10 +27,10 @@ function Demo() {
   return (
     <div className="flex min-h-dvh flex-col">
       <DemoHeader />
-      <main className="mx-auto flex w-full max-w-190 flex-1 flex-col gap-5 px-4 pt-4 pb-10 sm:px-5 sm:pt-9">
+      <main className="mx-auto flex w-full max-w-190 flex-1 flex-col gap-6 px-4 pt-5 pb-10 sm:px-6 sm:pt-8">
         <DemoNotice />
         {/* Read-only: the real screens, with every button and link switched off. */}
-        <div inert className="flex flex-col gap-5">
+        <div inert className="flex flex-col gap-6">
           <HomeHeader
             firstName={state.first_name}
             needing={approvals.length + Number(Boolean(due))}

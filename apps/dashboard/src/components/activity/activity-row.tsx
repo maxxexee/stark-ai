@@ -11,9 +11,9 @@ export function ActivityRow({ receipt, selected }: { receipt: Receipt; selected?
     <Link
       to="/activity"
       search={(prev) => ({ ...prev, receipt: receipt.id })}
-      className={cn(listRowClass, "py-2.5", selected && "border-brand-warm/50 bg-surface-selected")}
+      className={cn(listRowClass, selected && "bg-surface-selected hover:bg-surface-selected")}
     >
-      <span className="tabular w-11 text-xs text-muted-foreground">
+      <span className="tabular w-12 flex-none text-sm text-muted-foreground">
         {formatActivityTime(receipt.created_at)}
       </span>
       <RowText
@@ -22,7 +22,7 @@ export function ActivityRow({ receipt, selected }: { receipt: Receipt; selected?
       />
       <span
         className={cn(
-          "text-sm",
+          "tabular text-base font-medium",
           receipt.status === "declined" && "text-muted-foreground line-through",
         )}
       >

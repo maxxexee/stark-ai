@@ -5,7 +5,7 @@ import { NoticedItem } from "@/components/home/noticed-item";
 
 export function NoticedCard({ suggestions }: { suggestions: Suggestion[] }) {
   return (
-    <Card className="gap-2.5">
+    <Card className="gap-3">
       <Eyebrow>Stark noticed</Eyebrow>
       {suggestions.map((sug) => (
         <NoticedItem key={sug.id} suggestion={sug} />

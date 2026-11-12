@@ -12,12 +12,7 @@ export function BillKindChips({
   return (
     <ChipGroup label="Bill type" columns={3}>
       {BillKinds.all.map((k) => (
-        <ChoiceChip
-          key={k.kind}
-          selected={k.kind === kind}
-          onClick={() => onPick(k.kind)}
-          className="text-sm"
-        >
+        <ChoiceChip key={k.kind} selected={k.kind === kind} onClick={() => onPick(k.kind)}>
           {k.label}
         </ChoiceChip>
       ))}

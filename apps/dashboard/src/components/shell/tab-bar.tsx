@@ -7,7 +7,7 @@ export function TabBar() {
   return (
     <nav
       aria-label="App"
-      className="sticky bottom-0 z-10 flex items-start border-t border-white/8 bg-surface/92 px-2 pt-1 pb-[max(22px,env(safe-area-inset-bottom))] backdrop-blur-lg sm:hidden"
+      className="sticky bottom-0 z-10 flex items-center border-t border-border bg-canvas/90 px-2 pt-1.5 pb-[max(8px,env(safe-area-inset-bottom))] backdrop-blur-lg sm:hidden"
     >
       <TabBarItem tab={home} />
       <TabBarItem tab={bills} />

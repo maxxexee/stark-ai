@@ -9,14 +9,14 @@ export function TabBarItem({
 }: {
   tab: (typeof tabs)[number];
 }) {
-  const path = usePath();
+  const active = NavMatch.isActive(usePath(), to, exact);
   return (
     <Link
       to={to}
-      aria-current={NavMatch.isActive(path, to, exact) ? "page" : undefined}
+      aria-current={active ? "page" : undefined}
       className={cn(
-        "flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium no-underline",
-        NavMatch.isActive(path, to, exact) ? "text-brand-soft" : "text-idle hover:text-fg",
+        "flex h-12 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium no-underline",
+        active ? "text-brand hover:text-brand" : "text-idle hover:text-fg",
       )}
     >
       <Icon size={22} />

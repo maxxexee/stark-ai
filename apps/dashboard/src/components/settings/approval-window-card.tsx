@@ -15,7 +15,7 @@ export function ApprovalWindowCard({ limits }: { limits: Limits }) {
   return (
     <Card className="gap-3">
       <span className="font-medium">When Stark asks first</span>
-      <p className="m-0 text-[13px] text-fg-2">
+      <p className="m-0 text-sm text-fg-2">
         If you ask for more than your limits allow, Stark sends it here for you to approve instead
         of refusing. It waits this long, then lapses and pays nothing.
       </p>

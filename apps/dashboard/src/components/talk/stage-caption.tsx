@@ -38,7 +38,7 @@ export function StageCaption({
       key={stage}
       className="flex min-h-16 flex-col gap-1.5 animate-in fade-in slide-in-from-bottom-2 duration-300"
     >
-      <span className="font-serif text-[26px] tracking-[-0.02em] lg:text-4xl">{copy[0]}</span>
+      <span className="text-2xl font-semibold tracking-tight lg:text-3xl">{copy[0]}</span>
       <span className="text-sm text-muted-foreground lg:text-base">{copy[1]}</span>
       {notice ? <span className="text-sm text-brand-warm">{notice}</span> : null}
     </div>

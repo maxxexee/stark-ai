@@ -17,7 +17,7 @@ export function PlanField({
   const planId = useId();
   return (
     <Field>
-      <FieldLabel htmlFor={planId} className="font-normal text-fg-2">
+      <FieldLabel htmlFor={planId} className="text-sm font-medium text-fg-2">
         Plan
       </FieldLabel>
       <PlanSelect id={planId} plans={plans} provider={provider} value={value} onChange={onChange} />

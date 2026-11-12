@@ -4,7 +4,7 @@ export function FormError({ message, className }: { message: string | null; clas
   if (!message) return null;
 
   return (
-    <p role="alert" className={cn("m-0 text-[13px] text-destructive", className)}>
+    <p role="alert" className={cn("m-0 text-sm text-destructive", className)}>
       {message}
     </p>
   );

@@ -15,13 +15,10 @@ export function SwitchRow({
 }) {
   const id = useId();
   return (
-    <label
-      htmlFor={id}
-      className="flex w-full cursor-pointer items-center gap-3 rounded-row border border-border bg-card px-4 py-3 text-left"
-    >
+    <label htmlFor={id} className="flex w-full cursor-pointer items-center gap-3 text-left">
       <span className="flex flex-1 flex-col">
         <span className="font-medium">{title}</span>
-        {subtitle ? <span className="text-xs text-muted-foreground">{subtitle}</span> : null}
+        {subtitle ? <span className="text-sm text-muted-foreground">{subtitle}</span> : null}
       </span>
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </label>

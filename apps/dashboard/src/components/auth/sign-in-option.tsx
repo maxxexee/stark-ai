@@ -24,12 +24,12 @@ export function SignInOption({
       block
       disabled={disabled}
       onClick={onClick}
-      className="relative h-12 gap-2.5 font-medium"
+      className="relative gap-2"
     >
       <MethodIcon method={method} />
       {children}
       {tag ? (
-        <span className="absolute right-5 text-[11px] font-normal text-faint">{tag}</span>
+        <span className="absolute right-3 text-xs font-normal text-muted-foreground">{tag}</span>
       ) : null}
     </Button>
   );

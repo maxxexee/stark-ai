@@ -1,13 +1,13 @@
 import { ChipGroup, ChoiceChip } from "@stark/ui/components/choice-chip";
 import { Field, FieldError, FieldLabel } from "@stark/ui/components/field";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@stark/ui/components/input-group";
 import { cn } from "@stark/ui/utils/cn";
 import { formatAmountInput, parseAmountInput } from "@stark/utils/format";
 import { type ReactNode, useId } from "react";
 
 /**
  * A typed naira amount plus quick-pick chips. This is how every amount, cap and threshold
- * is set in Stark: there are no sliders anywhere in the product.
+ * is set in Stark: there are no sliders anywhere in the product. Drawn like Add money's
+ * Send panel: a white panel in a grey tray, the figure on the left, the currency chip right.
  */
 export function AmountField({
   label,
@@ -26,26 +26,28 @@ export function AmountField({
 }) {
   const id = useId();
   return (
-    <Field data-invalid={error ? true : undefined} className={cn("gap-2.5", className)}>
-      <FieldLabel htmlFor={id} className="font-normal text-fg-2">
-        {label}
-      </FieldLabel>
-      <InputGroup className="h-auto rounded-xl px-1.5 dark:bg-canvas">
-        <InputGroupAddon>
-          <span aria-hidden="true" className="font-serif text-2xl text-muted-foreground">
-            ₦
-          </span>
-        </InputGroupAddon>
-        <InputGroupInput
-          id={id}
-          inputMode="numeric"
-          autoComplete="off"
-          aria-invalid={error ? true : undefined}
-          value={formatAmountInput(value)}
-          onChange={(e) => onChange(parseAmountInput(e.target.value))}
-          className="tabular h-auto py-3 font-serif text-[28px] md:text-[28px]"
-        />
-      </InputGroup>
+    <Field data-invalid={error ? true : undefined} className={cn("gap-2", className)}>
+      <div className="rounded-card bg-muted p-1">
+        <div className="flex flex-col gap-3 rounded-lg bg-card px-4 py-3.5">
+          <FieldLabel htmlFor={id} className="text-sm font-normal text-muted-foreground">
+            {label}
+          </FieldLabel>
+          <div className="flex h-10 items-center gap-3">
+            <input
+              id={id}
+              inputMode="numeric"
+              autoComplete="off"
+              aria-invalid={error ? true : undefined}
+              value={formatAmountInput(value)}
+              onChange={(e) => onChange(parseAmountInput(e.target.value))}
+              className="tabular h-full min-w-0 flex-1 bg-transparent p-0 text-3xl font-normal tracking-tight text-foreground outline-none"
+            />
+            <span className="flex h-9 shrink-0 items-center rounded-lg bg-muted px-3 text-base font-medium">
+              NGN
+            </span>
+          </div>
+        </div>
+      </div>
       {presets?.length ? (
         <ChipGroup label={`Quick amounts for ${label.toLowerCase()}`}>
           {presets.map((p) => (
