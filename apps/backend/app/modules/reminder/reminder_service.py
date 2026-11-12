@@ -1,7 +1,8 @@
 """The push half of reminders: say so first when a renewal is close.
 
-When the bot's account has a bill inside its renewal window and a Telegram chat is
-linked, Stark nudges that chat instead of waiting to be asked. The same facts are
+When an account has a bill inside its renewal window and a Telegram chat linked,
+Stark nudges that account's chats instead of waiting to be asked. Every linked
+account, each about its own bills. The same facts are
 always in `/v1/state` and the agent's snapshot, so nothing depends on this loop.
 """
 
@@ -12,6 +13,7 @@ import threading
 
 from app.modules.account.account_service import AccountService
 from app.modules.reminder import reminders
+from app.modules.telegram import telegram
 from app.modules.telegram.telegram_service import TelegramService
 
 log = logging.getLogger("stark.reminders")
@@ -47,8 +49,26 @@ class ReminderService:
             sent.append(text)
         return sent
 
+    def push_all(self) -> int:
+        """One pass over every account with a linked chat. One account failing (a
+        bad bill, a database blip) does not stop the others. Returns how many
+        nudges went out."""
+        try:
+            accounts = self.telegram.identities.linked_accounts(telegram.CHANNEL)
+        except Exception:
+            log.exception("reminder pass could not list linked accounts")
+            return 0
+        sent = 0
+        for account_id in accounts:
+            try:
+                sent += len(self.push_due(account_id))
+            except Exception:
+                log.exception("reminders failed for account=%s", account_id)
+        return sent
+
     def start(self, tick_seconds: int) -> threading.Event:
-        """A daemon thread pushing the bot owner's reminders; returns its stop event.
+        """A daemon thread pushing every linked account's reminders; returns its stop
+        event.
 
         Started by the app's lifespan, never on import, so a unit test does not
         inherit a background loop.
@@ -57,12 +77,7 @@ class ReminderService:
 
         def run() -> None:
             while not stop.wait(tick_seconds):
-                try:
-                    owner = self.telegram.owner_account_id()
-                    if owner:  # no account configured: nowhere to push
-                        self.push_due(owner)
-                except Exception:  # a broken tick must not kill the server
-                    log.exception("reminder tick failed")
+                self.push_all()
 
         threading.Thread(target=run, daemon=True, name="reminders").start()
         return stop

@@ -262,9 +262,6 @@ class TelegramAdapter:
     controls: ControlsLike | None = None
     bot_token: str | None = None
     secret: str | None = None
-    # The account this bot serves. A callable is resolved per use, so the account
-    # can be created by a sign-up after the server has already booted.
-    owner_user_id: str | Callable[[], str] = ""
     download: Callable[[str], bytes | None] | None = None
     transcribe: Callable[[bytes], tuple[str | None, str]] | None = None
     send: Callable[[int, str], bool] | None = None
@@ -289,7 +286,7 @@ class TelegramAdapter:
         """Both secrets present. Otherwise every update is refused."""
         return bool(self.bot_token and self.secret)
 
-    def link_code(self, account_id: str | None = None) -> dict[str, Any]:
+    def link_code(self, account_id: str) -> dict[str, Any]:
         """Mint one single-use code for an account, plus the deep link that spends it.
 
         The code is the only thing that binds a chat to this account (see
@@ -297,16 +294,10 @@ class TelegramAdapter:
         `deep_link` is None when the bot has no token or Telegram could not be
         reached — the code still works, typed by hand as `link 482913`.
 
-        The account is the one asking, not the bot's owner: a chat speaks for the
-        account whose code it spent, so every new sign-up can bind its own
-        Telegram instead of everyone sharing the owner's wallet.
+        The account is the one asking: a chat speaks for the account whose code it
+        spent, so every sign-up binds its own Telegram.
         """
-        account = (account_id or "").strip() or (
-            self.owner_user_id() if callable(self.owner_user_id) else self.owner_user_id
-        )
-        if not account:
-            raise TelegramError(409, "not_configured", "No account to link this chat to.")
-        code = self.identities.issue_code(account)
+        code = self.identities.issue_code(account_id)
         lookup = self.username_lookup or bot_username
         username = lookup(self.bot_token)
         return {

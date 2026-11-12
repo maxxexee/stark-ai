@@ -26,11 +26,13 @@ from app.modules.demo.demo_service import DemoService
 from app.modules.intents import one_click
 from app.modules.limit.limit_service import LimitService
 from app.modules.liquidity.float_service import FloatService
+from app.modules.liquidity.usdc_rate import UsdcRate
 from app.modules.payment.bill_payment_service import BillPaymentService
 from app.modules.payment.payment_service import PaymentService
 from app.modules.plan.plan_service import PlanService
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.reminder.reminder_service import ReminderService
+from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.settings.settings_service import SettingsService
 from app.modules.state.state_service import StateService
 from app.modules.stub.stub_service import StubService
@@ -40,6 +42,7 @@ from app.modules.telegram.telegram_service import TelegramService
 from app.modules.telemetry.telemetry_repository import TelemetryRepository
 from app.modules.telemetry.telemetry_service import TelemetryService
 from app.modules.treasury.treasury_service import TreasuryService
+from app.modules.treasury.operator_alerts import OperatorAlerts
 from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.modules.vault.vault_service import VaultService
 from app.modules.vending.catalog import CATALOG
@@ -68,17 +71,20 @@ class AppModule:
             self.auth, self.account_repository, self.receipts, self._build_agent
         )
         self.demo = DemoService()
+        # Every cap, threshold and rate setting the owner changes on the admin page,
+        # read live by whatever decides on it.
+        self.operator_limits = OperatorLimits(db)
 
         # Money: each user's vault, the rails that fill and empty it, the float.
         money = config.money
-        self.usdc_rate = money.funding.usdc_rate
+        self.usdc_rate = UsdcRate(self.operator_limits)
         self.flutterwave = flutterwave.client_from_env()
         if self.flutterwave is not None:
             CATALOG.use(self.flutterwave.bill_categories)
         self.vaults = VaultService(db, vault_chain.chain_from_env(), self.accounts,
                                     self.usdc_rate.market)
         gateway = VendingGateway(self.flutterwave)
-        self.floats = FloatService(db, self.flutterwave, money.float_settings)
+        self.floats = FloatService(db, self.flutterwave, self.operator_limits)
         one_click_client = one_click.client_from_env()
         self.deposits = DepositService(
             db,
@@ -87,9 +93,11 @@ class AppModule:
             self.flutterwave,
             one_click_client,
             money.funding,
+            self.usdc_rate,
+            self.operator_limits,
         )
         self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.flutterwave,
-                                             self.account_repository, money.withdrawals)
+                                             self.account_repository, self.operator_limits)
         treasury = treasury_chain.treasury_from_env()
         # Real USDC leaves only against real naira. A Flutterwave test key credits
         # checkouts nobody paid for, so it switches crypto payouts off.
@@ -100,7 +108,8 @@ class AppModule:
             self.deposits,
             one_click_client,
             treasury,
-            money.crypto_payouts,
+            self.usdc_rate,
+            self.operator_limits,
             sandbox_naira=self.flutterwave is not None and self.flutterwave.test_mode,
         )
         self.flutterwave_webhooks = FlutterwaveWebhookService(
@@ -132,6 +141,7 @@ class AppModule:
         self.telegram = TelegramService(
             config, db, self.identities, self.accounts, self.controls
         )
+        self.operator_alerts = OperatorAlerts(db)
         self.treasury = TreasuryService(
             db,
             self.vaults,
@@ -143,9 +153,10 @@ class AppModule:
             money.funding.treasury_account,
             self.usdc_rate,
             near_tx.NearRpc(near_tx.MAINNET_RPC),
-            TreasuryWatch(money.watch, self.telegram.tell_owner),
+            TreasuryWatch(self.operator_limits, self.operator_alerts),
         )
-        self.admin = AdminService(db, self.treasury, self.vaults, self.settings_service)
+        self.admin = AdminService(db, self.treasury, self.vaults, self.settings_service,
+                                  self.operator_alerts, self.operator_limits)
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)
         self.state = StateService(self.accounts, self.wallet, self.telemetry, self.bills)
@@ -154,8 +165,10 @@ class AppModule:
         )
         self.voice = VoiceService(self.accounts)
         self.speak_tickets = SpeakTickets()
-        self.speak_limit = RateLimiter(config.speak_per_minute)
-        self.telemetry_limit = RateLimiter(config.telemetry_per_minute)
+        # Per account per minute. Speaking spends voice credits; a reading is a row.
+        self.speak_limit = RateLimiter(lambda: self.operator_limits.get("speak_per_minute"))
+        self.telemetry_limit = RateLimiter(
+            lambda: self.operator_limits.get("telemetry_per_minute"))
         self.reminders = ReminderService(self.accounts, self.telegram)
         self.stub = StubService(
             config,

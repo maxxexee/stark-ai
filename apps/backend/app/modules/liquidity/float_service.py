@@ -12,9 +12,8 @@ counted as spent. If the payment does not fit, it is refused with `float_low`
 (nothing signed, nothing charged) and logged, so the operator can top the balance
 up. There is no refill to run: deposits settle into the same balance.
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `STARK_FLOAT_LOW_NGN` | 100,000 | log a warning when the balance falls under this |
+A warning is logged when the balance falls under the `float_low_ngn` operator limit,
+set on the admin page.
 """
 
 from __future__ import annotations
@@ -22,12 +21,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
 from typing import Optional
 
 from app.common.api_error import ApiError
 from app.database import neon
 from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError
+from app.modules.settings.operator_limits import OperatorLimits
 
 log = logging.getLogger("stark.float")
 
@@ -35,19 +34,15 @@ FLOAT_LOW_MESSAGE = (
     "I can't buy that right now, so nothing was charged. Try again in a few minutes."
 )
 
-
-@dataclass(frozen=True)
-class FloatSettings:
-    low_water_ngn: int
-    cache_seconds: int = 60
+BALANCE_CACHE_SECONDS = 60
 
 
 class FloatService:
     def __init__(self, db: neon.Database, flutterwave: Optional[FlutterwaveClient],
-                 settings: FloatSettings) -> None:
+                 limits: OperatorLimits) -> None:
         self.db = db
         self.flutterwave = flutterwave
-        self.settings = settings
+        self.limits = limits
         self._cached: Optional[tuple[float, int]] = None
         self._lock = threading.Lock()
 
@@ -58,7 +53,7 @@ class FloatService:
             raise FlutterwaveError(0, "Flutterwave is not configured")
         with self._lock:
             if not fresh and self._cached is not None \
-                    and time.monotonic() - self._cached[0] < self.settings.cache_seconds:
+                    and time.monotonic() - self._cached[0] < BALANCE_CACHE_SECONDS:
                 return self._cached[1]
         value = self.flutterwave.ngn_balance()
         with self._lock:
@@ -101,6 +96,7 @@ class FloatService:
             balance = self.balance(fresh=True)
         except FlutterwaveError:
             return
-        if balance < self.settings.low_water_ngn:
+        low_water_ngn = self.limits.get("float_low_ngn")
+        if balance < low_water_ngn:
             log.warning("Flutterwave NGN balance is ₦%s, under ₦%s: top it up",
-                        f"{balance:,}", f"{self.settings.low_water_ngn:,}")
+                        f"{balance:,}", f"{low_water_ngn:,}")

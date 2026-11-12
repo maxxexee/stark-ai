@@ -3,12 +3,10 @@ import { ApiError } from "@stark/api/errors";
 export interface TreasuryReport {
   owed_to_users_ngn: number;
   held: {
-    /** null when Flutterwave could not be read: unknown, not zero. */
     flutterwave_ngn: number | null;
     pending_purchases_ngn: number;
     treasury_usdc_as_ngn: number | null;
   };
-  /** A decimal string, so no float rounding on the way. */
   treasury_usdc: string | null;
   coverage_ngn: number;
   unsettled_vault_ops: number;
@@ -56,7 +54,15 @@ export interface VaultRow {
   last_error: string | null;
 }
 
-/** A chain op that has not gone through: what holds a user's payments up, and why. */
+export interface OperatorAlert {
+  kind: "flutterwave" | "treasury" | "coverage";
+  message: string;
+  raised_at: string;
+  cleared_at: string | null;
+  cleared_message: string | null;
+  updated_at: string;
+}
+
 export interface StuckChainOp {
   id: string;
   user_id: string;
@@ -73,18 +79,27 @@ export interface AdminOverview {
   withdrawals: StatusCount[];
   withdrawals_in_flight: InFlightWithdrawal[];
   deposits_open: OpenDeposit[];
-  /** null when no chain is configured and payments book off-chain. */
   chain: ChainSetup | null;
   vaults: VaultRow[];
-  /** Absent from an API deployed before it was added; the dashboard and API deploy apart. */
   chain_ops_stuck?: StuckChainOp[];
-  /** The server's outbound IP, for Flutterwave's whitelist; null when it couldn't be read. */
+  alerts?: OperatorAlert[];
   egress_ip: string | null;
-  /** Absent from an API deployed before fees existed; the dashboard and API deploy apart. */
   fees_ngn?: Fees;
+  limits?: OperatorLimit[];
 }
 
-/** Stark's service fee on each kind of bill, in naira. */
+/** One operator limit; the API owns the set, so a key the page does not know still shows. */
+export interface OperatorLimit {
+  key: string;
+  label: string;
+  unit: string;
+  value: number;
+  default: number;
+  minimum: number;
+  maximum: number;
+  overridden: boolean;
+}
+
 export interface Fees {
   electricity: number;
   tv: number;
@@ -94,10 +109,6 @@ export interface Fees {
 
 const KEY_STORAGE = "stark.admin-key";
 
-/**
- * Admin routes take `X-Stark-Admin-Key` instead of a session; the key lives in sessionStorage, so
- * it is gone when the tab closes.
- */
 export class AdminApi {
   static savedKey(): string | null {
     return sessionStorage.getItem(KEY_STORAGE);
@@ -123,13 +134,28 @@ export class AdminApi {
     return data.fees_ngn;
   }
 
+  /** `null` puts a limit back on its default. */
+  static async updateLimits(
+    key: string,
+    changes: Record<string, number | null>,
+  ): Promise<OperatorLimit[]> {
+    const data = await AdminApi.request<{ limits: OperatorLimit[] }>(key, "/v1/admin/limits", {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+    return data.limits;
+  }
+
   private static async request<T>(key: string, path: string, init: RequestInit = {}): Promise<T> {
     const base = (import.meta.env.VITE_STARK_API_URL ?? "").replace(/\/$/, "");
     let res: Response;
     try {
       res = await fetch(`${base}${path}`, {
         ...init,
-        headers: { "X-Stark-Admin-Key": key, "Content-Type": "application/json" },
+        headers: {
+          "X-Stark-Admin-Key": key,
+          "Content-Type": "application/json",
+        },
       });
     } catch {
       throw new ApiError(0, "network", "Network request failed");

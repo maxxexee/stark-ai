@@ -21,20 +21,26 @@ rate stays usable for fifteen minutes; after that `RateUnavailable` is raised an
 the caller refuses the quote rather than guess a price.
 
 **Paycrest is the only source, so its answer is bounded.** A rate outside
-`[STARK_USDC_RATE_MIN, STARK_USDC_RATE_MAX]`, or one that moved more than
-`STARK_USDC_RATE_MAX_MOVE` (a fraction) from the last rate accepted, is treated like
-Paycrest being down: the last good rate covers the fifteen minutes, then quotes are
-refused until Paycrest comes back in range, or the owner pins the rate. A genuine
-devaluation bigger than the move limit therefore needs the owner, on purpose: a
-wrong rate here sends real USDC. A spread that leaves either side at or below zero
-is refused the same way.
+`usdc_rate_min`..`usdc_rate_max`, or one that moved more than
+`usdc_rate_max_move_pct` from the last rate accepted, is treated like Paycrest being
+down: the last good rate covers the fifteen minutes, then quotes are refused until
+Paycrest comes back in range, or the owner pins the rate. A genuine devaluation
+bigger than the move limit therefore needs the owner, on purpose: a wrong rate here
+sends real USDC. A spread that leaves either side at or below zero is refused the
+same way.
 
-| Variable | Default | Meaning |
+The spread, the pin and the bounds are operator limits (`OperatorLimits`), set on
+the admin page and read on every quote, so a change applies within seconds:
+
+| Limit | Default | Meaning |
 |---|---|---|
-| `STARK_USDC_NGN_SPREAD` | 10 | naira Stark keeps per USDC, each way |
-| `STARK_USDC_NGN_RATE` | unset | pin the market rate instead of asking Paycrest |
-| `STARK_USDC_RATE_MIN` / `STARK_USDC_RATE_MAX` | 500 / 5000 | naira per USDC Paycrest may quote |
-| `STARK_USDC_RATE_MAX_MOVE` | 0.15 | largest move from the last accepted rate |
+| `usdc_spread_ngn` | 10 | naira Stark keeps per USDC, each way |
+| `usdc_rate_pinned` | 0 | the market rate to use instead of asking Paycrest; 0 asks |
+| `usdc_rate_min` / `usdc_rate_max` | 500 / 5000 | naira per USDC Paycrest may quote |
+| `usdc_rate_max_move_pct` | 15 | largest move, in percent, from the last accepted rate |
+
+While a rate is pinned it counts as the last one accepted, so the first Paycrest
+quote after the pin is lifted is held to the move limit from it.
 """
 
 from __future__ import annotations
@@ -48,15 +54,14 @@ import urllib.request
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
+from app.modules.settings.operator_limits import OperatorLimits
+
 log = logging.getLogger("stark.rate")
 
 PAYCREST_URL = "https://api.paycrest.io/v1/rates/USDC/100/NGN"
 USER_AGENT = "stark-backend/1.0 (+https://hellostark.xyz)"
 FRESH_SECONDS = 60
 STALE_SECONDS = 15 * 60
-RATE_MIN = Decimal(500)
-RATE_MAX = Decimal(5000)
-MAX_MOVE = Decimal("0.15")
 
 
 class RateUnavailable(Exception):
@@ -64,14 +69,8 @@ class RateUnavailable(Exception):
 
 
 class UsdcRate:
-    def __init__(self, *, spread_ngn: Decimal, fixed: Optional[Decimal] = None,
-                 floor: Decimal = RATE_MIN, ceiling: Decimal = RATE_MAX,
-                 max_move: Decimal = MAX_MOVE, timeout: int = 10) -> None:
-        self.spread_ngn = spread_ngn
-        self.fixed = fixed
-        self.floor = floor
-        self.ceiling = ceiling
-        self.max_move = max_move
+    def __init__(self, limits: OperatorLimits, *, timeout: int = 10) -> None:
+        self.limits = limits
         self.timeout = timeout
         self._lock = threading.Lock()
         self._market: Optional[Decimal] = None
@@ -79,16 +78,20 @@ class UsdcRate:
 
     def buying(self) -> Decimal:
         """Naira Stark credits per USDC it receives (crypto deposits)."""
-        return _priced(self.market() - self.spread_ngn)
+        return _priced(self.market() - self.limits.get("usdc_spread_ngn"))
 
     def selling(self) -> Decimal:
         """Naira Stark charges per USDC it sends (crypto withdrawals)."""
-        return _priced(self.market() + self.spread_ngn)
+        return _priced(self.market() + self.limits.get("usdc_spread_ngn"))
 
     def market(self) -> Decimal:
-        if self.fixed is not None:
-            return self.fixed
+        pinned = self.limits.get("usdc_rate_pinned")
         with self._lock:
+            if pinned:
+                # Never fetched, so lifting the pin asks Paycrest at once, and an
+                # outage then refuses rather than keep quoting the old pin.
+                self._market, self._fetched_at = Decimal(pinned), float("-inf")
+                return self._market
             age = time.monotonic() - self._fetched_at
             if self._market is not None and age < FRESH_SECONDS:
                 return self._market
@@ -103,12 +106,15 @@ class UsdcRate:
 
     def _accept(self, rate: Decimal) -> Decimal:
         """The fetched rate, or `RateUnavailable` if it is out of bounds."""
-        if not self.floor <= rate <= self.ceiling:
+        floor = self.limits.get("usdc_rate_min")
+        ceiling = self.limits.get("usdc_rate_max")
+        if not floor <= rate <= ceiling:
             log.error("Paycrest quoted %s naira per USDC, outside %s to %s",
-                      rate, self.floor, self.ceiling)
+                      rate, floor, ceiling)
             raise RateUnavailable(f"Paycrest rate {rate} is outside the allowed range")
         last = self._market
-        if last is not None and abs(rate - last) > last * self.max_move:
+        max_move_pct = self.limits.get("usdc_rate_max_move_pct")
+        if last is not None and abs(rate - last) * 100 > last * max_move_pct:
             log.error("Paycrest rate jumped from %s to %s; not using it", last, rate)
             raise RateUnavailable(f"Paycrest rate moved from {last} to {rate}")
         return rate

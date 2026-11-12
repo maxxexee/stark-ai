@@ -42,6 +42,8 @@ Every non-2xx response has this body:
 |---|---|---|
 | `unauthorized` | 401 | Missing, malformed or expired bearer token — sign in first |
 | `admin_disabled` | 403 | `STARK_ADMIN_KEY` is not set, so admin routes refuse everyone (additive, 2026-11-11) |
+| `unknown_limit` | 400 | `PATCH /v1/admin/limits` named a key that is not an operator limit (additive, 2026-11-12) |
+| `bad_limit` | 400 | `PATCH /v1/admin/limits` set a value outside its range, or the lowest USDC rate at or above the highest (additive, 2026-11-12) |
 | `paused` | 423 | The owner paused Stark; no payment is made until it is resumed (additive, 2026-11-03) |
 | `unknown_request` | 404 | No payment request with that id (additive, 2026-11-03) |
 | `request_closed` | 409 | The request was already approved, denied or has expired (additive, 2026-11-03) |
@@ -69,7 +71,6 @@ Every non-2xx response has this body:
 | `bad_limits` | 400 | A limit is not positive, or per-payment exceeds monthly |
 | `no_route` | 404 | Unknown path |
 | `bad_request` | 400 | The body is not valid JSON, or a field has the wrong type (additive, 2026-10-27) |
-| `not_configured` | 409 | `POST /v1/link/code` while `STARK_TG_OWNER_EMAIL` names no account (additive, 2026-10-27) |
 | `unknown_identity` | 404 | `DELETE /v1/link/identities/...` names no chat linked to this account (additive, 2026-11-12) |
 
 > Ordering note: a **pause** beats everything. Otherwise the **per-payment** cap is checked first, then the **monthly** cap,
@@ -595,7 +596,7 @@ unknown_deposit` for another account's id.
 
 **Card money is held.** Naira added by card (any checkout not paid by bank transfer
 or USSD) is credited and spendable on bills at once, but cannot be withdrawn, by bank
-or as crypto, until `STARK_CARD_HOLD_HOURS` (72 by default) after it lands: a card
+or as crypto, until the `card_hold_hours` operator limit (72 by default) after it lands: a card
 charge can be disputed after the money has gone. A withdrawal that only the held
 money could cover is refused with `funds_on_hold` (409), whose message says how much
 can leave now.
@@ -660,7 +661,7 @@ crypto deposit locks its own rate when it is quoted, so this is a guide, not a p
 
 Show the resolved name before sending. `bad_account` (400) when the number does not
 match the bank or is not 10 digits. Each account may look up
-`STARK_BANK_LOOKUPS_PER_DAY` names (20 by default) in any 24 hours, found or not;
+`bank_lookups_per_day` names (an operator limit, 20 by default) in any 24 hours, found or not;
 past that, **429** `too_many_lookups`. A malformed number is refused before it
 counts, and a withdrawal's own check of the account it pays does not count.
 
@@ -683,7 +684,7 @@ same reference) → `processing` → `paid`, or `returned` — the money is back
 says why. The activity entry becomes `sent` or `failed` to match.
 
 Errors: `bad_amount` (below ₦100), `bad_account`, `paused` (423, the owner paused
-Stark), `daily_limit` (409, over `STARK_WITHDRAW_DAILY_NGN`, ₦200,000 by default, sent
+Stark), `daily_limit` (409, over the `withdraw_daily_ngn` operator limit, ₦200,000 by default, sent
 to banks from this account in 24 hours, not counting returned ones), `funds_on_hold`
 (409, see card holds above), `insufficient_balance` (409), `not_available` (501),
 `provider_failed` (502). Nothing is taken on any refusal. `GET /v1/wallet/withdrawals`
@@ -752,13 +753,74 @@ key configured every request is **403** `admin_disabled`.
                              "created_at": "…", "updated_at": "…"}],
   "deposits_open": [{"id": "dep_…", "user_id": "…", "method": "crypto",
                      "amount_ngn": 15000, "status": "open", "created_at": "…",
-                     "expires_at": "…"}]
+                     "expires_at": "…"}],
+  "alerts": [{"kind": "treasury", "message": "Treasury holds 0.00 USDC, under 100 USDC. …",
+              "raised_at": "…", "cleared_at": null, "cleared_message": null,
+              "updated_at": "…"}]
 }
 ```
+
+`alerts` (**additive, 2026-11-12**) is what the money loop wants the operator to act on:
+`flutterwave` (the float under the `float_low_ngn` limit), `treasury` (USDC under
+`treasury_low_usdc`) and `coverage` (Stark holds less than it owes). A raised
+alarm has `cleared_at: null`; one that ended in the last week keeps its
+`cleared_message`. Raised alarms come first. Nothing is sent to Telegram.
 
 A balance that could not be read is `null`, not zero, and `coverage_ngn` then counts
 only what was read. `treasury_usdc` is a decimal string. The in-flight lists hold at
 most 50 rows each, oldest first.
+
+`limits` (**additive, 2026-11-12**) is every operator limit, in the order the admin page
+shows them. The owner changes them with `PATCH /v1/admin/limits`; each one's environment
+variable is only its `default`. Absent from an older API, so read it as optional.
+
+```json
+{"key": "withdraw_daily_ngn", "label": "Bank withdrawals per account per day",
+ "unit": "₦", "value": 300000, "default": 200000, "minimum": 0, "maximum": 50000000,
+ "overridden": true}
+```
+
+`value` is what applies now: the owner's, while `overridden`, else `default`. Every value is
+a whole number. `unit` is one of `₦`, `USDC`, `₦ per USDC`, `%`, `hours`, `count`.
+
+| `key` | Default (variable) | Range |
+|---|---|---|
+| `withdraw_daily_ngn` | 200,000 (`STARK_WITHDRAW_DAILY_NGN`) | 0 – 50,000,000 |
+| `bank_lookups_per_day` | 20 (`STARK_BANK_LOOKUPS_PER_DAY`) | 1 – 1,000 |
+| `crypto_withdraw_max_ngn` | 200,000 (`STARK_CRYPTO_WITHDRAW_MAX_NGN`) | 1,000 – 50,000,000 |
+| `crypto_withdraw_max_usdc` | 200 (`STARK_CRYPTO_WITHDRAW_MAX_USDC`) | 1 – 100,000 |
+| `crypto_withdraw_daily_ngn` | 1,000,000 (`STARK_CRYPTO_WITHDRAW_DAILY_NGN`) | 0 – 500,000,000 |
+| `crypto_withdraw_user_daily_ngn` | 200,000 (`STARK_CRYPTO_WITHDRAW_USER_DAILY_NGN`) | 0 – 50,000,000 |
+| `card_hold_hours` | 72 (`STARK_CARD_HOLD_HOURS`) | 0 – 720 |
+| `usdc_rate_min` | 500 (`STARK_USDC_RATE_MIN`) | 1 – 100,000 |
+| `usdc_rate_max` | 5,000 (`STARK_USDC_RATE_MAX`) | 1 – 100,000 |
+| `usdc_rate_max_move_pct` | 15 (`STARK_USDC_RATE_MAX_MOVE`; `0.15` still reads as 15) | 1 – 100 |
+| `usdc_spread_ngn` | 10 (`STARK_USDC_NGN_SPREAD`) | 0 – 1,000 |
+| `usdc_rate_pinned` | 0, ask Paycrest (`STARK_USDC_NGN_RATE`) | 0 – 100,000 |
+| `float_low_ngn` | 100,000 (`STARK_FLOAT_LOW_NGN`) | 0 – 1,000,000,000 |
+| `treasury_low_usdc` | 100 (`STARK_TREASURY_LOW_USDC`) | 0 – 10,000,000 |
+| `speak_per_minute` | 30 (`STARK_SPEAK_PER_MINUTE`) | 1 – 1,000 |
+| `telemetry_per_minute` | 120 (`STARK_TELEMETRY_PER_MINUTE`) | 1 – 10,000 |
+
+### `PATCH /v1/admin/limits`
+
+Operator only, with `X-Stark-Admin-Key` like the overview (2026-11-12). The body maps a
+limit `key` to its new whole number, or to `null` to put it back on its default:
+
+```json
+{"withdraw_daily_ngn": 300000, "card_hold_hours": null}
+```
+
+Keys left out keep their value. The answer is `{"limits": [...]}`, every limit as on the
+overview. A change applies within 15 seconds on every server, at once on the one that
+saved it, with no deploy.
+
+Everything is checked before anything is saved, so a refused body changes nothing:
+`unknown_limit` (400) for a key that is not a limit, `bad_limit` (400) for a value
+outside its range (the message names the limit and the range) or for a change that
+would leave `usdc_rate_min` at or above `usdc_rate_max`, and `bad_request` (400) for a
+value that is not a whole number. A pinned rate (`usdc_rate_pinned` above 0) is not held
+to the rate bounds: it exists for when the market leaves them.
 
 ### `GET /v1/suggestions`
 
@@ -932,7 +994,7 @@ of an answered `/v1/voice`.
 `audio` is a WAV data URL, or `null` when voice is off — **200 either way** (voice is
 an enhancement, never an error). Missing/empty `text`, or more than **2,000
 characters**, is **400 `bad_text`**. Each call counts toward the account's speak limit
-(`STARK_SPEAK_PER_MINUTE`, default 30 a minute): over it is **429 `rate_limited`**.
+(the `speak_per_minute` operator limit, default 30 a minute): over it is **429 `rate_limited`**.
 
 ### `POST /v1/speak/ticket`
 
@@ -986,7 +1048,7 @@ Stored per account, and stamped with the **server's** clock when it arrives: a `
 in the body is ignored (2026-10-27), because `units_left` and `days_left` are worked
 out from the gaps between readings, and a wrong device clock would move the meter.
 Post each sample as it is taken. `watts` must be a number of 0 or more (`bad_watts`).
-At most `STARK_TELEMETRY_PER_MINUTE` readings (default 120) a minute per account;
+At most `telemetry_per_minute` readings (an operator limit, default 120) a minute per account;
 beyond that **429 `rate_limited`** (2026-11-12).
 **It feeds `/v1/suggestions`** (2026-10-24):
 the `load_imbalance` line needs two or more `device_id`s in the last 24 hours, and
@@ -1223,7 +1285,9 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
 | 2026-11-12 | **API surface hardening.** The session token is read only from `Authorization: Bearer`; `?token=` is refused on every route. `GET /v1/speak/stream` now takes only `?ticket=` from the new `POST /v1/speak/ticket` (`?text=` and `?token=` are gone). `/v1/speak` and `/v1/speak/ticket` refuse `text` over 2,000 characters (`bad_text`); `/v1/voice` refuses a body over 12 MB (`audio_too_large`) while reading it. New code `rate_limited` (429) on speak routes and `/v1/telemetry`. Bill `label` (40) and `provider` (48) are length- and charset-checked (`bad_bill`). `/docs`, `/redoc` and the spec are served only with `STARK_DOCS=1`, and `GET /` no longer lists routes. The agent pays only an amount the user said (`amount_mismatch` on its reply `code`) and strips web links from its reply text. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
-| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |
+| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. |
 | 2026-11-12 | Receipts no longer carry a `tx_hash` for a `pay` that was only signed offline (a chain configured without `STARK_BROADCAST=1`); it is `null` there, as it already was with no chain. The backend warns at boot when the chain is not broadcasting. No shape changed. |
 | 2026-11-12 | Payment fixes. The monthly cap and `spent_ngn` (`/v1/wallet`, `/v1/state`, `/v1/limits`, `over_cap`) are this calendar month's (UTC) and reset on the 1st; the cap also counts purchases still `pending`, and an account's payments are checked one at a time. A purchase whose order call timed out is looked up at Flutterwave by `request_id` before it is failed. A racing repeat of a top-up `request_id` answers 200 instead of 500. `POST /v1/_stub/reset` is off while any real rail is configured and unlinks only the caller's chats. No shape changed. |
 | 2026-11-12 | Money-rail hardening. Bank and crypto withdrawals answer `paused` (423) while the owner has paused Stark, and new `funds_on_hold` (409) for money a card added in the last `STARK_CARD_HOLD_HOURS` (it still pays bills). Bank withdrawals gain a per-account daily cap (`daily_limit`, 409); crypto gains a per-account daily cap and a per-withdrawal USDC cap (`over_limit`) beside the existing ones. `POST /v1/wallet/bank-accounts/resolve` is limited per account per day (new `too_many_lookups`, 429). `transfer.completed` is re-read from Flutterwave instead of trusting its body, and a `paid` withdrawal is never returned. `GET /v1/wallet/deposits/{id}` asks its rail at most every 15 seconds. Paycrest rates outside the allowed range or move are refused (`provider_failed`). No shape changed. |
+| 2026-11-12 | No bot owner. Operator alerts (float, treasury, coverage) are stored and returned as `alerts` on `GET /v1/admin/overview` instead of sent to a Telegram chat, and the daily summary is gone. Renewal reminders go to every linked account's chats. `STARK_TG_OWNER_EMAIL`, `STARK_TG_OWNER_ACCOUNT_ID` and `STARK_SUMMARY_HOUR` are no longer read, and `POST /v1/link/code` no longer answers `not_configured`. |
+| 2026-11-12 | **Operator limits on the admin page.** `GET /v1/admin/overview` gains `limits` (each withdrawal cap, the card hold, the USDC rate bounds, spread and pin, the alert thresholds and the speak and telemetry rate limits, with its value and default), and `PATCH /v1/admin/limits` sets them (`null` resets one); a change applies within 15 seconds with no deploy. Their environment variables are now only the defaults; `STARK_USDC_RATE_MAX_MOVE` is a percentage (a fraction under 1 still reads as one) and `STARK_USDC_NGN_RATE` / `STARK_USDC_NGN_SPREAD` are whole naira. New codes `unknown_limit`, `bad_limit` (400). Additive only. |

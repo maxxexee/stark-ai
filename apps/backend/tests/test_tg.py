@@ -124,7 +124,6 @@ class AdapterCase(unittest.TestCase):
             identities=self.ids,
             bot_token="123:TEST",
             secret="s3cret",
-            owner_user_id=self.account.id,
             send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
             on_turn=self.turns.append,
             # Voice stays off unless a test turns it on: unit tests never
@@ -209,7 +208,7 @@ class TestLinkCode(AdapterCase):
 
     def test_payload_carries_a_code_and_a_deep_link(self):
         self.adapter.username_lookup = lambda token: "hellostarkai_bot"
-        payload = self.adapter.link_code()
+        payload = self.adapter.link_code(self.account.id)
         self.assertRegex(payload["code"], r"^\d{6}$")
         self.assertEqual(payload["expires_in"], identity_repository.CODE_TTL_SECONDS)
         self.assertEqual(payload["bot_username"], "hellostarkai_bot")
@@ -217,13 +216,13 @@ class TestLinkCode(AdapterCase):
                          f"https://t.me/hellostarkai_bot?start={payload['code']}")
 
     def test_deep_link_redeems_the_code(self):
-        code = self.adapter.link_code()["code"]
+        code = self.adapter.link_code(self.account.id)["code"]
         self.assertIn("Linked", self._say(f"/start {code}"))
         self.assertEqual(self.ids.resolve(telegram.CHANNEL, "42"), self.account.id)
 
     def test_no_username_means_no_deep_link_but_the_code_still_works(self):
         self.adapter.username_lookup = lambda token: None
-        payload = self.adapter.link_code()
+        payload = self.adapter.link_code(self.account.id)
         self.assertIsNone(payload["deep_link"])
         self.assertIn("Linked", self._say(f"/link {payload['code']}"))
 
@@ -233,7 +232,7 @@ class TestLinkCode(AdapterCase):
 
     def test_a_code_never_rebinds_a_linked_chat(self):
         self.linked()
-        code = self.adapter.link_code()["code"]
+        code = self.adapter.link_code(self.account.id)["code"]
         self.assertIn("already linked", self._say(f"/start {code}"))
 
 

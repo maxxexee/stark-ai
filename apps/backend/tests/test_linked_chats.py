@@ -66,27 +66,5 @@ class LinkedChatsTest(unittest.TestCase):
         self.assertEqual(response.json()["code"], "unknown_identity")
 
 
-class BotOwnerTest(unittest.TestCase):
-    def setUp(self):
-        self.account = test_support.TempAccount()
-        self.addCleanup(self.account.close)
-
-    def owner(self, **config) -> str:
-        api = test_support.ApiHarness(self.account, **config)
-        self.addCleanup(api.restart)
-        return api.module.telegram.owner_account_id()
-
-    def test_a_configured_account_id_is_the_owner(self):
-        self.assertEqual(self.owner(telegram_owner_account_id=self.account.id,
-                                    telegram_owner_email=""), self.account.id)
-
-    def test_an_unverified_email_never_makes_an_owner(self):
-        # Email sign-up does not verify the address, so anyone could sign up as
-        # the owner's email. The temp account has no verified Neon Auth user.
-        self.assertEqual(self.owner(telegram_owner_account_id=None,
-                                    telegram_owner_email=f"{self.account.id}@test.invalid"),
-                         "")
-
-
 if __name__ == "__main__":
     unittest.main()

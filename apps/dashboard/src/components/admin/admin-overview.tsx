@@ -2,10 +2,12 @@ import { ApiError } from "@stark/api/errors";
 import { Button } from "@stark/ui/components/button";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { AdminAlerts } from "@/components/admin/admin-alerts";
 import { AdminChain } from "@/components/admin/admin-chain";
 import { AdminChainOps } from "@/components/admin/admin-chain-ops";
 import { AdminFees } from "@/components/admin/admin-fees";
 import { AdminInFlightTable } from "@/components/admin/admin-in-flight-table";
+import { AdminLimits } from "@/components/admin/admin-limits";
 import { AdminPots } from "@/components/admin/admin-pots";
 import { AdminStatusTable } from "@/components/admin/admin-status-table";
 import { AdminApi } from "@/lib/admin/admin-api";
@@ -50,6 +52,7 @@ export function AdminOverview({
       {error && !data ? <p className="m-0 text-sm text-destructive">{error.message}</p> : null}
       {data ? (
         <>
+          {data.alerts ? <AdminAlerts alerts={data.alerts} /> : null}
           <AdminPots report={data.treasury} />
           {data.fees_ngn ? (
             <AdminFees
@@ -58,6 +61,7 @@ export function AdminOverview({
               fees={data.fees_ngn}
             />
           ) : null}
+          {data.limits ? <AdminLimits adminKey={adminKey} limits={data.limits} /> : null}
           <div className="grid gap-6 md:grid-cols-2">
             <AdminStatusTable title="Deposits" rows={data.deposits} />
             <AdminStatusTable title="Withdrawals" rows={data.withdrawals} />

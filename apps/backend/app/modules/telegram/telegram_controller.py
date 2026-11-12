@@ -19,7 +19,7 @@ router = APIRouter(tags=["Telegram"])
 
 @router.post("/v1/link/code", response_model=LinkCodeDto,
              summary="Mint a code that links a chat to this account",
-             responses=ApiResponses.errors("unauthorized", "not_configured"))
+             responses=ApiResponses.errors("unauthorized"))
 def link_code(account: AuthUser, module: Module) -> JSONResponse:
     """Single-use, ten minutes. The server keeps only a hash, so this response is
     the one time the code is readable. `deep_link` is null without a bot token."""

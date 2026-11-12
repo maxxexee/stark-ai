@@ -1,52 +1,36 @@
-"""Tell the operator, on Telegram, when the money needs a hand.
+"""Raise an operator alert when the money needs a hand.
 
 Runs as the money loop's last step, on the report `TreasuryService.report()` just
-built. It sends to the bot owner's linked Telegram chats (`STARK_TG_OWNER_EMAIL`):
+built, and records alarms in `OperatorAlerts`, which the admin page shows:
 
-- **Flutterwave low**: the NGN balance is under `STARK_FLOAT_LOW_NGN`. Bills and
-  bank withdrawals are refused once it cannot cover them.
-- **Treasury low**: the treasury holds less USDC than `STARK_TREASURY_LOW_USDC`.
+- **Flutterwave low**: the NGN balance is under the `float_low_ngn` limit. Bills
+  and bank withdrawals are refused once it cannot cover them.
+- **Treasury low**: the treasury holds less USDC than the `treasury_low_usdc` limit.
   Crypto withdrawals are paid from it.
-- **Coverage negative**: Stark holds less than it owes its users.
-- **Daily summary**: both balances and coverage, once a day at
-  `STARK_SUMMARY_HOUR` (Lagos time).
 
-An alarm is sent when it starts, repeated every six hours while it lasts, and
-cleared with one "back to normal" line. A balance that could not be read raises
-nothing: unknown is not low. The state is in memory, so a restart can repeat an
-alarm or the day's summary, never lose a payment.
+Both thresholds are operator limits, set on the admin page and read on every check.
+- **Coverage negative**: Stark holds less than it owes its users.
+
+An alarm is raised when its condition starts and cleared when it ends; each change
+is also logged. A balance that could not be read changes nothing: unknown is not
+low, and not recovered either.
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any
+
+from app.modules.settings.operator_limits import OperatorLimits
+from app.modules.treasury.operator_alerts import OperatorAlerts
 
 log = logging.getLogger("stark.treasury")
 
-LAGOS = timezone(timedelta(hours=1))
-REPEAT_SECONDS = 6 * 3600
-
-
-@dataclass(frozen=True)
-class WatchSettings:
-    float_low_ngn: int
-    treasury_low_usdc: Decimal
-    summary_hour: int
-
 
 class TreasuryWatch:
-    def __init__(self, settings: WatchSettings, say: Callable[[str], int],
-                 now: Callable[[], float] = time.time) -> None:
-        self.settings = settings
-        self.say = say
-        self.now = now
-        self._raised: dict[str, float] = {}  # alarm → when it was last sent
-        self._summary_on: Optional[str] = None
+    def __init__(self, limits: OperatorLimits, alerts: OperatorAlerts) -> None:
+        self.limits = limits
+        self.alerts = alerts
 
     def check(self, report: dict[str, Any]) -> None:
         held = report["held"]
@@ -55,19 +39,21 @@ class TreasuryWatch:
         coverage = report["coverage_ngn"]
 
         if flutterwave is not None:
+            float_low_ngn = self.limits.get("float_low_ngn")
             self._alarm(
-                "flutterwave", flutterwave < self.settings.float_low_ngn,
+                "flutterwave", flutterwave < float_low_ngn,
                 f"Flutterwave balance is ₦{flutterwave:,}, under "
-                f"₦{self.settings.float_low_ngn:,}. Top it up: bills and bank "
+                f"₦{float_low_ngn:,}. Top it up: bills and bank "
                 "withdrawals stop when it cannot cover them.",
                 f"Flutterwave balance is back to ₦{flutterwave:,}.",
             )
         if usdc is not None:
+            treasury_low_usdc = self.limits.get("treasury_low_usdc")
             self._alarm(
-                "treasury", usdc < self.settings.treasury_low_usdc,
+                "treasury", usdc < treasury_low_usdc,
                 f"Treasury holds {usdc:,.2f} USDC, under "
-                f"{self.settings.treasury_low_usdc:,} USDC. Crypto withdrawals are "
-                "paid from it.",
+                f"{treasury_low_usdc:,} USDC. Crypto withdrawals and "
+                "vault funding are paid from it.",
                 f"Treasury is back to {usdc:,.2f} USDC.",
             )
         # Coverage only means something when both sides were read.
@@ -78,46 +64,10 @@ class TreasuryWatch:
                 f"(₦{report['owed_to_users_ngn']:,}).",
                 f"Coverage is back to ₦{coverage:,}.",
             )
-        self._summary(report)
 
-    def _alarm(self, name: str, low: bool, raise_text: str, clear_text: str) -> None:
-        last = self._raised.get(name)
-        if not low:
-            if last is not None:
-                del self._raised[name]
-                self.say(clear_text)
-            return
-        if last is not None and self.now() - last < REPEAT_SECONDS:
-            return
-        log.warning(raise_text)
-        self._raised[name] = self.now()
-        self.say(raise_text)
-
-    def _summary(self, report: dict[str, Any]) -> None:
-        local = datetime.fromtimestamp(self.now(), LAGOS)
-        today = local.date().isoformat()
-        if local.hour != self.settings.summary_hour or self._summary_on == today:
-            return
-        self._summary_on = today
-        self.say(summary_text(report))
-
-
-def summary_text(report: dict[str, Any]) -> str:
-    held = report["held"]
-
-    def naira(value: Optional[int]) -> str:
-        return "unreadable" if value is None else f"₦{value:,}"
-
-    usdc = report["treasury_usdc"]
-    lines = [
-        "Stark money, today",
-        f"Flutterwave: {naira(held['flutterwave_ngn'])}",
-        f"Pending purchases: {naira(held['pending_purchases_ngn'])}",
-        "Treasury: " + ("unreadable" if usdc is None else
-                        f"{usdc:,.2f} USDC ({naira(held['treasury_usdc_as_ngn'])})"),
-        f"Owed to users: {naira(report['owed_to_users_ngn'])}",
-        f"Coverage: {naira(report['coverage_ngn'])}",
-    ]
-    if report["unsettled_vault_ops"]:
-        lines.append(f"Vault ops not settled: {report['unsettled_vault_ops']}")
-    return "\n".join(lines)
+    def _alarm(self, kind: str, low: bool, raise_text: str, clear_text: str) -> None:
+        if low:
+            if self.alerts.raise_alarm(kind, raise_text):
+                log.warning("operator alert raised: %s", raise_text)
+        elif self.alerts.clear(kind, clear_text):
+            log.info("operator alert cleared: %s", clear_text)

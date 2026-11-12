@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app.decorators.api_responses import ApiResponses
 from app.modules.admin.dtos.update_fees_dto import UpdateFeesDto
+from app.modules.admin.dtos.update_limits_dto import UpdateLimitsDto
 from app.decorators.inject_module import Module
 from app.guards.admin_guard import admin_guard
 
@@ -32,3 +33,16 @@ async def update_fees(dto: UpdateFeesDto, module: Module) -> JSONResponse:
     fees = await run_in_threadpool(module.settings_service.set_fees,
                                    dto.model_dump(exclude_none=True))
     return JSONResponse({"fees_ngn": fees})
+
+
+@router.patch(
+    "/v1/admin/limits",
+    summary="Set the operator limits: caps, holds, rate settings, alerts, rate limits",
+    responses=ApiResponses.errors("admin_disabled", "unauthorized", "unknown_limit",
+                                  "bad_limit"),
+)
+async def update_limits(dto: UpdateLimitsDto, module: Module) -> JSONResponse:
+    """Applies within seconds, no deploy. Keys left out keep their value; `null` puts
+    a limit back on its default. Every change is checked before any is saved."""
+    limits = await run_in_threadpool(module.operator_limits.set, dto.root)
+    return JSONResponse({"limits": limits})

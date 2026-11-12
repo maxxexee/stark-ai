@@ -534,6 +534,17 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 
+-- Alarms for the operator, shown on the admin page. One row per kind of alarm,
+-- raised while its condition lasts and cleared when it ends.
+CREATE TABLE IF NOT EXISTS operator_alerts (
+    kind TEXT PRIMARY KEY,
+    message TEXT NOT NULL,
+    raised_at TEXT NOT NULL,
+    cleared_at TEXT,
+    cleared_message TEXT,
+    updated_at TEXT NOT NULL
+);
+
 -- The service fee on a bill, held and settled with its amount.
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS fee_ngn BIGINT NOT NULL DEFAULT 0;
 

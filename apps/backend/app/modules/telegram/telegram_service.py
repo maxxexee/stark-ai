@@ -1,11 +1,9 @@
 """The Telegram door, wired to this server: one bot, speaking for any linked chat.
 
-A chat speaks for the account whose link code it spent,
-so every read and payment is scoped to that account. The bot owner
-(`STARK_TG_OWNER_ACCOUNT_ID`, else `STARK_TG_OWNER_EMAIL`) only decides where
-operator alerts and the reminder loop's nudges go; it is no longer what decides
-whose money a chat can move. It refuses every update until both Telegram secrets
-are set (fail closed).
+A chat speaks for the account whose link code it spent, so every read, payment and
+reminder is scoped to that account. There is no bot owner: operator alerts live on
+the admin page (`OperatorAlerts`), not in anyone's chat. It refuses every update
+until both Telegram secrets are set (fail closed).
 """
 
 from __future__ import annotations
@@ -35,14 +33,12 @@ class TelegramService:
         self.db = db
         self.accounts = accounts
         self.identities = identities
-        self._owner_id: Optional[str] = None
         self.adapter = telegram.TelegramAdapter(
             agent=self,
             identities=identities,
             controls=controls,
             bot_token=config.telegram_bot_token,
             secret=config.telegram_webhook_secret,
-            owner_user_id=self.owner_account_id,
             # The adapter transcodes Telegram's OGG to WAV before this is called, so the
             # clip is sent as the WAV it is. Labelling it audio/ogg made Whisper reject
             # every voice note ("I cannot hear voice notes right now").
@@ -50,27 +46,6 @@ class TelegramService:
             on_turn=self.log_turn,
             log=log.info,
         )
-
-    def owner_account_id(self) -> str:
-        """The bot's account: the configured id, else the one account with the
-        owner's email **verified**.
-
-        Email sign-up does not verify the address, so matching on email alone let
-        anyone sign up as `STARK_TG_OWNER_EMAIL` and receive the operator alerts.
-        Only a hit is cached, so an owner who signs up after boot is found on the
-        next update.
-        """
-        if self.config.telegram_owner_account_id:
-            return self.config.telegram_owner_account_id
-        if self._owner_id is None and self.config.telegram_owner_email:
-            row = self.db.one(
-                "SELECT a.id FROM accounts a"
-                ' JOIN neon_auth."user" u ON u.id::text = a.auth_user_id'
-                ' WHERE lower(a.email) = $1 AND u."emailVerified" IS TRUE',
-                [self.config.telegram_owner_email],
-            )
-            self._owner_id = row["id"] if row else None
-        return self._owner_id or ""
 
     def tell(self, account_id: str, text: str) -> int:
         """Send `text` to every Telegram chat linked to this account; returns how many
@@ -88,11 +63,6 @@ class TelegramService:
                 continue
             sent += telegram.send_message(chat_id, text, bot_token=token)
         return sent
-
-    def tell_owner(self, text: str) -> int:
-        """Operator alerts: the bot owner's (`owner_account_id`) linked chats."""
-        owner = self.owner_account_id()
-        return self.tell(owner, text) if owner else 0
 
     def respond(self, user_id: str, said: str, thread: str) -> Any:
         """The linked account's agent — the same `Agent.respond` every door uses."""
@@ -146,12 +116,11 @@ class TelegramService:
         """Write one Telegram exchange to the same log `/v1/voice` writes to, plus
         `channel`, so both doors read back the same way."""
         result = turn.get("result")
-        owner = turn.get("account_id") or self.owner_account_id()
+        account_id = turn.get("account_id")
         TurnLogger.turn(
-            # The linked chat's account only: an unlinked chat's turn is nobody's,
-            # never the bot owner's, whose agent merely names the model.
-            account_id=turn.get("account_id"),
-            agent=self.accounts.state(owner).agent if owner else None,
+            # The linked chat's account only: an unlinked chat's turn is nobody's.
+            account_id=account_id,
+            agent=self.accounts.state(account_id).agent if account_id else None,
             outcome=turn.get("outcome") or "answered",
             clip=None, mime=None,
             heard=turn.get("heard") or "",
