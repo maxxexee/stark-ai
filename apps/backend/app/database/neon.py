@@ -509,6 +509,16 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bank_code TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_number TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS account_name TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bank_name TEXT;
+
+-- Business settings the owner edits on the admin page, such as the fee per bill kind.
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value BIGINT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- The service fee on a bill, held and settled with its amount.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS fee_ngn BIGINT NOT NULL DEFAULT 0;
 """
 
 

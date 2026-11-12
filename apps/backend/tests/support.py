@@ -22,6 +22,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.app_module import AppModule
+from app.modules.settings.settings_service import DEFAULT_FEES_NGN
 from app.database import neon
 from app.decorators.auth_user import auth_guard
 from app.main import create_app
@@ -113,11 +114,15 @@ class ApiHarness:
     """
 
     def __init__(self, account: TempAccount, *, opened: bool = True,
-                 **config: Any) -> None:
+                 fees: dict[str, int] | None = None, **config: Any) -> None:
         settings = replace(ApiConfigService.from_env(), reminders_enabled=False, **config)
         self.account = account
         self.opened = opened
         self.module = AppModule(settings, account.db)
+        # Fees are global settings in the shared database, so tests never read or
+        # write the real row: each harness charges only the fees it names.
+        named = {**dict.fromkeys(DEFAULT_FEES_NGN, 0), **(fees or {})}
+        self.module.settings_service.fees = lambda: named
         app = create_app(self.module)
         app.dependency_overrides[auth_guard] = self._sign_in
         self.client = TestClient(app)

@@ -30,6 +30,7 @@ from app.modules.payment.payment_service import PaymentService
 from app.modules.plan.plan_service import PlanService
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.reminder.reminder_service import ReminderService
+from app.modules.settings.settings_service import SettingsService
 from app.modules.state.state_service import StateService
 from app.modules.stub.stub_service import StubService
 from app.modules.suggestion.suggestion_service import SuggestionService
@@ -101,7 +102,9 @@ class AppModule:
         self.controls = ControlService(
             self.accounts, self.account_repository, self.vaults
         )
-        self.bills = BillService(self.accounts, self.account_repository, self.receipts)
+        self.settings_service = SettingsService(db)
+        self.bills = BillService(self.accounts, self.account_repository, self.receipts,
+                                 self.settings_service)
         self.plans = PlanService()
         self.wallet = WalletService(
             self.accounts, self.receipts, self.vaults, test_money=self.flutterwave is None
@@ -114,6 +117,7 @@ class AppModule:
             PaymentService(
                 self.receipts, gateway, vaults=self.vaults, floats=self.floats
             ),
+            self.settings_service,
         )
         self.telegram = TelegramService(
             config, db, self.identities, self.accounts, self.controls
@@ -131,10 +135,10 @@ class AppModule:
             near_tx.NearRpc(near_tx.MAINNET_RPC),
             TreasuryWatch(money.watch, self.telegram.tell_owner),
         )
-        self.admin = AdminService(db, self.treasury, self.vaults.chain)
+        self.admin = AdminService(db, self.treasury, self.vaults.chain, self.settings_service)
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)
-        self.state = StateService(self.accounts, self.wallet, self.telemetry)
+        self.state = StateService(self.accounts, self.wallet, self.telemetry, self.bills)
         self.suggestions = SuggestionService(
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )

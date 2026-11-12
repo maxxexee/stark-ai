@@ -20,15 +20,23 @@ from app.modules.bill.dtos.create_bill_dto import CreateBillDto
 from app.modules.bill.dtos.update_bill_dto import UpdateBillDto
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.reminder import reminders
+from app.modules.settings.settings_service import SettingsService
 from app.modules.vending import catalog
 
 
 class BillService:
     def __init__(self, accounts: AccountService, repository: AccountRepository,
-                 receipts: ReceiptRepository) -> None:
+                 receipts: ReceiptRepository, settings: SettingsService) -> None:
         self.accounts = accounts
         self.repository = repository
         self.receipts = receipts
+        self.settings = settings
+
+    def public(self, account_id: str) -> list[dict[str, Any]]:
+        """The bills with the service fee a payment to each would carry right now."""
+        fees = self.settings.fees()
+        return [{**bill, "fee_ngn": fees.get(bill["kind"], 0)}
+                for bill in self.bills(account_id).values()]
 
     def bills(self, account_id: str) -> dict[str, dict[str, Any]]:
         return self.accounts.state(account_id).bills
@@ -51,6 +59,10 @@ class BillService:
             "payments": paid.get(bill["id"], none)["payments"],
             "last_paid_at": bill["last_paid_at"],
         } for bill in self.bills(account_id).values()]
+
+    def public_bill(self, account_id: str, bill_id: str) -> dict[str, Any]:
+        bill = self.get(account_id, bill_id)
+        return {**bill, "fee_ngn": self.settings.fee_for(bill["kind"])}
 
     def get(self, account_id: str, bill_id: str) -> dict[str, Any]:
         bill = self.bills(account_id).get(bill_id)

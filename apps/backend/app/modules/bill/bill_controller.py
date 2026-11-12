@@ -17,7 +17,7 @@ router = APIRouter(prefix="/v1/bills", tags=["Bills"],
 
 @router.get("", response_model=list[BillDto], summary="List saved bills")
 def list_bills(account: AuthUser, module: Module) -> JSONResponse:
-    return JSONResponse(list(module.bills.bills(account.id).values()))
+    return JSONResponse(module.bills.public(account.id))
 
 
 @router.post("", status_code=201, response_model=BillDto, summary="Add a bill",
@@ -33,7 +33,7 @@ def add_bill(dto: CreateBillDto, account: AuthUser, module: Module) -> JSONRespo
 @router.get("/{bill_id}", response_model=BillDto, summary="One bill",
             responses=ApiResponses.errors("unknown_bill"))
 def get_bill(bill_id: str, account: AuthUser, module: Module) -> JSONResponse:
-    return JSONResponse(module.bills.get(account.id, bill_id))
+    return JSONResponse(module.bills.public_bill(account.id, bill_id))
 
 
 @router.patch("/{bill_id}", response_model=BillDto,

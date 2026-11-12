@@ -38,10 +38,11 @@ function Pay() {
   const bill = payable.find((b) => b.id === billId);
   const [typed, setTyped] = useState(search.amount ?? 5000);
   const amount = bill ? (Bills.fixedAmount(bill) ?? typed) : typed;
+  const fee = bill?.fee_ngn ?? 0;
   const pay = usePayBill();
 
   const presets = PaymentLimits.presets(limits);
-  const hint = PaymentLimits.hint(amount, limits, state);
+  const hint = PaymentLimits.hint(amount + fee, limits, state);
 
   if (!payable.length) {
     return (
@@ -87,14 +88,14 @@ function Pay() {
         <PayResult receipt={pay.data} bill={bill} onAgain={() => pay.reset()} />
       ) : (
         <div className="flex flex-col gap-4 border-t border-border pt-5">
-          <PayStats remaining={limits.remaining_cap_ngn} amount={amount} />
+          <PayStats remaining={limits.remaining_cap_ngn} amount={amount} fee={fee} />
           {pay.error ? (
             <Refused error={pay.error} onPay={handlePayOffer} />
           ) : (
             <LimitHint hint={hint} />
           )}
           <PayButton
-            amount={amount}
+            amount={amount + fee}
             pending={pay.isPending}
             disabled={!bill || amount <= 0 || pay.isPending}
             onClick={handlePay}

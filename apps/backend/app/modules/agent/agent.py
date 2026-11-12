@@ -110,6 +110,8 @@ Rules:
   limit", "your balance is ₦6,000 against a ₦50,000 payment". The balance is the
   reason only when it really is the lower number, and a payment the balance cannot
   cover is refused, not sent for approval.
+- A bill's "fee_ngn" is Stark's service fee, paid on top of the amount. When a
+  payment carries one, say the total once, like "₦1,000 plus a ₦100 fee".
 - A payment is only done when the tool returns a token or status "delivered".
   "pending" means it is still going through — say so, and never claim it is done.
 - If they name no amount and the bill has no plan price, ask for the figure in one
@@ -1157,7 +1159,7 @@ class Agent:
             per_payment_cap_ngn=self.limits.per_payment_cap_ngn,
             spent_this_period_ngn=int(state.get("spent_ngn") or 0),
             balance_ngn=int(state.get("balance_ngn") or 0),
-            amount_ngn=amount,
+            amount_ngn=amount + int(bill.get("fee_ngn") or 0),
             meter_allowed=meter in self.limits.allowed_meters,
         )
         # One request is one payment as far as the per-payment cap goes. Measured

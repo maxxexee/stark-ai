@@ -11,6 +11,8 @@ class ApiResponses:
     STATUS = {
         "unauthorized": 401,
         "admin_disabled": 403,
+        "bad_fee": 400,
+        "unknown_fee": 400,
         "unknown_bill": 404,
         "no_route": 404,
         "bad_amount": 400,

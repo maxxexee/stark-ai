@@ -67,6 +67,15 @@ export interface AdminOverview {
   vaults: VaultRow[];
   /** The server's outbound IP, for Flutterwave's whitelist; null when it couldn't be read. */
   egress_ip: string | null;
+  fees_ngn: Fees;
+}
+
+/** Stark's service fee on each kind of bill, in naira. */
+export interface Fees {
+  electricity: number;
+  tv: number;
+  airtime: number;
+  data: number;
 }
 
 const KEY_STORAGE = "stark.admin-key";
@@ -88,11 +97,26 @@ export class AdminApi {
     sessionStorage.removeItem(KEY_STORAGE);
   }
 
-  static async overview(key: string): Promise<AdminOverview> {
+  static overview(key: string): Promise<AdminOverview> {
+    return AdminApi.request(key, "/v1/admin/overview");
+  }
+
+  static async updateFees(key: string, fees: Partial<Fees>): Promise<Fees> {
+    const data = await AdminApi.request<{ fees_ngn: Fees }>(key, "/v1/admin/fees", {
+      method: "PATCH",
+      body: JSON.stringify(fees),
+    });
+    return data.fees_ngn;
+  }
+
+  private static async request<T>(key: string, path: string, init: RequestInit = {}): Promise<T> {
     const base = (import.meta.env.VITE_STARK_API_URL ?? "").replace(/\/$/, "");
     let res: Response;
     try {
-      res = await fetch(`${base}/v1/admin/overview`, { headers: { "X-Stark-Admin-Key": key } });
+      res = await fetch(`${base}${path}`, {
+        ...init,
+        headers: { "X-Stark-Admin-Key": key, "Content-Type": "application/json" },
+      });
     } catch {
       throw new ApiError(0, "network", "Network request failed");
     }
@@ -105,6 +129,6 @@ export class AdminApi {
         data?.detail ?? {},
       );
     }
-    return data as AdminOverview;
+    return data as T;
   }
 }
