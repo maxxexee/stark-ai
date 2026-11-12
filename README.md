@@ -1,161 +1,148 @@
 # Stark
 
-An AI agent that pays your everyday bills from a crypto balance, within limits you
-set, by voice or chat. Starts with Nigerian prepaid electricity; covers airtime,
-data, TV, internet and water. Built for **NEAR HACKATHON** (2026-11-01 → 11-14).
+An AI agent that pays your everyday bills, by voice or chat, inside spending limits
+that live in a NEAR smart contract. It starts with Nigerian prepaid electricity, where
+the meter runs out at the worst time, and also covers airtime, data and TV.
 
-- Tracks: `realworld` (lead), `security`, `agents`
-- Design source (the exported artboards) lives outside the repo; ask a maintainer for access
+Built for **NEAR HACKATHON** (2026-11-01 → 11-14). Tracks: **`realworld`** (lead),
+**`security`**, **`agents`**.
 
-## Quick start
+## Why it is safe to let an agent spend
 
-You need **Node 22+** (24 recommended, see `.nvmrc`), **Bun 1.3+** and **Python 3.9+**.
-Nothing else: the backend has no Python dependencies, and Rust is only needed if you
-change the contract.
+The agent never holds a key that can move money freely. Every payment goes through the
+vault contract, and the contract, not the prompt, decides.
+
+| Rule | Where it is enforced | Check it yourself |
+|---|---|---|
+| Monthly cap and per-payment cap | `pay()` in the vault contract | `get_policy` on [`stark-vault.testnet`](https://testnet.nearblocks.io/address/stark-vault.testnet) |
+| Only allowlisted meters can be paid | `pay()` in the vault contract | same call, `allowed_meters` |
+| The server's key can call `pay` and nothing else | a NEAR function-call access key on `stark-agent.testnet`, receiver `stark-vault.testnet`, methods `["pay"]` | `view_access_key_list` on `stark-agent.testnet` |
+| Over a limit → ask the human, don't fail silently | backend approval queue, then `pay_approved()` | dashboard → Approvals |
+| A question is never a payment | the agent offers no tools on a question, and `pay_bill` refuses one again in code | `apps/backend/tests/test_agent.py` |
+| One switch stops everything | `pause()` in the contract and in the app | dashboard → Settings |
+
+A leaked server key cannot withdraw, change the policy or pay another contract: a
+`pause` signed with it is refused by NEAR with `INVALID_TRANSACTION` before the
+contract runs.
+
+Read the live policy (no account needed):
+
+```sh
+curl -s https://rpc.testnet.near.org -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"stark-vault.testnet","method_name":"get_policy","args_base64":"e30="}}' \
+  | python3 -c 'import json,sys; print(bytes(json.load(sys.stdin)["result"]["result"]).decode())'
+```
+
+## Try it in two minutes
+
+1. **Look at the sample account** at [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo).
+   No sign-up, read-only. See the balance, the monthly cap and what is left of it.
+2. **Sign up** at [dash.hellostark.xyz](https://dash.hellostark.xyz) (email or Google)
+   and open **Talk**. Ask "how much can you still spend this month?" See an answer read
+   from your account, with nothing paid.
+3. **Ask for more than a limit allows**: "pay 15000 for electricity". See it land in
+   **Approvals** instead of being paid.
+4. **Ask a hypothetical**: "if I pay DStv and top up 5000, how much is left?" See the
+   arithmetic, and nothing paid.
+5. **On Telegram**, open **Connect** in the app to link
+   [@hellostarkai_bot](https://t.me/hellostarkai_bot), then send a text or a voice note.
+   Same agent, same limits.
+
+**To see a payment end to end** before the payment provider is live, run it locally
+(below) and say "top up my meter with 5000" on Talk: the agent checks the policy,
+`pay()` is signed (and broadcast to testnet with `STARK_BROADCAST=1` and the agent key
+set), and the receipt from `GET /v1/activity` carries the `tx_hash`.
+
+## What is real today, and what is not
+
+Measured, not assumed. Last checked 2026-11-12.
+
+| Piece | State |
+|---|---|
+| Vault contract | **Live on NEAR testnet** at `stark-vault.testnet`. 9 payments recorded on chain under a ₦30,000 monthly / ₦10,000 per-payment cap |
+| Agent signing `pay()` | **Proven on testnet.** The backend signs with the pay-only key above; the 9 recorded payments came through it |
+| Agent model | NEAR AI. Voice in: **Whisper Large v3, Private TEE**. Chat: `google/gemini-2.5-flash-lite`, picked for speed (about 1.4s a turn) — it runs in NEAR AI's *Incognito* tier, **not** in a TEE. One env var (`NEAR_AI_MODEL`) moves chat to a Private TEE model at about 2.7s a turn |
+| Web app, API, website | **Deployed**: [dash.hellostark.xyz](https://dash.hellostark.xyz), [geddon.hellostark.xyz/docs](https://geddon.hellostark.xyz/docs), [hellostark.xyz](https://hellostark.xyz) |
+| Sign-in and storage | **Live**: Neon Auth, every account has its own wallet and receipts in Neon Postgres |
+| Telegram | **Live**: `@hellostarkai_bot`, text and voice notes, same agent and limits as the app |
+| Bill vending (naira side) | **Built, not yet live.** Flutterwave pays the bills. Its test mode refuses bill and transfer calls until the server's IP is whitelisted, so a real token has not been vended yet. The flow runs end to end in dry-run |
+| Funding with crypto | **Built, not yet live**: NEAR Intents (1Click) quotes are read live; no deposit has completed |
+| Mainnet | Nothing is on mainnet |
+
+The vault keeps the **ledger and the rules**: balance, caps, allowlist, payment
+records. It does not custody tokens yet; the naira that pays a bill sits with the
+payment provider. Moving the stablecoin itself through the vault is the next step.
+
+## Run it locally
+
+You need **Node 22+**, **Bun 1.3+** and **Python 3.9+**. Rust only if you change the
+contract.
 
 ```sh
 bun install
-bun dev                       # website, dashboard and backend together
+cd apps/backend && bun run setup && cd ../..   # Python venv for the API
+bun dev                                       # website :5173, dashboard :5174, API :8000
 ```
 
-| App | URL |
-|---|---|
-| Marketing site | http://localhost:5173 |
-| Dashboard | http://localhost:5174 |
-| API | http://127.0.0.1:8000 |
+The API needs `DATABASE_URL` (a Neon Postgres pooler URL; the schema creates itself)
+and `NEON_AUTH_BASE_URL` (the same branch's Auth URL). See
+[`apps/backend/.env.example`](apps/backend/.env.example). The team keeps them in
+Infisical (`infisical login` once; the `dev` scripts pull them in). With nothing else
+set, payments are dry-run, nothing touches a chain and a deterministic model stands in
+for the LLM.
 
-The backend needs one thing before it starts: `DATABASE_URL`, the pooler URL of a Neon
-Postgres branch (the schema creates itself on first boot). Sign-in needs
-`NEON_AUTH_BASE_URL`, the same branch's Auth URL — without it every `/v1` call answers
-401. Both are documented in [`apps/backend/.env.example`](apps/backend/.env.example)
-and stored in Infisical (`dev`, folder `/backend`): install the CLI
-(`brew install infisical/get-cli/infisical`) and run `infisical login` once, and the
-`dev` scripts pull them in. Everything else runs offline:
-payments are dry-run, nothing touches a chain, and a deterministic model stands in for
-the LLM.
-
-Check that it all works:
+Check it:
 
 ```sh
-bun check                     # typecheck + lint + backend unit tests
-bun smoke                     # 68 end-to-end checks (70 with the TTS sidecar up); needs the backend running
+bun check    # typecheck + lint + backend unit tests
+bun smoke    # end-to-end checks against a running API
 ```
 
-### Troubleshooting
+Contract tests: `cd apps/contracts/vault && cargo test` (see
+[`apps/contracts`](apps/contracts/README.md)).
 
-- **`Address already in use`.** Something else holds a port (often an old backend).
-  `lsof -nP -iTCP:8000 -sTCP:LISTEN` shows what; stop it and rerun. Under `bun dev`
-  one app failing stops the others, so check the first error in the output.
-- **Dashboard shows no data.** The backend is not running, or is on a different port;
-  the dashboard only proxies `/v1` to `127.0.0.1:8000`.
-- **Every request says 401.** You are not signed in (the dashboard routes you to
-  `/login`), or `NEON_AUTH_BASE_URL` is missing/wrong in Infisical (`dev`, `/backend`) — it must
-  be the Auth URL of the same Neon branch as `DATABASE_URL`.
-- **`DATABASE_URL is not set`.** The backend will not start without a Neon Postgres
-  URL; set it in Infisical (`dev`, `/backend`) to the pooler URL.
-- **`infisical: command not found` / not logged in.** `brew install
-  infisical/get-cli/infisical`, then `infisical login` (pick Infisical Cloud, US).
-- **`bun: command not found`.** Install it with `curl -fsSL https://bun.sh/install | bash`.
-- **Demo numbers drifted.** `curl -X POST http://127.0.0.1:8000/v1/_stub/reset`.
+**If something breaks:** `Address already in use` → `lsof -nP -iTCP:8000 -sTCP:LISTEN`
+and stop the old process. Every request is 401 → you are not signed in, or
+`NEON_AUTH_BASE_URL` is from a different Neon branch than `DATABASE_URL`. Dashboard
+shows no data → the API is not on `127.0.0.1:8000`.
 
 ## What's in the repo
 
-A Bun + Turborepo monorepo, laid out like [midday](https://github.com/midday-ai/midday). Each app
-has its own README; start there when you work on it.
-
 | Path | What it is | Stack |
 |---|---|---|
-| [`apps/website`](apps/website) | marketing site for hellostark.xyz | React Router, pre-rendered static HTML |
-| [`apps/dashboard`](apps/dashboard) | the Stark app users manage bills in | TanStack Start (SPA) + TanStack Query |
-| [`apps/backend`](apps/backend) | API, agent, bill vending, Telegram bot | Python, FastAPI (Swagger at `/docs`) |
-| [`apps/contracts`](apps/contracts) | NEAR vault contract: caps and allowlist | Rust, near-sdk |
-| [`packages/ui`](packages/ui) | the design system: shadcn/ui components on Base UI, themed to Stark | shadcn, Base UI, Tailwind v4, Reicon |
-| [`packages/api`](packages/api) | typed `/v1` client, query options and mutations | TanStack Query |
-| [`packages/utils`](packages/utils) | naira and date formatting, request ids | |
-| [`docs`](docs) | the API contract, frontend guide, backend handoff | |
+| [`apps/contracts`](apps/contracts) | the vault: caps, allowlist, pause, payment records | Rust, near-sdk |
+| [`apps/backend`](apps/backend) | API, agent, vending, Telegram bot, voice | Python, FastAPI (Swagger at `/docs`) |
+| [`apps/dashboard`](apps/dashboard) | the app people manage bills in | TanStack Start + Query |
+| [`apps/website`](apps/website) | marketing site | React Router, pre-rendered |
+| [`packages/ui`](packages/ui) | design system | shadcn/ui on Base UI, Tailwind v4 |
+| [`packages/api`](packages/api) | typed `/v1` client | TanStack Query |
+| [`docs`](docs) | [`API.md`](docs/API.md) (the contract), [`FRONTEND.md`](docs/FRONTEND.md), [`HANDOFF.md`](docs/HANDOFF.md) (engineering log) | |
 
-Which doc to read first:
+Where to start reading the code:
 
-- **Building the web app or dashboard?** [`docs/FRONTEND.md`](docs/FRONTEND.md): every
-  screen, the route behind it, and the rules that matter.
-- **Working on the backend?** [`docs/HANDOFF.md`](docs/HANDOFF.md): environment traps,
-  what is verified versus guessed, and what to do next.
-- **Calling the API?** [`docs/API.md`](docs/API.md) is the contract. It is frozen.
-
-## Scripts
-
-Run from the repo root.
-
-| Command | What it does |
-|---|---|
-| `bun dev` | all three apps in parallel |
-| `bun dev:website` / `bun dev:dashboard` / `bun dev:backend` | one app on its own |
-| `bun run build` | build the website and dashboard |
-| `bun typecheck` | TypeScript across the workspace |
-| `bun lint` / `bun format` | Biome |
-| `bun run test` | backend unit tests (207, hermetic) |
-| `bun check` | typecheck + lint + test, what CI should run |
-| `bun smoke` | end-to-end checks against a running backend |
-| `bun tts` | the local Kokoro voice sidecar on :8010 (needs `.venv-tts`, see [`apps/backend`](apps/backend/README.md#voice-output-tts)) |
-
-Contract commands are in [`apps/contracts`](apps/contracts/README.md); they need a Rust
-toolchain, so they are not part of `bun run test`.
-
-## Current state
-
-**Nothing is live yet.** The bill API, the vault contract and the agent all exist and
-are tested, but every payment is dry-run: no real token has been vended, no transaction
-broadcast and no contract deployed. The NEAR AI model and Whisper were called live on
-2026-10-22 — a real tool call and real transcripts came back.
-
-| Piece | Status |
-|---|---|
-| API contract | **frozen** — see [`docs/API.md`](docs/API.md) |
-| Stub server | working, 68/68 smoke checks (70 with the sidecar up), 367 unit tests |
-| App routes | **built** — plans, bill add/edit/delete, limits and wallet, additive to `/v1` |
-| Flutterwave | **one provider for deposits, bills and withdrawals** (2026-11-03). Test key works for the catalogue, checkout, banks and account lookup; bills and transfers wait on IP whitelisting, so **no bill or transfer has run yet** |
-| Vending (M3) | **wired** — electricity, airtime, data and TV through Flutterwave bills, 45 tests |
-| Storage | **Neon Postgres** — accounts, wallets, receipts, channel identities; created on first boot, survives restart. Bills, limits and `units_left` stay in memory |
-| Auth | **live** — sign-up/sign-in against Neon Auth, the backend verifies sessions from its JWKS and gives every account its own wallet and receipts; `/v1` answers **401** without a bearer token |
-| Receipts | **persisted** in Neon Postgres: token ↔ tx hash ↔ request_id, per account, survives restart |
-| Vault contract | **deployed to testnet** — `stark-vault.testnet` (2026-10-26); cap, allowlist and pause rules exercised live. 38/38 tests, wasm target checks clean, clippy clean. Ledger-only: it does not move tokens yet |
-| Agent + LLM | **built (M2)** — tool routing, policy gate, `pay()` signing. 59 tests. Real NEAR AI turn verified 2026-10-22. **Broadcasts when `STARK_BROADCAST=1`** (2026-10-26) against `stark-vault.testnet`: the key is a scoped function-call key on `stark-agent.testnet` that may only call `pay`, so a leak cannot withdraw, change the policy or touch another contract — a `pause` signed with it comes back `INVALID_TRANSACTION`, refused by the access key before the contract runs. **Fast model for the demo (2026-10-24):** `google/gemini-2.5-flash-lite`, 1.35s a turn vs 7.1s for `Qwen/Qwen3.8-27B`, with the account snapshot in the prompt — one env var back if the TEE claim matters |
-| Telegram bot (M4) | **built, fail-closed** — webhook auth, identity linking, dedupe, voice wake gate, renewal pushes. 22 tests. Needs `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET` to go live; no real update has ever arrived |
-| Reminders | **built 2026-10-24** — a bill carries `renews_on`, appears in `state.due_soon` inside a 7-day window, and the same line is pushed to a linked chat. No push has ever been sent (no bot token) |
-| Voice (Whisper) | **live-verified 2026-10-22, real audio in 2026-10-24** — `/v1/voice` now takes the clip itself (base64 or multipart) from both the browser and Telegram; a transcript is never invented (`stt: ok\|failed\|no_key`) |
-| TTS | **built 2026-10-24, two providers, streamed** — ElevenLabs Flash (`ELEVENLABS_API_KEY`) answers a reply in well under a second, Kokoro-82M sidecar (`bun tts`) is the local fallback, text is always the floor. Talk shows text first (`speak: false`), then plays `GET /v1/speak/stream`, which speaks on the first bytes (falls back to `POST /v1/speak`); Telegram voice notes reply in voice. Kokoro has no Nigerian voice and a free ElevenLabs key gets premade voices only (library voices are HTTP 402) — cloning is the accent path |
-| Suggestions | **computed 2026-10-24**, not seeded — meter runway, cap usage, load imbalance, due bills; a line with no data behind it is not returned, so the old "AC is 78%" fake is gone |
-| AC telemetry | `/v1/telemetry` stores readings and `load_imbalance` reads them; **no real meter exists** (M6) |
+- The rules: `apps/contracts/vault/src/policy.rs`, then `pay()` in `lib.rs`.
+- The agent: `apps/backend/app/modules/agent/agent.py`, `Agent.respond`.
+- Signing: `apps/backend/app/modules/chain/near_tx.py` and `vault_chain.py`.
 
 ## Ground rules
 
-- **The contract is frozen.** Additive changes only. Renames or type changes mean
-  `/v2`, and they break the frontend for no reason.
-- **Money is integer naira** everywhere. No floats.
-- **No crypto jargon in user-facing copy.** No "vault", no "USDC", no addresses.
-- **No sliders**, anywhere in the app.
-- **Never commit secrets.** Keys go in env vars.
+- Money is integer naira everywhere. No floats.
+- No crypto jargon in what users see. Judges and developers get the chain here instead.
+- `docs/API.md` is frozen: additive changes only.
+- Never commit secrets.
 
-## Build order
+## Built at NEAR HACKATHON
 
-| # | Milestone | Cutting order if behind |
-|---|---|---|
-| M0 | Contract frozen, VTpass sandbox confirmed | — |
-| M1 | Vault contract + caps | **built (not deployed)** |
-| M2 | Agent server, signed `pay()` | never cut |
-| M3 | Real token vending, receipts | never cut |
-| M4 | Telegram + Whisper voice | 4th |
-| M5 | NEAR Intents funding | 3rd |
-| M6 | AC telemetry + suggestions | 1st |
-| M7 | Frontend wired, demo recorded | — |
+All of this repository was written inside the hackathon window: the first commit is
+2026-10-20, the day after the announcement (Q-001). There is no baseline code from an
+earlier project.
 
-## Deploy
+Libraries and services used (Q-005): near-sdk (Rust) for the contract; FastAPI and
+pydantic for the API; React, TanStack Start/Router/Query, Tailwind v4, shadcn/ui on
+Base UI for the web; NEAR AI Cloud for the model and Whisper; NEAR Intents (1Click)
+for crypto funding quotes; Neon (Postgres and Auth); Flutterwave for naira bill
+payments; ElevenLabs and Kokoro-82M for speech; Telegram Bot API. The repo layout
+follows [midday](https://github.com/midday-ai/midday). AI coding assistants were used.
 
-All three apps deploy to [Brimble](https://brimble.io) from `main`: the marketing site to
-[hellostark.xyz](https://hellostark.xyz), the API to `geddon.hellostark.xyz` and the
-dashboard to `dash.hellostark.xyz` (see [`apps/website`](apps/website/README.md#deploy)).
-The vault contract is on NEAR testnet at `stark-vault.testnet`; nothing is on mainnet.
+## License
 
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+MIT. See [`LICENSE`](LICENSE). Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md).
