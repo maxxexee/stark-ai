@@ -89,8 +89,9 @@ class _Nonces:
 class VaultChain:
     def __init__(self, *, rpc: near_tx.NearRpc, funder_id: str, funder_key: near_tx.KeyPair,
                  agent_key: near_tx.KeyPair, treasury_id: str, usdc_id: str, code: str,
-                 storage_yocto: int, broadcast: bool) -> None:
+                 storage_yocto: int, broadcast: bool, network: str = "testnet") -> None:
         self.rpc = rpc
+        self.network = network
         self.funder_id = funder_id
         self.funder_key = funder_key
         self.agent_key = agent_key
@@ -275,6 +276,7 @@ def chain_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[VaultCha
         storage_yocto=int(storage * YOCTO_PER_NEAR),
         broadcast=(source.get("STARK_BROADCAST") or "").strip().lower()
         in ("1", "true", "yes"),
+        network=network,
     )
 
 

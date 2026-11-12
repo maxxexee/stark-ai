@@ -42,12 +42,31 @@ export interface OpenDeposit {
   expires_at: string | null;
 }
 
+export interface ChainSetup {
+  network: "testnet" | "mainnet";
+  funder: string;
+  usdc: string;
+}
+
+export interface VaultRow {
+  user_id: string;
+  account_id: string;
+  status: string;
+  created_at: string;
+  last_error: string | null;
+}
+
 export interface AdminOverview {
   treasury: TreasuryReport;
   deposits: StatusCount[];
   withdrawals: StatusCount[];
   withdrawals_in_flight: InFlightWithdrawal[];
   deposits_open: OpenDeposit[];
+  /** null when no chain is configured and payments book off-chain. */
+  chain: ChainSetup | null;
+  vaults: VaultRow[];
+  /** The server's outbound IP, for Flutterwave's whitelist; null when it couldn't be read. */
+  egress_ip: string | null;
 }
 
 const KEY_STORAGE = "stark.admin-key";

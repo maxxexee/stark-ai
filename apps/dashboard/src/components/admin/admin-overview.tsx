@@ -2,6 +2,7 @@ import { ApiError } from "@stark/api/errors";
 import { Button } from "@stark/ui/components/button";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { AdminChain } from "@/components/admin/admin-chain";
 import { AdminInFlightTable } from "@/components/admin/admin-in-flight-table";
 import { AdminPots } from "@/components/admin/admin-pots";
 import { AdminStatusTable } from "@/components/admin/admin-status-table";
@@ -54,6 +55,7 @@ export function AdminOverview({
           </div>
           <AdminInFlightTable title="Withdrawals in flight" rows={data.withdrawals_in_flight} />
           <AdminInFlightTable title="Deposits open" rows={data.deposits_open} />
+          <AdminChain chain={data.chain} vaults={data.vaults} egressIp={data.egress_ip} />
         </>
       ) : null}
     </div>
