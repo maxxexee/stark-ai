@@ -204,9 +204,11 @@ Add a bill. Returns **201** with the `Bill` object.
 ```
 
 - `kind` — `electricity`, `airtime`, `data`, `tv`, `internet`, `water`.
-- `provider` — required. For `data`/`tv`/`airtime` it must resolve to a Flutterwave
-  biller (`MTN`, `mtn`, `Glo`, `9mobile` all work); for `electricity` only **Ikeja Electric** is
-  confirmed today, anything else is `unsupported_product`. `internet` and `water`
+- `provider` — required. For `electricity`/`data`/`tv`/`airtime` it must resolve to a
+  Flutterwave biller (`MTN`, `mtn`, `Glo`, `9mobile` all work). Electricity is any
+  disco's **prepaid** meter, by name or abbreviation (`Eko Electric`, `EKEDC`, `Ikeja
+  Electric`, `IKEDC`, Abuja, Ibadan, Enugu, Benin, Port Harcourt, Kano, Kaduna, Jos;
+  2026-11-12); anything else is `unsupported_product`. `internet` and `water`
   can be saved, but paying them refuses and charges nothing.
 - `reference` — meter / phone / smartcard number; whitespace is stripped, 4–32 chars.
 - `label` — optional, defaults to `provider`.

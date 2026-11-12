@@ -255,7 +255,7 @@ curl -X POST http://127.0.0.1:8000/v1/bills \
 The client never sends a price. The server looks it up. That is deliberate: a
 client sent price would be a way to underpay a fixed price product.
 
-Electricity accepts only Ikeja Electric today. Internet and water can be saved
+Electricity accepts any disco's prepaid meter (the list in `BillKinds.providers`). Internet and water can be saved
 but paying them refuses and charges nothing.
 
 Errors to expect: `bad_kind`, `bad_reference`, `unsupported_product`,

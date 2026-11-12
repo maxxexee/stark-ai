@@ -74,14 +74,9 @@ class BillService:
         plan_price = None
         renews_on = self._renews_on(dto.renews_on) if dto.renews_on else None
 
-        if kind == BillKind.ELECTRICITY:
-            # Only Ikeja is confirmed. Pretending another DISCO works would vend on
-            # Ikeja's service id, which is the kind of silent lie this repo avoids.
-            if catalog.slug(provider) not in ("ikeja", "ikejaelectric"):
-                raise ApiError(400, "unsupported_product",
-                               "Only Ikeja Electric is confirmed for electricity.")
-            plan = None
-        elif kind in (BillKind.AIRTIME, BillKind.DATA, BillKind.TV):
+        if kind in (BillKind.ELECTRICITY, BillKind.AIRTIME, BillKind.DATA, BillKind.TV):
+            # Each disco is its own Flutterwave biller, so an unknown one is refused
+            # here rather than vended on another disco's item.
             product = catalog.CATALOG.product(kind, provider)
             if product is None:
                 raise ApiError(400, "unsupported_product",
