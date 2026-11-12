@@ -2,8 +2,10 @@ import { cn } from "@stark/ui/utils/cn";
 
 const STEPS = ["Amount", "Pay", "Done"] as const;
 
-/** Where the user is in adding money. Past the first step, Amount is a button back to
- * the card (`onBackToAmount`), with what they entered still filled in. */
+/**
+ * Past the first step, Amount is a button back to the card (`onBackToAmount`) with what was entered
+ * still filled in.
+ */
 export function AddMoneySteps({
   current,
   onBackToAmount,

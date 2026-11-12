@@ -8,12 +8,8 @@ import { CallbackTitle } from "@/components/auth/callback-title";
 import { authClient } from "@/lib/auth/auth-client";
 
 /**
- * Where the browser lands after Google.
- *
- * Neon finishes the OAuth exchange on its own origin and redirects here with a
- * single-use verifier in the query string. This page spends that verifier on
- * `/get-session`, keeps the token the app already knows how to use, and leaves —
- * so the URL holding the verifier is never the one left in the address bar.
+ * Spends Neon's single-use OAuth verifier on `/get-session`, then removes it from the address bar
+ * and history. A ref guards the exchange because Strict Mode mounts effects twice.
  */
 
 export const Route = createFileRoute("/auth/callback")({
@@ -25,7 +21,6 @@ function AuthCallback() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(true);
-  // The verifier is single-use, and Strict Mode mounts effects twice.
   const spent = useRef(false);
 
   useEffect(() => {
@@ -48,7 +43,6 @@ function AuthCallback() {
           return;
         }
         setAuthToken(session.token);
-        // The verifier is spent: take it out of the address bar and the history.
         window.history.replaceState({}, "", window.location.pathname);
         return navigate({ to: "/" });
       })

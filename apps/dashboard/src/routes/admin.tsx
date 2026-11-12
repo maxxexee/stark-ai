@@ -5,7 +5,6 @@ import { AdminOverview } from "@/components/admin/admin-overview";
 import { AdminApi } from "@/lib/admin/admin-api";
 
 export const Route = createFileRoute("/admin")({
-  // The key lives in sessionStorage, which only the browser has.
   ssr: false,
   head: () => ({
     meta: [{ title: "Admin · Stark" }, { name: "robots", content: "noindex, nofollow" }],

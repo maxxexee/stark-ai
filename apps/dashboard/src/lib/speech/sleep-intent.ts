@@ -1,11 +1,13 @@
+/**
+ * Matches contractions the way recognizers write them ("that's", "thats", "that is"), including
+ * the curly apostrophe Safari returns.
+ */
 export class SleepIntent {
   private static readonly WHOLE = new RegExp(
     "^(?:(?:hey|hi|ok|okay|yo|so|no|thanks|thank\\s+you)[,\\s]+)*" +
       "(?:stark[,\\s]+)?" +
       "(?:you\\s+can\\s+)?" +
       "(?:" +
-      // Contractions the way recognizers write them both ways: "that's"/"thats"/
-      // "that is", and the curly apostrophe Safari returns.
       "go\\s+to\\s+sleep|stop\\s+listening|sleep" +
       "|(?:that\\s*['’]?s|that\\s+is)\\s+(?:all|it)" +
       "|goodbye|bye|(?:i\\s*['’]?m|i\\s+am)\\s+done" +

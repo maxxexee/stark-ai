@@ -1,6 +1,5 @@
 import { formatNaira } from "@stark/utils/format";
 
-// The same tray and panel as the typed amount, read-only: a plan's price is fixed.
 export function PlanPriceCard({ amount, provider }: { amount: number; provider: string }) {
   return (
     <div className="flex flex-col gap-2">

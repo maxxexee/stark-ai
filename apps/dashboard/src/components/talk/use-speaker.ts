@@ -13,7 +13,6 @@ export function useSpeaker(onFinished: () => void) {
     player.current = null;
   };
 
-  /** The clip finished (or never started): hands free again, if we still own the mic. */
   const finishPlayback = (a: HTMLAudioElement) => {
     if (player.current !== a) return;
     player.current = null;
@@ -21,12 +20,10 @@ export function useSpeaker(onFinished: () => void) {
     onFinished();
   };
 
-  /** The voice for a reply we already have: fetched after the words land, so
-   *  text is never hostage to synthesis. A stale fetch never plays over a new
-   *  question, and an autoplay refusal is fine — the text is on screen.
-   *
-   *  The stream comes first (it plays from the first bytes rather than after
-   *  the whole clip is built); the buffered voice is the floor if it refuses. */
+  /**
+   * Fetches the voice after the words land, so text never waits on synthesis. The stream plays
+   * first and the buffered clip is the fallback; a stale fetch never plays over a newer question.
+   */
   const speak = (text: string) => {
     const seq = ++speakSeq.current;
     stopSpeaking();
@@ -35,10 +32,10 @@ export function useSpeaker(onFinished: () => void) {
     /** A stream refuses twice (once for the load, once for play()); one fetch. */
     let resolving = false;
 
-    /** Play one clip. A clip that will not play goes through `onRefuse` when it
-     *  has one, so the stream's refusal hands off to the buffered voice instead
-     *  of ending playback — ending it here is what reopened the mic over a reply
-     *  that was still coming, and cut Stark off mid-sentence. */
+    /**
+     * Plays one clip. A refusal goes to `onRefuse` when given, so a refused stream hands off to the
+     * buffered voice instead of reopening the mic mid-reply.
+     */
     const play = (src: string, onRefuse?: (a: HTMLAudioElement) => void) => {
       const a = new Audio(src);
       player.current = a;
@@ -49,14 +46,14 @@ export function useSpeaker(onFinished: () => void) {
       };
       a.addEventListener("ended", () => finishPlayback(a));
       a.addEventListener("error", refuse);
-      // Autoplay refused or the source unplayable: the words are on screen, so
-      // hand back (or fall through) rather than wait for a clip that never starts.
       void a.play().catch(refuse);
       return a;
     };
 
-    /** The stream refused — fetch the whole clip. If it never lands (no voice
-     *  provider configured, a dropped request) the mic still comes back, once. */
+    /**
+     * Fetches the whole clip after the stream refuses. If it never lands, the mic still comes back,
+     * once.
+     */
     const bufferedFallback = (a: HTMLAudioElement) => {
       if (resolving || seq !== speakSeq.current) return;
       resolving = true;

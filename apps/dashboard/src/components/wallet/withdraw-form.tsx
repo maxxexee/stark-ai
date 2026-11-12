@@ -11,8 +11,8 @@ import { useState } from "react";
 import { BankSelect } from "@/components/wallet/bank-select";
 
 /**
- * Bank, account number, amount. The account name is checked with the bank before
- * anything is sent, so the user sees whose account it is.
+ * The account name is checked with the bank before anything is sent, so the user sees whose account
+ * it is.
  */
 export function WithdrawForm({
   banks,

@@ -2,7 +2,6 @@ import { InputGroupButton } from "@stark/ui/components/input-group";
 import { useState } from "react";
 import { ClipboardCheck as ClipboardCheckIcon, Clipboard as ClipboardIcon } from "reicon-react";
 
-/** A clipboard icon that copies `value` and shows a tick for a moment. */
 export function CopyIconButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
 

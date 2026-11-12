@@ -18,14 +18,8 @@ export const Route = createFileRoute("/_app/connect")({
 });
 
 /**
- * The app half of identity linking. The bot only trusts a chat bound in
- * `identities.py`, and a code is the only thing that binds it — so this screen
- * is the door: mint one, hand it over, done.
- *
- * The code belongs to the account that is signed in here, not to the bot's
- * owner: `POST /v1/link/code` mints against the bearer's account, and a chat
- * then acts only for the account whose code it spent. That is what lets every
- * new sign-up link its own Telegram instead of sharing the owner's wallet.
+ * Mints a link code for the account signed in here, so a chat that spends it acts only for that
+ * account and every sign-up links its own Telegram.
  */
 function Connect() {
   const link = useLinkCode();

@@ -26,18 +26,14 @@ export class SessionStore {
     try {
       window.localStorage.setItem(SessionStore.TOKEN_KEY, session.token);
       window.localStorage.setItem(SessionStore.METHOD_KEY, method);
-    } catch {
-      // Storage disabled: keep the session in memory for this tab only.
-    }
+    } catch {}
     return session;
   }
 
   forget(): void {
     try {
       window.localStorage.removeItem(SessionStore.TOKEN_KEY);
-    } catch {
-      // Nothing to forget.
-    }
+    } catch {}
   }
 }
 

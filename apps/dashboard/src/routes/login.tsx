@@ -7,18 +7,14 @@ import { LogInOptions } from "@/components/auth/log-in-options";
 import { sessionStore } from "@/lib/auth/session-store";
 import type { SignInMethod } from "@/lib/auth/types";
 
-/**
- * Sign in: the counterpart to `/start`, on the same screen. It opens on one
- * button per way in; email swaps the list for its fields, with a way back.
- */
 export const Route = createFileRoute("/login")({
   head: () => ({ meta: [{ title: "Log in · Stark" }] }),
   component: LogIn,
 });
 
+/** The last-used method is read after mount, so the first render matches the server's. */
 function LogIn() {
   const [withEmail, setWithEmail] = useState(false);
-  // Read after mount: storage is the browser's, and the first render must match the server's.
   const [lastUsed, setLastUsed] = useState<SignInMethod | null>(null);
   useEffect(() => setLastUsed(sessionStore.lastMethod()), []);
 

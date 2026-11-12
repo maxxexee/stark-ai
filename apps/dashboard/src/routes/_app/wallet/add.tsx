@@ -9,8 +9,6 @@ import { AddMoneySteps } from "@/components/wallet/add-money-steps";
 import { DepositStatus } from "@/components/wallet/deposit-status";
 
 export const Route = createFileRoute("/_app/wallet/add")({
-  // `amount` and `pay` (bank, test or an asset id) are what the card held, so stepping
-  // back from a deposit refills it.
   validateSearch: z.object({
     deposit: z.string().optional(),
     amount: z.number().int().positive().catch(20000).default(20000),

@@ -7,9 +7,8 @@ import { useEffect, useState } from "react";
 const WINDOW_SECONDS = 10 * 60;
 
 /**
- * After "I've sent it": a ten-minute countdown while Stark watches for the transfer. It is
- * a guide, not a deadline: when it runs out Stark keeps checking, and the deposit's own
- * window decides when an unpaid one expires.
+ * A ten-minute countdown after "I've sent it". It is a guide, not a deadline: Stark keeps checking
+ * after it runs out, and the deposit's own window decides when it expires.
  */
 export function CryptoDepositWait({
   since,

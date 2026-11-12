@@ -23,7 +23,6 @@ export function AdminOverview({
     retry: false,
   });
 
-  // A wrong or disabled key sends the operator back to the key form.
   useEffect(() => {
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
       onRefused(error.message);

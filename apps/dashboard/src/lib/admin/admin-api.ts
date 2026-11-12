@@ -1,6 +1,5 @@
 import { ApiError } from "@stark/api/errors";
 
-/** `TreasuryService.report()`: what Stark holds against what it owes its users. */
 export interface TreasuryReport {
   owed_to_users_ngn: number;
   held: {
@@ -54,8 +53,8 @@ export interface AdminOverview {
 const KEY_STORAGE = "stark.admin-key";
 
 /**
- * The admin routes take `X-Stark-Admin-Key` instead of a session. The key lives in
- * sessionStorage, so it is gone when the tab closes.
+ * Admin routes take `X-Stark-Admin-Key` instead of a session; the key lives in sessionStorage, so
+ * it is gone when the tab closes.
  */
 export class AdminApi {
   static savedKey(): string | null {

@@ -13,7 +13,10 @@ import type { Stage } from "@/lib/talk/types";
 
 const RESTART_MS = 350;
 
-/** The hands-free voice loop: wake on a tap, hear, answer, keep listening until told to sleep. */
+/**
+ * The hands-free voice loop: wake on a tap, hear, answer, keep listening until told to sleep. A
+ * hidden tab ends the session, because browsers throttle or kill the recognizer there.
+ */
 export function useVoiceSession(q: string | undefined) {
   const voice = useVoice();
   const voiceAudio = useVoiceAudio();
@@ -94,8 +97,6 @@ export function useVoiceSession(q: string | undefined) {
               );
               return;
             }
-            // The recorded-audio path never reaches `submit`, so the dismissal
-            // is checked here too — a session must end the same way on every door.
             if (SleepIntent.matches(res.transcript)) {
               endSession();
               go("idle");
@@ -124,8 +125,6 @@ export function useVoiceSession(q: string | undefined) {
   };
 
   const submit = (said: string, opts: { address?: boolean } = {}) => {
-    // The one way to end a session without a tap. Checked here, before the
-    // server, because "go to sleep" is not a question about their bills.
     if (SleepIntent.matches(said)) {
       endSession();
       go("idle");
@@ -138,15 +137,10 @@ export function useVoiceSession(q: string | undefined) {
     setNotice(null);
     setReply(null);
     go("thinking");
-    // Inside a session the words are addressed without hearing "Stark" again —
-    // the same prefix typing and `?q=` already use. Outside one the transcript
-    // goes exactly as heard, so the server's wake gate still decides.
     const transcript = opts.address || inSession() ? StarkAddress.apply(said) : said;
     voice.mutate(transcript, {
       onSuccess: (res) => {
         if (res.ignored) {
-          // DEV-only: the transcript that failed the gate is exactly the data
-          // wake.py's alias set is tuned against.
           if (import.meta.env.DEV) console.debug("[wake] ignored:", said);
           closeIdle();
           setNotice("Start with “Hey Stark” — then say what you need; typos and accents are fine.");
@@ -164,9 +158,11 @@ export function useVoiceSession(q: string | undefined) {
     });
   };
 
-  /** One utterance. Returns only when the recognizer ends, then decides:
-   *  speak → send, silence → keep listening (the hands-free loop), user asked
-   *  to stop → sleep, an actual error → say why and sleep. */
+  /**
+   * One utterance: speech is sent, silence keeps listening, a stop request or an error sleeps.
+   * Chrome refuses a start that races the previous stop (InvalidStateError), so that failure is
+   * reported instead of sleeping silently.
+   */
   const listen = () => {
     if (recognition.current) return;
     if (stageRef.current === "thinking" || speaking.current) return;
@@ -177,7 +173,6 @@ export function useVoiceSession(q: string | undefined) {
     const r = SpeechRecognizer.create();
     if (!r) {
       if (AudioRecording.supported()) {
-        // Server-side hearing: no browser recognizer, so record and upload.
         recordThenSend();
         return;
       }
@@ -200,14 +195,14 @@ export function useVoiceSession(q: string | undefined) {
 
     r.onerror = (e) => {
       const error = e.error;
-      if (error === "no-speech" || error === "aborted") return; // transient
+      if (error === "no-speech" || error === "aborted") return;
       fatalError.current = true;
       closeIdle();
       setNotice(MicErrors.copy(error));
     };
 
     r.onend = () => {
-      if (recognition.current !== r) return; // superseded or session closed
+      if (recognition.current !== r) return;
       recognition.current = null;
       const said = text.trim();
       if (said) {
@@ -224,16 +219,13 @@ export function useVoiceSession(q: string | undefined) {
         setNotice("I didn’t hear that. Tap and try again, or type below.");
         return;
       }
-      scheduleRestart(); // nobody spoke — keep listening until they say they are done
+      scheduleRestart();
     };
 
     go("listening");
     try {
       r.start();
     } catch {
-      // Chrome refuses a start that races the previous stop (InvalidStateError).
-      // Sleeping silently here is how a session used to die mid-conversation with
-      // the orb just going idle: say what happened instead.
       recognition.current = null;
       go("idle");
       setNotice("The mic didn’t restart — tap the orb, or type below.");
@@ -243,7 +235,6 @@ export function useVoiceSession(q: string | undefined) {
 
   const handleMicrophoneTap = () => {
     if (stageRef.current === "listening") {
-      // Recording (no recognizer): a second tap finishes and sends the clip.
       if (clips.recording()) {
         clips.stop();
         return;
@@ -284,9 +275,6 @@ export function useVoiceSession(q: string | undefined) {
     [],
   );
 
-  // A hidden tab cannot keep listening honestly — browsers throttle or kill the
-  // recognizer, so it would look awake and hear nothing. Sleep with a reason
-  // instead of staying half-awake behind another window.
   useEffect(() => {
     const handleTabHidden = () => {
       if (document.visibilityState !== "hidden" || !awake.current) return;

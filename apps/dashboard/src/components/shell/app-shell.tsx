@@ -5,9 +5,6 @@ import { Dock } from "@/components/shell/dock";
 import { PausedBanner } from "@/components/shell/paused-banner";
 import { TabBar } from "@/components/shell/tab-bar";
 
-// The header and the page share one centred column (max-w-190, same gutters), so
-// the logo, the title and every card start on the same left edge and end on the
-// same right edge.
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <TooltipProvider>
