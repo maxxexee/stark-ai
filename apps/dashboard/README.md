@@ -44,7 +44,7 @@ balance, bills and activity keys so every screen stays in step.
 | Variable | Default | Used for |
 |---|---|---|
 | `VITE_STARK_API_URL` | empty (same origin, via the proxy) | API base URL for a deployed build |
-| `VITE_STARK_LIVE_PAYMENTS` | unset | set to `1` once tokens are real; until then tokens are labelled samples |
+| `VITE_STARK_LIVE_PAYMENTS` | unset | set to `true` once tokens are real; until then tokens are labelled samples |
 
 ## Rules
 
@@ -57,39 +57,37 @@ These come from [`docs/FRONTEND.md`](../../docs/FRONTEND.md) and are enforced in
 - Amounts are typed fields plus quick-pick chips. No sliders.
 - Every screen has a phone layout (bottom tab bar under `md`).
 - The Talk screen shows `VoiceReply` text **first** (it asks for `speak: false`), then
-  plays the streamed voice from `GET /v1/speak/stream` — which starts on the first
-  bytes instead of waiting for a whole clip, falling back to `POST /v1/speak` if it
-  errors — and always says why the mic failed or the wake gate ignored them, never a
-  silent no-op.
-- **The mic is hands-free and has no idle timeout.** One wake opens a session: after
-  each answer the recognizer restarts itself, so follow-ups need no wake word, and a
-  pause to think never ends it — the old 20s window made a five-turn conversation
-  hang up on its own. It sleeps only when the user says so (`isSleepIntent` in
-  `lib/speech.ts`: "go to sleep", "stop listening", "that's all", "I'm done"…) —
-  matched whole-utterance **or** found inside a longer sentence, because "I think
-  that's enough goodbye I don't need your help anymore" reached the server and the mic
-  stayed awake (2026-10-24). The short ambiguous words ("sleep", a bare "stop") stay
-  anchored to the whole utterance, so "stop paying my DStv" is still a command.
-  It also sleeps when they tap the orb, on a real mic error, or when the tab is hidden. It never
-  listens while Stark is speaking or while a request is in flight. The session lives
-  entirely in `talk.tsx` — continuation turns are prefixed `Stark, …` and the
-  server's wake gate is untouched.
+  plays the streamed voice from `GET /v1/speak/stream`, which starts on the first bytes
+  instead of waiting for a whole clip. If the stream errors it falls back to
+  `POST /v1/speak`. When the mic fails or the wake gate ignores the user, the screen
+  says why.
+- **The mic is hands-free and has no idle timeout.** One wake opens a session. After
+  each answer the recognizer restarts itself, so follow-ups need no wake word and a
+  pause never ends the session (a 20s window used to hang up mid-conversation). It
+  sleeps when the user says so (`isSleepIntent` in `lib/speech.ts`: "go to sleep",
+  "stop listening", "that's all", "I'm done"…), matched as the whole utterance **or**
+  inside a longer sentence such as "I think that's enough goodbye I don't need your help
+  anymore". The short ambiguous words ("sleep", a bare "stop") must be the whole
+  utterance, so "stop paying my DStv" is still a command. It also sleeps when the user
+  taps the orb, on a real mic error, or when the tab is hidden. It never listens while
+  Stark is speaking or while a request is in flight. The session lives entirely in
+  `talk.tsx`: continuation turns are prefixed `Stark, …` and the server's wake gate is
+  unchanged.
 - **The voice section is animated in CSS only** (`styles.css`: `.voice-orb`,
   `.voice-aura`, `.voice-ring`, `.voice-orbit`, `.voice-eq`, `.voice-in`,
-  `.voice-scan`) — no animation library. Every keyframe is inside
+  `.voice-scan`), with no animation library. Every keyframe is inside
   `prefers-reduced-motion: no-preference`; add new motion there too.
 - **Renewals are reminders; paying still takes a tap on a confirm screen.**
   `state.due_soon` arrives already sorted, and the UI never re-sorts or invents a
-  date: the soonest renewal gets one action strip on Home (Pay → `/pay` with the bill
-  and plan price prefilled) and a status card on Talk that opens the same screen. A
-  bill with `renews_on` reads "Renews Oct 27" in its row and turns warm while the
-  window holds it. A kind that cannot be paid yet (internet, water) gets no Pay
-  button rather than a dead one. Copy for "today", "tomorrow", "in 3 days" and
+  date. The soonest renewal gets one action strip on Home (Pay opens `/pay` with the
+  bill and plan price prefilled) and a status card on Talk that opens the same screen.
+  A bill with `renews_on` reads "Renews Oct 27" in its row and turns warm inside the
+  reminder window. A kind that cannot be paid yet (internet, water) gets no Pay
+  button. Copy for "today", "tomorrow", "in 3 days" and
   "2 days ago" lives in `src/lib/renewals.ts`, shared by both screens.
 
 ## Not wired yet
 
-- Sign-in: the setup screens continue without an account because the API has no auth.
 - Adding money is a ledger-only demo, and tokens are dry-run samples.
 - Auto top-up, per-bill pause and notification toggles from the designs have no API yet,
   so they are not shown.

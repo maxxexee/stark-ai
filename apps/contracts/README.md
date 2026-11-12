@@ -5,8 +5,8 @@ user's spending policy and is the account the agent's `pay()` calls are signed a
 
 ## Setup
 
-Not needed for the web app, the dashboard or the backend; skip this unless you are
-changing the contract.
+Only needed to change the contract. The web app, the dashboard and the backend run
+without it.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # once
@@ -25,8 +25,8 @@ From the repo root:
 
 Or with cargo directly from `vault/`: `cargo test`, `cargo build --target wasm32-unknown-unknown --release`.
 
-These are deliberately not turbo tasks, so `bun run test` and `bun run build` work without a
-Rust toolchain.
+These are not turbo tasks, so `bun run test` and `bun run build` work without a Rust
+toolchain.
 
 If cargo reports no toolchain although rustup is installed, your shell's `$HOME` is
 probably redirected; set `RUSTUP_HOME` to the real `~/.rustup`. See
@@ -40,7 +40,7 @@ counter resets on the first of each calendar month.
 
 **Does not move tokens yet.** `balance_ngn` is an internal ledger. The real
 version credits on an NEP-141 `ft_on_transfer` and settles USDC to the treasury.
-If anyone implies money moves onchain today, they are wrong.
+No money moves on chain today.
 
 ```
 vault/src/policy.rs   pure rules, no near-sdk, unit-tested
@@ -57,11 +57,11 @@ needed for the ABI JSON and deploy convenience; neither it nor `near-cli` is req
 ## Deployed
 
 **`stark-vault.testnet`**, deployed 2026-10-26 against `near-sdk` 5.29.1. That account's
-key is deliberately not in this repo.
+key is not in this repo.
 
 `new` was called with `owner` and `treasury` both `stark-vault.testnet`, caps of ₦30,000
-monthly / ₦10,000 per payment, and `04512345678` as the only allowlisted meter. On chain
-that has been exercised end to end: `fund`, a `pay` inside the caps (accepted,
+monthly / ₦10,000 per payment, and `04512345678` as the only allowlisted meter. These calls
+have run on chain: `fund`, a `pay` inside the caps (accepted,
 `payment_id` incremented), a `pay` above the per-payment cap (rejected) and a `pay` to a
 meter not on the allowlist (rejected).
 

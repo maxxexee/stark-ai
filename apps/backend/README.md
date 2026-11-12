@@ -24,7 +24,7 @@ bun smoke                          # in another shell: 69 checks
 `DATABASE_URL` (Neon Postgres, pooler URL with `sslmode=require`) is the one hard
 requirement: accounts, wallets, receipts, bills, limits, readings and linked identities
 live there and the schema creates itself on first boot. `NEON_AUTH_BASE_URL` (the same
-branch's Auth URL) makes sign-in work — without it every `/v1` request answers 401.
+branch's Auth URL) makes sign-in work. Without it every `/v1` request answers 401.
 Everything else is off: without `FLW_SECRET_KEY` nothing can be bought, deposited or
 withdrawn (test money still works), nothing is signed or broadcast, and a
 deterministic model stands in for the LLM. Each remaining
@@ -38,8 +38,8 @@ variable in [`.env.example`](.env.example) switches one piece on.
 | `bun tts` | the local Kokoro voice sidecar on :8010 (needs `.venv-tts`, see Voice output) |
 | `curl -X POST http://127.0.0.1:8000/v1/_stub/reset` | back to the demo seed (only with `STARK_STUB_RESET=1`) |
 
-`ffmpeg` on your `PATH` (`brew install ffmpeg`) is **required for voice input** —
-Telegram's OGG and the browser's WebM are both decoded with it. Without it, voice
+`ffmpeg` on your `PATH` (`brew install ffmpeg`) is **required for voice input**. It
+decodes Telegram's OGG and the browser's WebM. Without it, voice
 asks for text instead of guessing.
 
 ## Layout
@@ -47,7 +47,7 @@ asks for text instead of guessing.
 ```
 app/
   main.py                create_app(): modules, error filter, CORS, Swagger
-  __main__.py            `python -m app` — uvicorn on HOST:PORT
+  __main__.py            `python -m app`: uvicorn on HOST:PORT
   app_module.py          the composition root: every repository and service, wired once
   setup_swagger.py       /docs, /redoc, /docs/openapi.json (no fake 422s)
   common/                ApiError, Clock, dto/ (ErrorDto, ContractField)
@@ -83,9 +83,9 @@ Each module follows the same shape: `<name>_controller.py` (an `APIRouter`, thin
 `<name>_service.py` (the rules and their error codes), `dtos/` (one pydantic model
 per file). Request DTOs validate once at the edge and fail with the contract's own
 codes (`bad_amount`, `bad_limits`, …) through `ContractField`. Response DTOs document
-the shapes for Swagger; routes return a `JSONResponse` themselves, so the frozen
-bytes — including fields that are *absent* rather than `null`, like `renews_on` —
-never pass through a serializer that could change them.
+the shapes for Swagger. Routes return a `JSONResponse` themselves, so the frozen
+bytes, including fields that are *absent* rather than `null` like `renews_on`, never
+pass through a serializer that could change them.
 
 ## Running it
 
@@ -97,20 +97,19 @@ bun dev:backend              # from the repo root, with secrets from Infisical (
 Both serve http://127.0.0.1:8000, with the API documented at
 http://127.0.0.1:8000/docs.
 
-In another shell, prove it works:
+In another shell, run the smoke checks:
 
 ```sh
 STARK_STUB_RESET=1 bun dev:backend   # the smoke run resets to the demo seed
 bun smoke                            # 69 checks, exits 1 on failure
 ```
 
-New accounts open empty — no bills, ₦0, no activity. `POST /v1/_stub/reset` (with
+New accounts open empty: no bills, ₦0, no activity. `POST /v1/_stub/reset` (with
 `STARK_STUB_RESET=1`) replaces the caller's data with the artboard seed: ₦64,200
 balance, ₦30,000 monthly cap, ₦23,000 spent, the "Home" meter, "Living room TV" on
 DStv Compact, "My line" airtime and the six activity entries, so screens render with
 the numbers already in the design. Shapes and error codes are in
 [`docs/API.md`](../../docs/API.md) and at `/docs`.
-
 
 ## Agent
 
@@ -120,34 +119,34 @@ The voice endpoint is the agent. One loop, two models:
 transcript → model picks a tool → policy gate → sign pay() → book the payment → reply
 ```
 
-- **The policy gate is not advice in a prompt.** `Agent._pay_bill` checks the per-payment
+- **The policy gate is code, not a prompt.** `Agent._pay_bill` checks the per-payment
   cap, the monthly cap, the meter allowlist and the balance before anything is signed or
   charged. A model that ignores every instruction still cannot overspend.
 - **Same rules as the contract.** `policy.py` mirrors [`policy.rs`](../contracts/vault/src/policy.rs),
   and a test reads the Rust source and fails if a code or sentence drifts.
 - **No key needed.** Without `NEAR_AI_API_KEY` the server uses a deterministic model that
-  emits the same tool calls a real one would, so the loop, the tools and the gate are
-  the real thing and the tests are hermetic.
-- **A question never spends.** Two rules in `agent.py` run before the model's choices
-  matter: a turn that opens like a read question, or asks "if / what if / should I /
-  why / explain" or sounds confused, is offered **no tools at all**; and `pay_bill`
-  itself refuses such a transcript with `not_a_payment_request`. Both exist because of
-  a measured failure on 2026-10-24: with `pay_bill` the only tool on the table,
-  "if I pay DStv and top up 5 thousand, how much is left?" **paid the airtime**, and
-  "I'm confused, DStv says I owe, what should I do?" tried to pay DStv. "Can you pay
-  my DStv" still pays — that is permission — and a bare "yes" still confirms.
+  emits the same tool calls a real one would. The loop, the tools and the gate are the
+  same code either way, and the tests need no network.
+- **A question never spends.** Two rules in `agent.py` run before the model chooses.
+  A turn that opens like a read question, asks "if / what if / should I / why /
+  explain" or sounds confused is offered **no tools at all**, and `pay_bill` itself
+  refuses such a transcript with `not_a_payment_request`. Both came from a failure on
+  2026-10-24: with `pay_bill` the only tool offered, "if I pay DStv and top up 5
+  thousand, how much is left?" **paid the airtime**, and "I'm confused, DStv says I
+  owe, what should I do?" tried to pay DStv. "Can you pay my DStv" still pays, because
+  it grants permission, and a bare "yes" still confirms.
 - **An unpriced charge asks instead of guessing.** Two more refusals sit in `_pay_bill`,
   both written after a live session on 2026-10-24 where "recharge my airtime number"
   bought ₦1,000 **twice, 29 seconds apart**, with the model choosing the figure both
-  times. No amount spoken and no plan price → `amount_required` ("How much would you
-  like to pay? Nothing has been charged yet."). The same bill, the same figure,
-  delivered or pending within five minutes → `duplicate_payment`, unless the transcript
-  says again / yes / confirm, so a refused repeat can still be confirmed. A plan-priced
-  bill needs no figure — the plan is the figure — and seeded demo receipts (`seed-*`)
-  are scenery, not a payment Stark just made.
+  times. With no amount spoken and no plan price, it refuses with `amount_required`
+  ("How much would you like to pay? Nothing has been charged yet."). The same bill for
+  the same figure, delivered or pending within five minutes, refuses with
+  `duplicate_payment` unless the transcript says again / yes / confirm, so a refused
+  repeat can still be confirmed. A plan-priced bill needs no figure because the plan
+  sets it, and seeded demo receipts (`seed-*`) do not count as recent payments.
 - **It says what it cannot do.** The prompt forbids implying a message was sent. There
-  is no forwarding to WhatsApp, Telegram, email or SMS: the model answers that plainly
-  instead of inventing a receipt-sending feature.
+  is no forwarding to WhatsApp, Telegram, email or SMS, and the model says so instead
+  of inventing a receipt-sending feature.
 
 ```sh
 .venv/bin/python -m unittest tests.test_agent     # policy parity, RFC 8032, the cap gate
@@ -160,8 +159,8 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
 ## Telegram bot
 
 The bot runs the same agent behind the same policy gate. It **refuses everything**
-until you give it secrets — an unauthenticated webhook is a wallet anyone on the
-internet could talk to:
+until both secrets are set, because an unauthenticated webhook would let anyone on the
+internet talk to a wallet:
 
 ```sh
 # Infisical, folder /backend
@@ -178,7 +177,7 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 ```
 
 In Telegram: send `link 482913` with the code shown in the app, then ask by text or
-voice note. Voice notes need the word "stark" first — the same rule `/v1/voice`
+voice note. Voice notes need the word "stark" first, the same rule `/v1/voice`
 uses. Without `NEAR_AI_API_KEY` the bot says it cannot hear voice notes rather than
 guessing what you said.
 
@@ -197,17 +196,17 @@ STARK_BROADCAST=0                          # 1 to actually send
   ../contracts/vault/target/wasm32-unknown-unknown/release/stark_vault.wasm
 ```
 
-With no funder configured, payments book off-chain — the offline behaviour. With
+With no funder configured, payments book off-chain. With
 one, every payment path signs `pay` on the user's vault before buying, and a
 signature that cannot be produced **refuses the payment**. Deposits, withdrawals
 and refunds reach the vault through an outbox (`chain_ops`) the money loop retries.
 `python -m app.modules.treasury.treasury_service` prints what Stark owes against
 what it holds (the Flutterwave NGN balance and treasury USDC).
 
-**Honest limits:** the borsh layout has never been round-tripped against a live RPC.
-The NEAR AI model and Whisper *have* run live (2026-10-22). `/v1/voice` now takes real
-audio — base64 `audio` in JSON or a multipart file part — and `transcript_hint` is kept
-only as a probe for tests (2026-10-24). See [`HANDOFF.md`](../../docs/HANDOFF.md) §10.
+**Limits:** the borsh layout has never been round-tripped against a live RPC.
+The NEAR AI model and Whisper *have* run live (2026-10-22). `/v1/voice` takes real
+audio, as base64 `audio` in JSON or a multipart file part, and `transcript_hint` is
+kept only as a probe for tests (2026-10-24). See [`HANDOFF.md`](../../docs/HANDOFF.md) §10.
 
 ## What it can answer
 
@@ -223,8 +222,8 @@ meter number or token, or see a bill that was never saved.
 
 ## Voice input (Whisper)
 
-`/v1/voice` takes the clip itself — there is no "stub transcription" in the product
-path any more (2026-10-24):
+`/v1/voice` takes the clip itself. There is no stub transcription in the product path
+(2026-10-24):
 
 ```sh
 # the browser: a recorded Blob, base64'd. `audio_type` must be what was recorded.
@@ -238,70 +237,69 @@ curl -s -X POST http://127.0.0.1:8000/v1/voice \
   -F audio_type=audio/ogg
 ```
 
-`transcript_hint` still exists and is only a probe for tests and `curl` — audio is
-checked **first**, so a client that can record never has to fake words.
+`transcript_hint` is only a probe for tests and `curl`. The server checks audio
+**first**, so a client that can record never has to send words.
 
-**WebM does not work at the provider, and that is measured, not assumed**
-(2026-10-24). Whisper reads WAV and OGG/Opus; a Chrome `MediaRecorder` WebM comes
-back HTTP 400 *"Audio could not be processed"* whatever filename or content type it
-is given — the container itself is refused. So `stt.hear` decodes anything that is
+**The provider refuses WebM** (measured 2026-10-24). Whisper reads WAV and OGG/Opus.
+A Chrome `MediaRecorder` WebM comes back HTTP 400 *"Audio could not be processed"*
+whatever filename or content type it is given, because the container itself is
+refused. So `stt.hear` decodes anything that is
 not WAV/OGG to 16 kHz mono WAV with `ffmpeg` before sending (`audio.transcode`, the
 same step a Telegram OGG already took), and names the result `audio.wav`. WAV and
 OGG skip ffmpeg entirely. Without ffmpeg the clip is sent unchanged and the answer is
-`stt: failed` — never a guessed transcript. That makes `ffmpeg` **required** for the
+`stt: failed`, never a guessed transcript. That makes `ffmpeg` **required** for the
 dashboard's voice button, not just for Telegram.
 
 Every audio answer carries `stt`: `ok` (transcribed, then the wake gate and agent
-ran), `failed` (nothing heard — `transcript: ""`, reply asks again) or `no_key` (no
-`NEAR_AI_API_KEY` — reply says so, and the keyboard is the answer). **An unheard clip
+ran), `failed` (nothing heard: `transcript: ""` and the reply asks again) or `no_key`
+(no `NEAR_AI_API_KEY`: the reply says so and asks for text). **An unheard clip
 never reaches the agent and never gets a made-up transcript.** Bad base64 is 400
 `bad_audio`; over 8MB is 413 `audio_too_large`.
 
 ## Voice output (TTS)
 
 Replies come back **spoken** when the local voice sidecar is up, and as text when it
-is not — never slower, never blocked on it. `/v1/voice` carries an additive `audio`
+is not. Text never waits on the sidecar. `/v1/voice` carries an additive `audio`
 field (a WAV data URL, or `null`); a Telegram voice note gets a voice note back
 (OGG/Opus via `sendVoice`); the dashboard's Talk screen plays it.
 
 **Amounts are spoken as words, not symbols.** Neither voice reads `₦`: ElevenLabs
 and Kokoro both said the letter *N* ("Your balance is N sixty-four thousand…"),
 measured 2026-10-24 by synthesising a real reply and transcribing the clip back. So
-`tts.speakable()` rewrites `₦64,200` → `64,200 naira` before anything is synthesised —
-WAV, stream and Telegram voice note all go through it. The reply the user *reads* keeps
-the sign; only the voice is spelled to. A symbol in the middle of a sentence is the
-only thing this touches: numbers, decimals and commas without `₦` are left alone
-(`SpeakableCase` in `test_tts.py` pins both halves).
+`tts.speakable()` rewrites `₦64,200` as `64,200 naira` before anything is synthesised,
+for the WAV, the stream and the Telegram voice note. The reply the user *reads* keeps
+the sign. Only amounts with `₦` change; numbers, decimals and commas without it are
+left alone (`SpeakableCase` in `test_tts.py` covers both).
 
 **Text never waits for voice.** The dashboard sends `{"speak": false}` so the words
 land in one model turn, then fetches the voice from `POST /v1/speak` and plays it a
 beat later. The sidecar keeps its GPU warm with a background ping
 (`STARK_TTS_KEEPALIVE`, default 45s, `0` disables) because Metal re-warms kernels
-after a quiet few seconds — without it the first reply of the minute paid ~3s.
+after a few idle seconds. Without it the first reply of the minute took ~3s longer.
 
 **Two voices, ElevenLabs first.** With `ELEVENLABS_API_KEY` set, `tts.py` asks ElevenLabs
 Flash v2.5 for the reply: a Stark-length answer comes back in well under a second
 against ~2s for the local voice, and it reads `₦5,000`, "Ikeja" and dates correctly.
-The raw 24 kHz PCM it returns is wrapped into a WAV inside `tts.py`, so nothing
-downstream moves — the dashboard's `data:` URL, `ffmpeg` for Telegram and `/v1/speak`
-all still see a WAV.
+`tts.py` wraps the raw 24 kHz PCM it returns into a WAV, so nothing downstream
+changes: the dashboard's `data:` URL, `ffmpeg` for Telegram and `/v1/speak` all still
+see a WAV.
 
-What the free tier actually buys: **10,000 credits a month** at 0.5–1 credit per
-character on Flash — call it 10k–20k characters, ~13–26 minutes of speech, **70–130
+The free tier gives **10,000 credits a month** at 0.5–1 credit per character on Flash,
+about 10k–20k characters, ~13–26 minutes of speech, **70–130
 Stark replies**. It is non-commercial, and **the Voice Library is not available to free
 keys over the API**: asking for Rachel (`21m00Tcm4TlvDq8ikWAM`) returns HTTP 402
 `paid_plan_required`, measured 2026-10-24. So a free key is limited to the account's
-**premade** voices (`ELEVENLABS_VOICE_ID`, default Daniel — Steady Broadcaster; `GET
+**premade** voices (`ELEVENLABS_VOICE_ID`, default "Daniel, Steady Broadcaster"; `GET
 /v1/voices` lists them) and there is no Nigerian accent among them. A cloned or
 library voice needs Starter ($6/mo, $1 for the first month), which is also where the
 commercial license lives.
 
-The chain never breaks: ElevenLabs down → the Kokoro sidecar → the text already on
-screen. A key is optional forever, and the demo works without it.
+If ElevenLabs is down, the Kokoro sidecar speaks. If both are down, the text is
+already on screen. The key is optional, and the demo works without it.
 
 The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0,
-82M params), served by `tts_server.py` behind the OpenAI speech shape — the mirror
-image of `stt.py`. It needs its own interpreter, because torch has no business in a
+82M params), served by `tts_server.py` behind the OpenAI speech shape, like `stt.py`
+on the input side. It needs its own interpreter so torch stays out of the
 standard-library API:
 
 ```sh
@@ -316,9 +314,9 @@ cd apps/backend && ../../.venv-tts/bin/python tts_server.py
 Then set `STARK_TTS_URL=http://127.0.0.1:8010` in Infisical (see `.env.example`).
 Measured 2026-10-23 on an M1 Pro: ~2s for a typical reply on MPS and on CPU
 (RTF ~0.25–0.3, so speech arrives faster than it plays on both). `STARK_TTS_VOICE`
-picks the voice — `af_heart` (US female, default), `bf_emma` (UK female),
+picks the voice: `af_heart` (US female, default), `bf_emma` (UK female),
 `am_michael` (US male). **Kokoro has no Nigerian English voice**; if the accent
-matters, voice cloning (Chatterbox, MIT) is the path.
+matters, voice cloning (Chatterbox, MIT) is the option.
 
 **Text is normalised before synthesis** (`normalize_for_speech` in `tts_server.py`):
 `₦30,000` becomes "naira 30,000" (misaki read the glued ₦ as *three-zero-zero-zero-zero*),
@@ -334,14 +332,14 @@ ElevenLabs produces it, and the Talk screen plays that first: measured **first b
 being built. The stream falls back to `POST /v1/speak` in the browser, and on the
 server to a whole Kokoro WAV; no voice anywhere is a 503 `no_voice`, not silence.
 
-Fails closed, exactly like `stt.py`: no key and no URL, both providers down, no
-ffmpeg, or a Telegram refusal — the answer still arrives, just not spoken. `bun smoke`
-proves both worlds: 68 checks with voice off (`audio` null), 70 with a voice up.
+It fails closed like `stt.py`. With no key and no URL, both providers down, no
+ffmpeg, or a Telegram refusal, the answer still arrives as text. `bun smoke` runs 68
+checks with voice off (`audio` null) and 70 with a voice up.
 
 ## Conversation log (turnlog)
 
-To judge Stark on a real conversation rather than on a test, turn the log on
-and every exchange appends one JSON line:
+With the log on, every exchange appends one JSON line, so a real conversation can be
+reviewed afterwards:
 
 ```sh
 STARK_TURN_LOG=1 bun dev:backend     # or set it in Infisical; a path works too
@@ -351,16 +349,15 @@ tail -f apps/backend/logs/turns/turns.jsonl
 A `kind: "turn"` line holds the whole exchange: `heard` (the transcript
 verbatim), `said` (after the wake gate), `reply`, `actions` (what it actually
 did), `code` (the rule that refused, when one did), `model`, and `ms` per
-stage — `total`, `stt`, `agent`, `tts`. A **missing** stage key means that
+stage (`total`, `stt`, `agent`, `tts`). A **missing** stage key means that
 stage did not run, not that it was instant. `outcome` is `answered`, `asleep`
-(the wake gate kept it) or `unheard` (STT failed — no transcript, no agent,
+(the wake gate kept it) or `unheard` (STT failed: no transcript, no agent,
 no guess). When a clip was uploaded, `audio` points at `audio/<stamp>-in.webm`
-sitting beside the log, so the words and the sound that produced them stay
-together.
+beside the log.
 
 A `kind: "speak"` line is the other half of the exchange: `text` as written,
 `spoken` as the provider received it (after the naira rewrite), the provider,
-and `ms` — time to first byte on the stream, whole-synthesis time on
+and `ms`: time to first byte on the stream, whole-synthesis time on
 `POST /v1/speak`.
 
 Off by default, `logs/` is gitignored, and a log that cannot be written is
@@ -378,7 +375,7 @@ FLW_SECRET_HASH=...                # the webhook's secret hash, set in the dashb
 STARK_APP_URL=http://localhost:5174
 ```
 
-Three things that are true of the account, not the code:
+Three facts about the Flutterwave account, not the code:
 
 - **Bills and transfers need the server's IP whitelisted** (dashboard → Settings →
   Whitelisted IP addresses), test mode included. Until then they answer `Please
@@ -392,7 +389,7 @@ Three things that are true of the account, not the code:
 
 ## Vending and receipts
 
-A payment runs in this order, and the order is the safety argument:
+A payment runs in this order, and the order is what makes it safe:
 
 ```
 policy check → sign pay() → record the intent → buy → charge → speak the token

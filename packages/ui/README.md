@@ -25,7 +25,7 @@ on `<html>` for the near-black app theme, where the primary colour is burnt oran
 ## What's in it
 
 - `src/components/*`: every shadcn component except `slider` (Stark never uses sliders),
-  restyled where Stark differs: pill buttons with `brand`, `light`, `ink` and `paper`
+  restyled where Stark differs, with pill buttons with `brand`, `light`, `ink` and `paper`
   variants, 48px inputs, 20px card padding, Crimson Pro titles in cards, dialogs and sheets.
 - Stark pieces built on them: `amount-field` (InputGroup + quick-pick chips),
   `choice-chip` (Toggle), `radio-row` (RadioGroup), `switch-row` (Switch), `text-field`
