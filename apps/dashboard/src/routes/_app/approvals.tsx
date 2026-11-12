@@ -23,7 +23,7 @@ function ApprovalsPage() {
   return (
     <>
       <PageTitle>Approvals</PageTitle>
-      <p className="m-0 text-[14px] text-fg-2">
+      <p className="m-0 text-base text-muted-foreground">
         When you ask Stark for more than your limits allow, it asks you here first. Only this app
         can approve a payment, never a chat.
       </p>

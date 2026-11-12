@@ -18,10 +18,7 @@ export function TranscriptCard({
   return (
     <Card
       aria-live="polite"
-      className={cn(
-        "min-h-30 gap-2 rounded-[18px] border-white/10 bg-white/5 p-4 lg:min-h-48",
-        stage === "thinking" && "voice-scan",
-      )}
+      className={cn("min-h-30 gap-2 lg:min-h-48", stage === "thinking" && "voice-scan")}
     >
       {reply?.reply ? (
         <ReplyLines reply={reply.reply} token={reply.token} />

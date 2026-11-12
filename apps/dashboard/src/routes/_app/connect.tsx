@@ -41,15 +41,9 @@ function Connect() {
 
         {minted ? <MintedCode minted={minted} /> : null}
 
-        {link.error ? (
-          <FieldError className="text-[13px]">{errorCopy(link.error)}</FieldError>
-        ) : null}
+        {link.error ? <FieldError className="text-sm">{errorCopy(link.error)}</FieldError> : null}
 
-        <Button
-          onClick={() => link.mutate()}
-          disabled={link.isPending}
-          className="min-h-10 self-start"
-        >
+        <Button onClick={() => link.mutate()} disabled={link.isPending} className="self-start">
           {link.isPending ? <Spinner /> : <Icons.Telegram size={16} />}
           {minted ? "Get another code" : "Get a code"}
         </Button>

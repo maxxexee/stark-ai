@@ -60,7 +60,7 @@ export function SpendingLimitsForm({ limits }: { limits: Limits }) {
           />
           <LimitsDescription spent={limits.spent_ngn} />
           {update.error ? (
-            <FieldError className="text-[13px]">{errorCopy(update.error)}</FieldError>
+            <FieldError className="text-sm">{errorCopy(update.error)}</FieldError>
           ) : null}
           {update.isSuccess && !dirty ? <LimitsSavedNote /> : null}
           {dirty ? (

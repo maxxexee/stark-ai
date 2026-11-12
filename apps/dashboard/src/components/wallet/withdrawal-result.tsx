@@ -2,10 +2,7 @@ import type { Withdrawal } from "@stark/api/types";
 import { Notice } from "@stark/ui/components/notice";
 import { formatNaira } from "@stark/utils/format";
 
-const BANK_COPY: Record<
-  Extract<Withdrawal, { method: "bank" }>["status"],
-  string
-> = {
+const BANK_COPY: Record<Extract<Withdrawal, { method: "bank" }>["status"], string> = {
   sending: "Sending it to your bank now.",
   processing: "On its way to your bank.",
   paid: "It’s in your bank account.",

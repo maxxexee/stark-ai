@@ -50,27 +50,13 @@ export function EmailLogInForm({ onBack }: { onBack: () => void }) {
 
       <FormError message={error} />
 
-      <Button
-        type="submit"
-        variant="brand"
-        size="lg"
-        block
-        disabled={pending}
-        className="mt-2 h-12 text-[15px] font-semibold"
-      >
+      <Button type="submit" variant="brand" size="lg" block disabled={pending} className="mt-2">
         {pending ? "Signing in…" : "Log in"}
       </Button>
 
       <OrDivider />
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="lg"
-        block
-        onClick={onBack}
-        className="h-12 bg-white/3 font-medium hover:bg-white/6"
-      >
+      <Button type="button" variant="secondary" size="lg" block onClick={onBack}>
         Show other options
       </Button>
     </form>

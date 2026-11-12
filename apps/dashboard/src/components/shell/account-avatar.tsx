@@ -8,8 +8,8 @@ export function AccountAvatar() {
   const initials = data?.first_name?.slice(0, 2).toUpperCase() ?? "";
   return (
     <Link to="/settings" aria-label="Account and settings" className="rounded-full no-underline">
-      <Avatar className="size-8.5">
-        <AvatarFallback className="bg-surface-3 text-xs font-semibold text-fg">
+      <Avatar>
+        <AvatarFallback className="bg-surface-3 text-xs font-semibold text-fg-2">
           {initials}
         </AvatarFallback>
       </Avatar>

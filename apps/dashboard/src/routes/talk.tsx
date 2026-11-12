@@ -26,7 +26,7 @@ function Talk() {
   const live = talk.stage === "listening" || talk.stage === "thinking";
 
   return (
-    <div className="relative flex min-h-dvh flex-col gap-5 overflow-hidden bg-[#111211] px-6 pt-7 pb-8 sm:px-10 lg:gap-0 lg:px-16">
+    <div className="talk-scope dark relative flex min-h-dvh flex-col gap-6 overflow-hidden bg-canvas px-4 pt-6 pb-8 text-fg sm:px-10 lg:gap-0 lg:px-16">
       <TalkGlow live={live} />
 
       <TalkHeader />

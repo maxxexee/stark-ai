@@ -63,7 +63,7 @@ export function SignUpForm() {
     <form className="mt-7 flex flex-col" onSubmit={handleSignUp}>
       <MethodPicker label="Sign-up method" value={method} onChange={setMethod} />
 
-      <div className="mt-4 flex min-h-52 flex-col gap-3">
+      <div className="mt-4 flex min-h-56 flex-col gap-3">
         {method === "email" ? (
           <SignUpEmailFields details={details} onChange={setDetails} />
         ) : (
@@ -79,7 +79,7 @@ export function SignUpForm() {
         size="lg"
         block
         disabled={pending}
-        className="mt-5 h-12 gap-2.5 text-[15px] font-semibold"
+        className="mt-5 gap-2"
       >
         <MethodIcon method={method} />
         {pending

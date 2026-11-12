@@ -11,7 +11,7 @@ export function ReplyLines({ reply, token }: { reply: string; token: string | nu
         {reply}
       </VoiceLine>
       {token ? (
-        <VoiceLine key={token} delay="140ms" className="tabular text-lg tracking-[0.03em]">
+        <VoiceLine key={token} delay="140ms" className="tabular text-lg font-medium">
           {formatToken(token)}
         </VoiceLine>
       ) : null}

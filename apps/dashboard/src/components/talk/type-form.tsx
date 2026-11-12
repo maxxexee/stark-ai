@@ -26,14 +26,14 @@ export function TypeForm({
 
   return (
     <form className="m-0" onSubmit={handleSendTyped}>
-      <InputGroup className="h-auto rounded-full border-white/10 bg-white/5 py-1.5 pr-1.5 pl-4 dark:bg-white/5">
+      <InputGroup className="h-10 pr-1 pl-1">
         <InputGroupInput
           id="type-instead"
           aria-label="Type instead"
           value={typed}
           onChange={(e) => setTyped(e.target.value)}
           placeholder="Or type it"
-          className="h-auto px-0 py-2 text-[15px]"
+          className="h-full text-base"
         />
         <InputGroupAddon align="inline-end" className="py-0">
           <InputGroupButton
@@ -42,7 +42,6 @@ export function TypeForm({
             size="icon-sm"
             aria-label="Send"
             disabled={!typed.trim() || thinking}
-            className="size-9 rounded-full"
           >
             <Icons.ArrowRight />
           </InputGroupButton>

@@ -9,7 +9,7 @@ export function ArtworkSeam() {
       <path
         d="M392 0 C 372 120, 396 238, 380 358 C 366 468, 394 588, 386 700"
         fill="none"
-        stroke="rgb(255 255 255 / 0.12)"
+        className="stroke-line-2"
         strokeWidth="1.5"
         strokeDasharray="6 10"
         strokeLinecap="round"
