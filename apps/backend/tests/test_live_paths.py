@@ -523,14 +523,16 @@ class Reader:
 
 # What `pay` returns, base64 of the contract's JSON, as `broadcast_tx_commit` reports it.
 PAY_OUTCOME = base64.b64encode(
-    b'{"payment_id":7,"meter":"0101170026583","amount_ngn":"5000","remaining_cap_ngn":"25000"}'
+    b'{"payment_id":7,"meter":"0101170026583","amount_ngn":"5000","amount_usdc":"3333334",'
+    b'"remaining_cap_ngn":"25000","settled":true}'
 ).decode()
 
 
 def chain(rpc, *, broadcast: bool) -> VaultChain:
     """The agent key signs `pay` as the vault itself, so the signer is `VAULT`."""
     return VaultChain(rpc=rpc, funder_id=SIGNER, funder_key=KEY, agent_key=KEY,
-                      treasury_id=SIGNER, code="global:stark-vault.testnet",
+                      treasury_id=SIGNER, usdc_id="usdc.testnet",
+                      code="global:stark-vault.testnet",
                       storage_yocto=0, broadcast=broadcast)
 
 

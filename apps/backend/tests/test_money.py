@@ -69,17 +69,20 @@ class FakeChain:
     """Records every chain write; can be told to fail the next call."""
 
     broadcast = True
+    funder_id = "stark-vault.testnet"
 
     def __init__(self):
         self.calls: list[tuple] = []
         self.fail_with: Exception | None = None
         self.policy = {"monthly_cap_ngn": "30000", "per_payment_cap_ngn": "10000",
                        "allowed_meters": [METER]}
+        self.rate = "666667"
+        self.settled = True
         self.rpc = self
         self.payment_id = 0
 
     def vault_id(self, account_id):
-        return f"u-{account_id[-8:]}.stark-vault.testnet"
+        return f"u-{account_id[-8:]}.{self.funder_id}"
 
     def _maybe_fail(self):
         if self.fail_with is not None:
@@ -95,19 +98,38 @@ class FakeChain:
         self._maybe_fail()
         self.payment_id += 1
         self.calls.append(("pay", meter, amount))
-        return ChainResult("cd" * 32, {"payment_id": self.payment_id}, True)
+        return ChainResult("cd" * 32, {"payment_id": self.payment_id,
+                                       "settled": self.settled}, True)
 
     def pay_approved(self, vault_id, meter, amount):
         self._maybe_fail()
         self.payment_id += 1
         self.calls.append(("pay_approved", meter, amount))
-        return ChainResult("ef" * 32, {"payment_id": self.payment_id}, True)
+        return ChainResult("ef" * 32, {"payment_id": self.payment_id,
+                                       "settled": self.settled}, True)
+
+    def deposit(self, vault_id, amount_usdc, msg):
+        self._maybe_fail()
+        if msg.startswith("refund:"):
+            self.calls.append(("refund", {"payment_id": int(msg[len("refund:"):]),
+                                          "amount_usdc": amount_usdc}))
+        else:
+            self.calls.append(("fund", {"amount_usdc": amount_usdc, "reference": msg}))
+        return ChainResult("23" * 32, "0", True)
+
+    def payment(self, vault_id, payment_id):
+        return {"amount_usdc": "666667"}
+
+    def state(self, vault_id):
+        return {"usdc_per_kngn": self.rate, "balance_usdc": "0", "balance_ngn": "0"}
 
     def call(self, vault_id, method, args):
         self._maybe_fail()
         self.calls.append((method, args))
         if method == "set_policy":
             self.policy = args
+        if method == "set_rate":
+            self.rate = args["usdc_per_kngn"]
         return ChainResult("01" * 32, None, True)
 
     def view(self, vault_id, method, args):
@@ -233,7 +255,7 @@ class MoneyCase(unittest.TestCase):
         # An opened account always has a wallet row, even at ₦0.
         self.receipts.set_wallet(self.account.id, self.balance, 0)
         self.chain = FakeChain()
-        self.vaults = VaultService(self.db, self.chain, FakeAccounts(limits()))
+        self.vaults = VaultService(self.db, self.chain, FakeAccounts(limits()), RATE_1500.market)
 
     def tearDown(self):
         self.account.close()
@@ -303,7 +325,8 @@ class VaultChainTests(unittest.TestCase):
     def chain(self, **overrides):
         settings = dict(rpc=near_tx.NearRpc("http://127.0.0.1:9"), funder_id="stark.testnet",
                         funder_key=KEY, agent_key=AGENT, treasury_id="stark.testnet",
-                        code="global:stark.testnet", storage_yocto=10, broadcast=False)
+                        usdc_id="usdc.testnet", code="global:stark.testnet", storage_yocto=10,
+                        broadcast=False)
         settings.update(overrides)
         return VaultChain(**settings)
 
@@ -316,25 +339,30 @@ class VaultChainTests(unittest.TestCase):
         self.assertEqual(odd, odd.lower())
 
     def test_dry_chain_signs_offline(self):
-        result = self.chain().create("u-1.stark.testnet", monthly_cap_ngn=30_000,
-                                     per_payment_cap_ngn=10_000, meters=[METER])
+        result = self.chain().create("u-1.stark.testnet", usdc_per_kngn=666_667,
+                                     monthly_cap_ngn=30_000, per_payment_cap_ngn=10_000,
+                                     meters=[METER])
         self.assertFalse(result.broadcast)
         self.assertEqual(len(result.tx_hash), 64)
 
-    def test_create_is_one_transaction_of_five_actions(self):
-        captured = {}
+    def test_create_is_one_transaction_of_five_actions_then_a_token_registration(self):
+        signed: list[dict] = []
         original = near_tx.sign_transaction
 
         def spy(**kwargs):
-            captured.update(kwargs)
+            signed.append(kwargs)
             return original(**kwargs)
 
         near_tx.sign_transaction = spy
         try:
-            self.chain().create("u-1.stark.testnet", monthly_cap_ngn=30_000,
-                                per_payment_cap_ngn=10_000, meters=[METER])
+            self.chain().create("u-1.stark.testnet", usdc_per_kngn=666_667,
+                                monthly_cap_ngn=30_000, per_payment_cap_ngn=10_000,
+                                meters=[METER])
         finally:
             near_tx.sign_transaction = original
+        captured, register = signed
+        self.assertEqual(register["receiver_id"], "usdc.testnet")
+        self.assertIn(b"storage_deposit", register["actions"][0])
         tags = [action[0] for action in captured["actions"]]
         self.assertEqual(tags, [0, 3, 10, 5, 2],
                          "create, fund storage, use code, add the pay key, init")
@@ -343,6 +371,8 @@ class VaultChainTests(unittest.TestCase):
         init = json.loads(captured["actions"][4][1 + 4 + 3 + 4:].split(b"\x00\xe8")[0]
                           .rsplit(b"}", 1)[0] + b"}")
         self.assertEqual(init["funder"], "stark.testnet")
+        self.assertEqual(init["usdc"], "usdc.testnet")
+        self.assertEqual(init["usdc_per_kngn"], "666667")
         self.assertEqual(init["allowed_meters"], [METER])
 
     def test_pay_is_signed_as_the_vault_with_the_agent_key(self):
@@ -435,16 +465,41 @@ class VaultServiceTests(MoneyCase):
         self.vaults.authorise_payment(self.account.id, METER, 40_000, approved=True)
         self.assertEqual(self.chain.methods()[-1], "pay_approved")
 
-    def test_a_refund_follows_the_recorded_payment(self):
+    def test_a_refund_sends_the_payments_usdc_back(self):
         auth = self.vaults.authorise_payment(self.account.id, METER, 1000)
         self.vaults.record_payment(self.account.id, "rcpt_x", auth.payment_id)
         self.vaults.refund_receipt(self.account.id, "rcpt_x")
         self.vaults.refund_receipt(self.account.id, "rcpt_x")
-        self.assertEqual(self.chain.calls[-1], ("refund", {"payment_id": auth.payment_id}))
+        self.assertEqual(self.chain.calls[-1], ("refund", {"payment_id": auth.payment_id,
+                                                           "amount_usdc": 666_667}))
         self.assertEqual(self.chain.methods().count("refund"), 1)
 
+    def test_a_deposit_sends_its_worth_in_usdc_priced_when_queued(self):
+        self.vaults.ensure(self.account.id)
+        self.vaults.credit(self.account.id, 1500, "dep_1")
+        self.assertEqual(self.chain.calls[-1],
+                         ("fund", {"amount_usdc": 1_000_001, "reference": "dep_1"}))
+
+    def test_a_payment_whose_usdc_did_not_settle_is_refused(self):
+        self.chain.settled = False
+        with self.assertRaises(AuthorisationFailed) as caught:
+            self.vaults.authorise_payment(self.account.id, METER, 1000)
+        self.assertIn("Nothing was charged", caught.exception.message)
+
+    def test_the_rate_is_synced_before_paying(self):
+        self.vaults.ensure(self.account.id)
+        self.chain.rate = "1"
+        self.vaults.authorise_payment(self.account.id, METER, 1000)
+        self.assertEqual(self.chain.calls[-2], ("set_rate", {"usdc_per_kngn": "666667"}))
+
+    def test_a_vault_made_under_another_funder_is_not_reused(self):
+        old = self.vaults.ensure(self.account.id)
+        self.chain.funder_id = "stark.near"
+        self.assertIsNone(self.vaults.vault_account(self.account.id))
+        self.assertNotEqual(self.vaults.ensure(self.account.id), old)
+
     def test_no_chain_means_no_writes_and_no_authorisation(self):
-        offline = VaultService(self.db, None, FakeAccounts(limits()))
+        offline = VaultService(self.db, None, FakeAccounts(limits()), RATE_1500.market)
         offline.credit(self.account.id, 5000, "dep_1")
         self.assertIsNone(offline.authorise_payment(self.account.id, METER, 1000))
         self.assertEqual(self.ops(), [])
@@ -781,7 +836,7 @@ class WithdrawalTests(MoneyCase):
         result = service.request(self.account.id, 10_000, "058", "0123456789")
         self.assertEqual(result["status"], "processing")
         self.assertEqual(self.wallet()["balance_ngn"], 40_000)
-        self.assertIn(("debit", {"amount_ngn": "10000", "reference": result["id"]}),
+        self.assertIn(("debit", {"amount_usdc": "6666670", "reference": result["id"]}),
                       self.chain.calls)
         self.assertEqual(self.flutterwave.transfers[0]["reference"], result["id"])
         entry = self.receipts.recent(self.account.id, 1)[0]
@@ -980,7 +1035,7 @@ class CryptoWithdrawalTests(MoneyCase):
                           "recipient": ADDRESS, "treasury": "stark-treasury.near"})
         self.assertEqual(self.treasury.signed, [("a1b2" * 16, 13_333_333)])
         self.assertEqual(self.one_click.submitted, ["hash1"])
-        self.assertIn(("debit", {"amount_ngn": "20000", "reference": result["id"]}),
+        self.assertIn(("debit", {"amount_usdc": "13333340", "reference": result["id"]}),
                       self.chain.calls)
 
     def test_a_withdrawal_is_priced_at_starks_selling_rate(self):
@@ -1020,7 +1075,7 @@ class CryptoWithdrawalTests(MoneyCase):
         self.assertEqual(latest["note"], "no liquidity")
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
         self.assertEqual([c for c in self.chain.calls if c[0] == "fund"],
-                         [("fund", {"amount_ngn": "20000", "reference": f"{result['id']}-r"})])
+                         [("fund", {"amount_usdc": 13_333_340, "reference": f"{result['id']}-r"})])
 
     def test_a_timeout_that_landed_is_not_sent_again(self):
         self.service()
