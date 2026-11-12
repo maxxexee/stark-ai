@@ -31,10 +31,10 @@ from app.modules.telegram.identity_repository import IdentityRepository
 from app.modules.voice import wake
 
 VOICE_NO_STT = (
-    "I cannot hear voice notes right now — text is working. "
+    "I cannot hear voice notes right now. "
     "Type what you need instead."
 )
-VOICE_ASLEEP = "I'm here — say 'stark' first, then your question."
+VOICE_ASLEEP = "I'm here. Say 'stark' first, then your question."
 UNREADABLE = "I can only read text and voice notes for now."
 FAILED = "Something went wrong handling that. Nothing was charged."
 HELP_TEXT = (
@@ -141,7 +141,7 @@ class PhoneRouter:
         if user_id is None:
             return (
                 "That code did not work. Codes expire after 10 minutes and "
-                "are single-use — get a fresh one in the app."
+                "work once. Get a fresh one in the app."
             )
         return "Linked. Ask me for your balance, or say 'pay 5000 for electricity'."
 

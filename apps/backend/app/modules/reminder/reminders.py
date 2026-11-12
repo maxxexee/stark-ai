@@ -106,7 +106,7 @@ def line(item: dict) -> str:
 def summary(item: dict) -> str:
     """The same fact as finished UI copy: no possessive, read at a glance."""
     days = int(item["days_until"])
-    price = f" — ₦{item['price_ngn']:,}" if item.get("price_ngn") else ""
+    price = f", ₦{item['price_ngn']:,}" if item.get("price_ngn") else ""
     when = ("today" if days == 0 else "tomorrow" if days == 1
             else f"in {days} days" if days > 0 else f"{-days} days ago")
     verb = "renews" if days >= 0 else "was due"
