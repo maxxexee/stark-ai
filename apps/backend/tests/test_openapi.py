@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -12,7 +14,8 @@ from app.main import create_app
 class OpenApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.client = TestClient(create_app())
+        with mock.patch.dict(os.environ, {"STARK_DOCS": "1"}):
+            cls.client = TestClient(create_app())
         cls.spec = cls.client.get("/docs/openapi.json").json()
 
     def test_swagger_ui_is_served(self):
@@ -45,9 +48,35 @@ class OpenApiTest(unittest.TestCase):
         self.assertEqual(payment["409"]["content"]["application/json"]["schema"]["$ref"],
                          "#/components/schemas/ErrorDto")
 
+    def test_swagger_does_not_keep_the_token(self):
+        self.assertNotIn("persistAuthorization", self.client.get("/docs").text)
+
     def test_bearer_auth_is_offered(self):
         schemes = self.spec["components"]["securitySchemes"]
         self.assertEqual(schemes["HTTPBearer"]["scheme"], "bearer")
+
+
+class DocsOffTest(unittest.TestCase):
+    """Production: no docs, no spec, and `/` does not list the routes."""
+
+    @classmethod
+    def setUpClass(cls):
+        with mock.patch.dict(os.environ, {"STARK_DOCS": "0"}):
+            cls.app = create_app()
+        cls.client = TestClient(cls.app)
+
+    def test_docs_and_spec_are_not_served(self):
+        for path in ("/docs", "/redoc", "/docs/openapi.json"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 404)
+
+    def test_the_index_names_the_service_only(self):
+        body = self.client.get("/").json()
+        self.assertEqual(body["service"], "stark-api")
+        self.assertNotIn("routes", body)
+
+    def test_the_spec_still_builds_in_process(self):
+        self.assertIn("/v1/speak/ticket", self.app.openapi()["paths"])
 
 
 if __name__ == "__main__":

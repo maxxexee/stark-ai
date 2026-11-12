@@ -107,7 +107,8 @@ call("POST", "/v1/_stub/reset")
 
 # --- read endpoints ---------------------------------------------------------
 status, index, _ = call("GET", "/")
-check("GET / lists routes", status == 200 and len(index.get("routes", [])) == 26,
+check("GET / names the service, not its routes",
+      status == 200 and index.get("service") == "stark-api" and "routes" not in index,
       f"status={status}")
 
 status, health, _ = call("GET", "/health")
