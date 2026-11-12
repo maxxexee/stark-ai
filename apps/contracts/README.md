@@ -27,6 +27,10 @@ From the repo root:
 
 Or from `vault/`: `cargo test`, `cargo near build non-reproducible-wasm`.
 
+The backend ships a copy of the build at `apps/backend/assets/stark_vault.wasm`, which
+new vaults are deployed from (`STARK_VAULT_CODE=assets/stark_vault.wasm`). After changing
+the contract, rebuild and copy it there.
+
 These are not turbo tasks, so `bun run test` and `bun run build` work without a Rust
 toolchain.
 
