@@ -527,6 +527,47 @@ class VaultServiceTests(MoneyCase):
         self.assertIsNone(self.vaults.vault_account(self.account.id))
         self.assertNotEqual(self.vaults.ensure(self.account.id), old)
 
+    def test_op_ids_are_scoped_to_the_user(self):
+        self.vaults.credit(self.account.id, 5000, "dep_1")
+        self.vaults.debit(self.account.id, 1000, "wd_1")
+        self.vaults.refund(self.account.id, 1)
+        ids = [row["id"] for row in self.db.query(
+            "SELECT id FROM chain_ops WHERE user_id = $1 ORDER BY seq", [self.account.id])]
+        user = self.account.id
+        self.assertEqual(ids, [f"fund:{user}:dep_1", f"debit:{user}:wd_1",
+                               f"refund:{user}:1"])
+
+    def test_two_users_refunds_of_the_same_payment_id_both_go_out(self):
+        # Payment ids restart at 1 in every vault.
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.refund(self.account.id, 1)
+        self.vaults.refund(other.id, 1)
+        self.assertEqual(self.chain.methods().count("refund"), 2)
+
+    def test_a_client_reference_cannot_claim_another_users_opening_deposit(self):
+        self.receipts.set_wallet(self.account.id, 7_500, 0)
+        vault = self.chain.vault_id(self.account.id)
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.credit(other.id, 100, f"opening:{vault}")
+        self.vaults.ensure(self.account.id)
+        self.vaults.flush(self.account.id)
+        self.assertEqual(self.ops()[-1], {"method": "fund", "status": "done"})
+        self.assertEqual(self.chain.calls[-1], ("fund", {
+            "amount_usdc": 5_000_003, "reference": f"opening:{vault}"}))
+
+    def test_an_op_written_with_an_old_unscoped_id_is_still_sent(self):
+        self.vaults.ensure(self.account.id)
+        self.db.query(
+            "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
+            " VALUES ($1, $2, 'refund', $3, 'pending', 0, $4)",
+            [f"refund:{self.account.id}-legacy", self.account.id,
+             json.dumps({"payment_id": 7}), Clock.now_iso()])
+        self.assertEqual(self.vaults.flush(self.account.id), 0)
+        self.assertEqual(self.chain.calls[-1], ("refund", {"payment_id": 7,
+                                                           "amount_usdc": 666_667}))
+
     def test_no_chain_means_no_writes_and_no_authorisation(self):
         offline = VaultService(self.db, None, FakeAccounts(limits()), RATE_1500.market)
         offline.credit(self.account.id, 5000, "dep_1")
@@ -1290,6 +1331,19 @@ class WalletRouteTests(unittest.TestCase):
         response = self.api.client.post("/v1/wallet/topup", json={"amount_ngn": 5000})
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json()["code"], "not_available")
+
+    def test_a_top_up_request_id_cannot_pose_as_a_refund_on_chain(self):
+        self.account.store.set_wallet(0, 0)
+        chain = FakeChain()
+        wallet = self.api.module.wallet
+        wallet.test_money = True
+        wallet.vaults = VaultService(self.account.db, chain, FakeAccounts(limits()),
+                                     RATE_1500.market)
+        response = self.api.client.post("/v1/wallet/topup",
+                                        json={"amount_ngn": 1500, "request_id": "refund:1"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(chain.calls[-1], ("fund", {"amount_usdc": 1_000_001,
+                                                    "reference": "topup:refund:1"}))
 
     def test_withdraw_without_flutterwave_is_not_available_and_takes_nothing(self):
         self.api.module.withdrawals.flutterwave = None

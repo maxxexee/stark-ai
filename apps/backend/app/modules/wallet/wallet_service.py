@@ -78,6 +78,6 @@ class WalletService:
             "vendor_message": "deposit",
             "created_at": Clock.now_iso(),
         }, dto.amount_ngn)
-        self.vaults.credit(account_id, dto.amount_ngn, request_id)
+        self.vaults.credit(account_id, dto.amount_ngn, f"topup:{request_id}")
         return 201, {"wallet": self.summary(account_id),
                      "entry": receipt_repository.api_shape(entry)}
