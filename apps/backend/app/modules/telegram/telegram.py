@@ -144,6 +144,22 @@ def send_message(chat_id: int, text: str, *, bot_token: str,
         return False
 
 
+def pay_note(deposit: dict[str, Any]) -> str:
+    """What to do with a deposit `add_money` started, written from the deposit itself
+    so a link or an address is never retyped by the model."""
+    pay = deposit["pay"]
+    if deposit["method"] == "bank":
+        return (f"Add ₦{deposit['amount_ngn']:,} by bank transfer, card or USSD:\n"
+                f"{pay['checkout_url']}\n\nThe link works for an hour.")
+    lines = [f"Send exactly {pay['amount']} {pay['asset']} on {pay['chain']} to:",
+             pay["address"]]
+    if pay.get("memo"):
+        lines.append(f"Memo: {pay['memo']}")
+    lines.append(f"\nThis adds ₦{deposit['amount_ngn']:,}. The address works for an "
+                 "hour, and your balance updates once it lands. Only send on that network.")
+    return "\n".join(lines)
+
+
 _USERNAME_CACHE: dict[str, str | None] = {}
 
 
@@ -301,6 +317,10 @@ class TelegramAdapter:
 
         if reply:
             self._deliver(chat_id, reply, spoken=self._speak_reply)
+        # Always text, even after a voice note: an address is copied, not listened to.
+        deposit = getattr(self._last_result, "deposit", None)
+        if deposit:
+            self._send(chat_id, pay_note(deposit))
         self._emit_turn(reply)
         return {"ok": True, "handled": self._last_outcome, "update_id": update.get("update_id")}
 

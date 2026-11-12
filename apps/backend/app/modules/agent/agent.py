@@ -3,15 +3,10 @@
 This is M2. The agent takes what the user said, lets a model choose tool calls,
 runs them under the vault's rules, and returns a sentence that can be spoken.
 
-Two model backends, one loop:
-
-- `FakeModel` — deterministic, no key, no network. Used by the stub server and by
-  every test. It decides from regexes, but emits exactly the same tool-call
-  envelope a real model does, so the loop, the tools and the policy gate are the
-  real thing.
-- `NearAiModel` — the real thing, POSTing to NEAR AI's OpenAI-compatible
-  `/v1/chat/completions`. Needs `NEAR_AI_API_KEY`. **Not exercised here** — no key
-  existed when this was written. Treat its request/response parsing as unproven.
+One model backend: `NearAiModel`, POSTing to NEAR AI's OpenAI-compatible
+`/v1/chat/completions` with `NEAR_AI_API_KEY`. Without a key every turn fails and
+the user hears that Stark lost connection; nothing is paid. Tests drive the same
+loop with scripted models from `tests/`.
 
 The safety property that matters: the policy gate is enforced in `_run_tool`, not
 by asking the model nicely. A model that hallucinates a ₦40,000 payment gets a
@@ -33,12 +28,7 @@ from typing import Any, Protocol
 
 from app.modules.agent import memory
 from app.modules.agent import policy as policy_rules
-
-# What the deterministic model *proposes* when no figure was spoken — ₦5,000 is
-# the design's own sample payment and exactly the per-payment cap. Proposing is
-# all it does now: `_pay_bill` refuses an unpriced charge (see AMOUNT_REQUIRED
-# below), so a number nobody said out loud can never reach the vendor.
-DEFAULT_AMOUNT_NGN = 5_000
+from app.modules.bill.dtos.create_bill_dto import CreateBillDto
 
 # How long the same charge stays "already done". Measured 2026-10-24: the same
 # spoken phrase — "recharge my airtime number" — bought ₦1,000 twice, 29 seconds
@@ -59,8 +49,9 @@ NEAR_AI_MODEL = os.environ.get("NEAR_AI_MODEL") or "Qwen/Qwen3.8-27B"
 SYSTEM_PROMPT = """You are Stark, a calm assistant that pays household bills.
 
 Rules:
-- Money is Nigerian naira, written like ₦5,000. Never mention crypto, wallets,
-  tokens, chains or contracts.
+- Money is Nigerian naira, written like ₦5,000. Never bring up crypto, wallets,
+  chains or contracts yourself. The one time they belong is when the user asks to
+  add money with crypto, and then only the coin and the network.
 - Read before you act. The current account, the saved bills and the recent
   payments follow these rules — use that instead of guessing numbers, and call
   no tool to answer a question it already answers.
@@ -156,9 +147,23 @@ Rules:
 - For a hypothetical about money, do the arithmetic on the numbers in the account and
   answer with the figure. "If I pay A and top up B, how much is left?" is a
   subtraction, not a request to pay either one.
-- You can pay bills, and nothing else. You cannot send or forward messages,
-  receipts or money to Telegram, email or anywhere else. Say plainly that you
-  cannot do that yet, and never imply something was sent.
+- You can pay bills, save a new bill, and add money to the balance. Nothing else.
+  You cannot send or forward messages, receipts or money to Telegram, email or
+  anywhere else, and you cannot withdraw. Say plainly that you cannot do that yet,
+  and never imply something was sent.
+- To save a bill, call add_bill with the kind, the provider and the reference the
+  user gave: the meter number, smartcard number or phone line. Never make up or
+  complete a reference. Data and TV are sold as plans, so call find_plans first and
+  pass the plan's code; if they did not say which plan, name two or three by price
+  and ask. After saving, read the reference back so a misheard digit is caught.
+- To add money, call add_money with the amount and how they want to pay: "bank"
+  for bank transfer, card or USSD, or "crypto" with the coin, like USDT, and the
+  network when they named one. If they did not say how, ask bank or crypto, in one
+  short question. The funding line in the account says which ways are switched on.
+- The app shows the payment link or the deposit address right under your reply.
+  Never write a link, an address or a crypto amount yourself. Say how much is being
+  added, that the link or address is below, and that it works for an hour. Money is
+  only added when the deposit says "credited": until then say it has not arrived.
 - When the account shows something worth acting on before being asked — units
   or days low, a bill renewing within the week, the monthly limit nearly used —
   end with one short sentence saying so, plainly. Once, not after every reply,
@@ -297,13 +302,90 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_plans",
+            "description": (
+                "The data or TV plans a provider sells, each with its code and price. "
+                "Call before saving a data or TV bill, or when asked what plans exist."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["data", "tv"]},
+                    "provider": {"type": "string",
+                                 "description": "MTN, Airtel, Glo, 9mobile, DStv, GOtv…"},
+                },
+                "required": ["kind", "provider"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_bill",
+            "description": (
+                "Save a new bill so it can be paid. Only call this when the user asked "
+                "to add or save one and gave its reference."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": [
+                        "electricity", "airtime", "data", "tv", "internet", "water"]},
+                    "provider": {"type": "string", "description": (
+                        "The network, TV provider or electricity company, e.g. MTN, "
+                        "DStv, Ikeja Electric.")},
+                    "reference": {"type": "string", "description": (
+                        "Meter number, smartcard number or phone number, exactly as "
+                        "the user gave it.")},
+                    "label": {"type": "string",
+                              "description": "A short name, e.g. Home meter. Optional."},
+                    "plan": {"type": "string",
+                             "description": "Plan code from find_plans; data and TV only."},
+                },
+                "required": ["kind", "provider", "reference"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_money",
+            "description": (
+                "Start adding money to the balance. Bank gives a checkout link for "
+                "bank transfer, card or USSD; crypto gives an address to send a coin "
+                "to. Nothing is taken until the user pays."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": ["bank", "crypto"]},
+                    "amount_ngn": {"type": "integer",
+                                   "description": "Whole naira to add, e.g. 20000."},
+                    "asset": {"type": "string",
+                              "description": "Crypto only: the coin, e.g. USDT, USDC."},
+                    "chain": {"type": "string", "description": (
+                        "Crypto only: the network they named, e.g. tron, sol, eth. "
+                        "Leave empty if they did not say.")},
+                },
+                "required": ["method", "amount_ngn"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 # Reads the snapshot already carries, so they are not offered when it is present
-# (see Agent._tools_for). The definitions stay in TOOLS: `pay_bill` is the only
-# tool the model needs that the prompt cannot answer, and a failed snapshot read
-# puts every read back in play.
+# (see Agent._tools_for). The definitions stay in TOOLS: a failed snapshot read puts
+# every read back in play.
 READ_ONLY_TOOLS = frozenset({"get_state", "list_bills", "recent_activity"})
+# What a question may still call: a lookup changes nothing, so "what plans does MTN
+# have?" can be answered while every tool that spends or saves stays off the table.
+LOOKUP_TOOLS = frozenset({"find_plans"})
 
 
 # --- model interface ---------------------------------------------------------
@@ -432,20 +514,7 @@ def _ago_phrase(seconds: int) -> str:
     return f"{minutes} minute" + ("s" if minutes != 1 else "")
 
 
-# --- fake model --------------------------------------------------------------
-
-
-_PAY_RE = re.compile(r"\b(top\s*(it\s*)?up|topup|buy|pay|recharge|send)\b")
-_BILLS_RE = re.compile(r"\b(my\s+)?bills\b")
-_ACTIVITY_RE = re.compile(r"\b(activity|history|recent|last payment|receipts?)\b")
-_STATE_RE = re.compile(
-    r"\b(balance|unit|units|how much|left|spend|spent|bill)\b"
-)
-_METER_RE = re.compile(r"\b(light|lights|electric|electricity|meter|nepa|prepaid|units?)\b")
-# Naming a product that is not saved must not fall through to whatever is first.
-_PRODUCT_RE = re.compile(
-    r"\b(data|airtime|tv|cable|dstv|gotv|startimes|showmax|water|internet|subscription)\b"
-)
+# --- spoken phrases ----------------------------------------------------------
 
 
 def _window_phrase(minutes: int) -> str:
@@ -457,174 +526,6 @@ def _window_phrase(minutes: int) -> str:
         hours = minutes // 60
         return "an hour" if hours == 1 else f"{hours} hours"
     return f"{minutes} minutes"
-
-
-def _label_match(bills: list[dict], heard: str) -> dict | None:
-    for bill in bills:
-        labels = (bill.get("label", ""), bill.get("provider", ""), bill.get("kind", ""))
-        words = {w for label in labels for w in re.findall(r"[a-z]+", label.lower())
-                 if len(w) > 2}
-        if words and any(word in heard for word in words):
-            return bill
-    return None
-
-
-def _choose_bill(bills: list[dict], user_text: str) -> dict | None:
-    """Which bill a payment is for, as a careful model would infer it.
-
-    Naming the light or the meter means the electricity bill and nothing else, and
-    naming a product that is not saved means **no** bill — paying for something
-    else because it happened to be first in the list would be a real mistake.
-    """
-    if not bills:
-        return None
-    heard = user_text.lower()
-    if _METER_RE.search(heard):
-        return next((b for b in bills if b.get("kind") == "electricity"), None)
-
-    matched = _label_match(bills, heard)
-    if matched is not None:
-        return matched
-    if _PRODUCT_RE.search(heard):
-        return None
-    return bills[0]
-
-
-def _default_amount(bill: dict) -> int:
-    """A plan-priced bill costs what the plan costs, not the sample ₦5,000."""
-    price = bill.get("plan_price_ngn")
-    return int(price) if isinstance(price, int) and price > 0 else DEFAULT_AMOUNT_NGN
-
-
-class FakeModel:
-    """Deterministic stand-in for the LLM.
-
-    It classifies intent with regexes, but everything downstream — tool schema,
-    tool routing, the policy gate, the reply payload — is exactly what the real
-    model drives. That is the point: the loop is real, only the language model
-    is fake.
-    """
-
-    name = "fake"
-
-    def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn:
-        last = messages[-1]
-        user_text = self._last_user_text(messages)
-
-        if last.get("role") == "tool":
-            return self._after_tool(last, user_text)
-
-        if last.get("role") != "user":
-            return ModelTurn(content="What would you like me to do?")
-
-        heard = user_text.lower()
-        if _ACTIVITY_RE.search(heard):
-            return ModelTurn(tool_calls=[ToolCall("recent_activity", {})])
-        if _PAY_RE.search(heard):
-            # Read the bill list first, exactly as a careful model would.
-            return ModelTurn(tool_calls=[ToolCall("list_bills", {})])
-        if _BILLS_RE.search(heard):
-            return ModelTurn(tool_calls=[ToolCall("list_bills", {})])
-        if _STATE_RE.search(heard):
-            return ModelTurn(tool_calls=[ToolCall("get_state", {})])
-        return ModelTurn(
-            content="I can check your bill or top it up. Which one?"
-        )
-
-    @staticmethod
-    def _last_user_text(messages: list[dict]) -> str:
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                return message.get("content") or ""
-        return ""
-
-    def _after_tool(self, message: dict, user_text: str) -> ModelTurn:
-        result = _loads(message.get("content"))
-        name = message.get("name") or ""
-
-        if name == "list_bills" and _PAY_RE.search(user_text.lower()):
-            bills = result.get("data") or []
-            if not bills:
-                return ModelTurn(content="There are no bills saved yet.")
-            chosen = _choose_bill(bills, user_text)
-            if chosen is None:
-                return ModelTurn(
-                    content=(
-                        "I don't have a bill saved for that. Add it and I'll pay it "
-                        "next time."
-                    )
-                )
-            amount = parse_amount(user_text)
-            if amount is None:
-                amount = _default_amount(chosen)
-            return ModelTurn(
-                tool_calls=[
-                    ToolCall(
-                        "pay_bill",
-                        {"bill_id": (chosen or {}).get("id", ""),
-                         "amount_ngn": amount},
-                    )
-                ]
-            )
-
-        if name == "get_state":
-            data = result.get("data") or {}
-            units = data.get("units_left")
-            days = data.get("days_left")
-            spoken = f"You've got ₦{data.get('balance_ngn', 0):,} in your wallet"
-            if units is not None:
-                spoken += f" and about {units:g} units left"
-                if days is not None:
-                    spoken += f", roughly {days} days at this rate"
-            return ModelTurn(content=spoken + ".")
-
-        if name == "list_bills":
-            bills = result.get("data") or []
-            labels = [b.get("label", "a bill") for b in bills]
-            if not labels:
-                return ModelTurn(content="There are no bills saved yet.")
-            joined = ", ".join(labels[:-1]) + f" and {labels[-1]}" if len(labels) > 1 else labels[0]
-            return ModelTurn(content=f"You've got {len(labels)} bills set up: {joined}.")
-
-        if name == "recent_activity":
-            receipts = result.get("data") or []
-            if not receipts:
-                return ModelTurn(content="Nothing has been paid yet.")
-            latest = receipts[0]
-            return ModelTurn(
-                content=(
-                    f"Your last payment was ₦{latest.get('amount_ngn', 0):,} "
-                    f"to {latest.get('bill_label', 'a bill')}."
-                )
-            )
-
-        if name == "pay_bill":
-            if not result.get("ok"):
-                error = result.get("error") or {}
-                return ModelTurn(
-                    content=error.get("message") or "That payment didn't go through."
-                )
-            data = result.get("data") or {}
-            amount = data.get("amount_ngn", 0)
-            label = data.get("bill_label", "your bill")
-            if data.get("status") == "pending":
-                return ModelTurn(
-                    content=(
-                        f"₦{amount:,} for {label} is still going through. "
-                        "I'll bring you the token as soon as it lands."
-                    )
-                )
-            if data.get("token"):
-                return ModelTurn(
-                    content=(
-                        f"Done. ₦{amount:,} paid to {label}. "
-                        f"Your token is {data['token']}. "
-                        "I've put it in your activity too."
-                    )
-                )
-            return ModelTurn(content=f"Done. ₦{amount:,} paid to {label}.")
-
-        return ModelTurn(content="I couldn't do that one. Want to try again?")
 
 
 def _loads(value: Any) -> dict:
@@ -643,8 +544,10 @@ def _loads(value: Any) -> dict:
 class NearAiModel:
     """NEAR AI's OpenAI-compatible chat endpoint.
 
-    Unproven: written from the documented shape, never run with a key. The
-    request/response handling is deliberately narrow — one POST, tool calls only.
+    The only model backend. The request/response handling is deliberately narrow:
+    one POST, tool calls only. Without a key it is still built, so an account's
+    routes work, and every turn fails before any request — the agent turns that
+    into a spoken "lost connection" and pays nothing.
     """
 
     name = "near-ai"
@@ -665,13 +568,13 @@ class NearAiModel:
         timeout: int = 30,
     ):
         self.api_key = api_key or os.environ.get("NEAR_AI_API_KEY")
-        if not self.api_key:
-            raise ValueError("NEAR_AI_API_KEY is not set")
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn:
+        if not self.api_key:
+            raise RuntimeError("NEAR_AI_API_KEY is not set")
         payload = {"model": self.model, "messages": messages, "temperature": 0}
         # A question is offered no tools. Some providers (DeepSeek on NEAR AI) reject
         # `tools: []` with a 400, so the field is left out rather than sent empty.
@@ -751,13 +654,29 @@ class PaymentError(Exception):
         self.detail = detail or {}
 
 
+class ToolRefusal(Exception):
+    """A non-payment action the app refused (a bad reference, a rail switched off).
+    Its message is written for the user and goes back to the model as is."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class ToolBox(Protocol):
-    """What the agent may touch. `server.py` implements it over its mock state."""
+    """What the agent may touch. `AccountToolbox` implements it over one account."""
 
     def get_state(self) -> dict: ...
     def list_bills(self) -> list[dict]: ...
     def recent_activity(self) -> list[dict]: ...
+    # Which ways of adding money are on, and the last few deposits.
+    def funding(self) -> dict: ...
     def pay(self, bill_id: str, amount_ngn: int) -> dict: ...
+    def add_bill(self, dto: CreateBillDto) -> dict: ...
+    def find_plans(self, kind: str, provider: str) -> list[dict]: ...
+    # A deposit in `DepositService.shape`: its `pay` is the link or the address.
+    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str) -> dict: ...
     # A payment over a limit, filed for the owner to approve in the app. Returns
     # the request with its `window_minutes`.
     def request_approval(self, bill_id: str, amount_ngn: int, reason: str) -> dict: ...
@@ -789,6 +708,9 @@ class AgentReply:
     tx_hash: str | None = None
     code: str | None = None
     actions: list[str] = field(default_factory=list)
+    # A deposit `add_money` started, link or address included. The door shows it
+    # under the reply, so the model never has to copy an address character by character.
+    deposit: dict | None = None
     # What the model was shown and what it said back, in order — the whole
     # exchange, snapshot included, so a strange answer can be judged against
     # the exact words behind it. Read by `turnlog`, never by /v1/voice: that
@@ -806,6 +728,7 @@ class AgentReply:
             # Additive (contract rule: additive only).
             "actions": self.actions,
             "tx_hash": self.tx_hash,
+            "deposit": self.deposit,
         }
 
 
@@ -833,10 +756,11 @@ class Agent:
 
         Three rules, each measured on 2026-10-24:
 
-        - **A question gets no tools at all.** With `pay_bill` the only thing on
+        - **A question gets lookups only.** With `pay_bill` the only thing on
           offer, gemini-flash-lite called it on "what's my most recent
           subscription", and on "if I pay DStv, how much is left" it paid the
-          airtime. Nothing can be called on a turn that has nothing to call.
+          airtime. Nothing that spends or saves can be called on a turn that does
+          not offer it.
         - **With a snapshot, the read tools are withheld.** They carry nothing
           the snapshot does not, and each call is a round trip: a 1.2s answer
           became 2.5s when the model read what it had already been given.
@@ -846,7 +770,7 @@ class Agent:
         if not has_snapshot:
             return TOOLS
         if asks_instead_of_paying(transcript):
-            return []
+            return [t for t in TOOLS if t["function"]["name"] in LOOKUP_TOOLS]
         return [t for t in TOOLS
                 if t["function"]["name"] not in READ_ONLY_TOOLS]
 
@@ -912,6 +836,7 @@ class Agent:
                     int(state["cap_ngn"]) - int(state["spent_ngn"]), 0
                 )
             snapshot["limits"] = limits
+            snapshot["funding"] = self.toolbox.funding()
         except Exception:  # a broken read must not cost the answer
             return {"role": "system", "content": SYSTEM_PROMPT}, False
         return ({
@@ -1024,6 +949,7 @@ class Agent:
         reply.receipt_id = effect.get("receipt_id")
         reply.tx_hash = effect.get("tx_hash")
         reply.code = effect.get("code")
+        reply.deposit = effect.get("deposit")
         return reply
 
     # --- tool routing --------------------------------------------------------
@@ -1039,9 +965,21 @@ class Agent:
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":
                 return self._pay_bill(call.arguments, effect, transcript)
+            if call.name == "find_plans":
+                args = call.arguments
+                return {"ok": True, "data": self.toolbox.find_plans(
+                    str(args.get("kind") or ""), str(args.get("provider") or ""))}
+            if call.name == "add_bill":
+                return {"ok": True,
+                        "data": self.toolbox.add_bill(CreateBillDto(**call.arguments))}
+            if call.name == "add_money":
+                return self._add_money(call.arguments, effect)
             return {"ok": False, "error": {"code": "unknown_tool",
                                            "message": f"Unknown tool {call.name}",
                                            "detail": {}}}
+        except ToolRefusal as err:
+            return {"ok": False,
+                    "error": {"code": err.code, "message": err.message, "detail": {}}}
         except PaymentError as err:
             effect["code"] = err.code
             return {"ok": False,
@@ -1199,6 +1137,22 @@ class Agent:
         effect["tx_hash"] = receipt.get("tx_hash")
         return {"ok": True, "data": receipt}
 
+    def _add_money(self, arguments: dict, effect: dict[str, Any]) -> dict:
+        """Start a deposit. The model sees what to tell the user, not the link or the
+        address: those travel on the reply, straight from the deposit, to the door."""
+        deposit = self.toolbox.add_money(
+            str(arguments.get("method") or ""), int(arguments.get("amount_ngn") or 0),
+            str(arguments.get("asset") or ""), str(arguments.get("chain") or ""))
+        effect["deposit"] = deposit
+        told = {"amount_ngn": deposit["amount_ngn"], "method": deposit["method"],
+                "status": deposit["status"], "expires_at": deposit["expires_at"],
+                "shown_to_user": "the link" if deposit["method"] == "bank"
+                else "the address and exact amount"}
+        if deposit["method"] == "crypto":
+            told["asset"] = deposit["pay"]["asset"]
+            told["chain"] = deposit["pay"]["chain"]
+        return {"ok": True, "data": told}
+
     def _just_paid(self, bill_id: Any, amount: int) -> int | None:
         """Seconds since this exact charge was already made, or None.
 
@@ -1234,11 +1188,5 @@ class Agent:
 
 
 def build_agent(toolbox: ToolBox, limits: Limits) -> Agent:
-    """Real model when a key is configured, deterministic model otherwise.
-
-    The server calls this, so the key stays a config value and a checkout with no
-    key still runs.
-    """
-    if os.environ.get("NEAR_AI_API_KEY"):
-        return Agent(model=NearAiModel(), toolbox=toolbox, limits=limits)
-    return Agent(model=FakeModel(), toolbox=toolbox, limits=limits)
+    """The account's agent, on NEAR AI."""
+    return Agent(model=NearAiModel(), toolbox=toolbox, limits=limits)

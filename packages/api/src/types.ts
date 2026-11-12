@@ -5,20 +5,13 @@ export type Bill = {
   kind: BillKind;
   provider: string;
   label: string;
-  /** Meter, phone or smartcard number. Never a wallet address. */
   reference: string;
   last_amount_ngn: number | null;
   last_units: number | null;
   last_paid_at: string | null;
-  /** Data and TV only: the vendor plan code and its fixed price. */
   plan?: string;
   plan_price_ngn?: number;
-  /**
-   * When this bill is supposed to be paid, YYYY-MM-DD. Absent for meters and lines that do not
-   * renew on a schedule.
-   */
   renews_on?: string;
-  /** Stark's service fee a payment to this bill carries right now, on top of the amount. */
   fee_ngn?: number;
 };
 
@@ -27,9 +20,7 @@ export type DueBill = {
   kind: BillKind;
   provider: string;
   label: string;
-  /** YYYY-MM-DD. */
   renews_on: string;
-  /** 0 is today, negative is overdue. */
   days_until: number;
   price_ngn: number | null;
 };
@@ -42,14 +33,10 @@ export type State = {
   cap_ngn: number;
   spent_ngn: number;
   remaining_cap_ngn: number;
-  /** True while the owner has paused Stark: every payment is refused. */
   paused: boolean;
-  /** null when the user has no electricity bill: hide the block, don't show 0. */
   units_left: number | null;
-  /** An estimate from purchase history, not a precise number. */
   days_left: number | null;
   bills: Bill[];
-  /** Bills due inside the reminder window, soonest first. */
   due_soon: DueBill[];
   as_of: string;
 };
@@ -59,23 +46,18 @@ export type ReceiptType = "bill" | "autotopup" | "deposit" | "withdrawal";
 
 export type Receipt = {
   id: string;
-  /** `"wallet"` for deposits and withdrawals. */
   bill_id: string;
   bill_label: string;
   amount_ngn: number;
   units: number | null;
-  /** Electricity only. */
   token: string | null;
-  /** The vault's `pay` transaction on NEAR testnet; the receipt links to it. */
   tx_hash?: string | null;
   created_at: string;
   status: ReceiptStatus;
   request_id?: string;
   type: ReceiptType;
   source: string | null;
-  /** Why a `declined` entry was stopped, in plain words; null otherwise. */
   reason: string | null;
-  /** Stark's service fee, charged on top of `amount_ngn`. */
   fee_ngn?: number;
 };
 
@@ -84,7 +66,6 @@ export type Plan = {
   provider: string;
   service_name: string;
   plan: string;
-  /** The vendor's own label. Render as-is. */
   label: string;
   price_ngn: number;
 };
@@ -115,26 +96,19 @@ export type WalletMovement = {
 
 export type Suggestion = {
   id: string;
-  /** Finished copy. Render, don't reassemble. */
   text: string;
   severity: "info" | "warn" | "alert";
-  /** Debugging only. */
   reason: string;
 };
 
 export type VoiceReply = {
   transcript: string;
-  /** true when the wake word was missing: stay completely silent. */
   ignored: boolean;
   reply: string | null;
   token: string | null;
   receipt_id: string | null;
-  /** The reply as a WAV data URL; null when voice is off. */
+  deposit?: Deposit | null;
   audio?: string | null;
-  /**
-   * Set only for an uploaded clip: `"ok"`, or why it came back unheard, in which case `transcript`
-   * is empty.
-   */
   stt?: "ok" | "no_key" | "failed";
 };
 
@@ -148,27 +122,19 @@ export type NewBill = {
   reference: string;
   label?: string;
   plan?: string;
-  /** YYYY-MM-DD. */
   renews_on?: string;
 };
 
 export type BillPatch = {
   label?: string;
   plan?: string;
-  /** A date (YYYY-MM-DD), or "" to clear it. */
   renews_on?: string;
 };
-/**
- * A single-use code that binds a chat to this account. Returned once; the server keeps only a hash
- * of it.
- */
 export type LinkCode = {
   code: string;
   channel: string;
-  /** Seconds until it expires. */
   expires_in: number;
   bot_username: string | null;
-  /** `https://t.me/<bot>?start=<code>` — null when the bot has no token. */
   deep_link: string | null;
   user_id?: string;
 };
@@ -179,16 +145,13 @@ export type LimitsPatch = {
   approval_window_minutes?: ApprovalWindow;
 };
 export type PaymentInput = { bill_id: string; amount_ngn: number };
-/** Test money: there is no payment provider yet, so nothing is collected. */
 export type TopUpInput = { amount_ngn: number; request_id?: string };
 
 export type Controls = {
   paused: boolean;
-  /** When Stark was paused; null while it may pay. */
   paused_at: string | null;
 };
 
-/** A payment over a limit, waiting for the owner. Only `pending` can be decided. */
 export type PaymentRequest = {
   id: string;
   bill_id: string;
@@ -204,7 +167,6 @@ export type PaymentRequest = {
 
 export type ApprovedPayment = { request: PaymentRequest; receipt: Receipt };
 
-/** The public sample account. Made up, read-only, and served without a session. */
 export type DemoSnapshot = {
   state: State;
   activity: Receipt[];
@@ -212,7 +174,6 @@ export type DemoSnapshot = {
   limits: Pick<Limits, "monthly_cap_ngn" | "per_payment_cap_ngn">;
 };
 
-/** A saved bill seen as somewhere Stark may pay. Only delivered payments count. */
 export type Payee = {
   bill_id: string;
   label: string;
@@ -232,16 +193,12 @@ export type FundingMethods = {
   withdraw: { bank: boolean; crypto: boolean };
 };
 
-/** Naira per USDC right now, as decimal strings: what a deposit credits, what a
- * withdrawal costs. A quote locks its own rate when it is made. */
 export type UsdcRates = { deposit: string; withdraw: string };
 
-/** `amount_in` is a decimal string in the asset. */
 export type DepositPreviewInput =
   | { asset_id: string; amount_ngn: number }
   | { asset_id: string; amount_in: string };
 
-/** What a crypto deposit would take (`amount_in`, in the asset) and credit (`amount_ngn`). */
 export type DepositPreview = {
   asset_id: string;
   amount_ngn: number;
@@ -249,7 +206,6 @@ export type DepositPreview = {
   rate: string;
 };
 
-/** Something a crypto deposit can be paid with (NEAR Intents routes it to naira). */
 export type CryptoAsset = { asset_id: string; symbol: string; chain: string };
 
 export type DepositStatus = "open" | "confirming" | "credited" | "expired" | "failed" | "refunded";
@@ -257,23 +213,26 @@ export type DepositStatus = "open" | "confirming" | "credited" | "expired" | "fa
 type DepositCommon = {
   id: string;
   amount_ngn: number;
-  /** What actually landed; null until credited. */
   credited_ngn: number | null;
   status: DepositStatus;
-  /** Why it failed or was refunded, when it was. */
   note: string | null;
   expires_at: string | null;
   created_at: string;
   credited_at: string | null;
 };
 
-/** `bank` pays on Flutterwave's hosted page; `crypto` is a one-off address for an exact amount. */
 export type Deposit = DepositCommon &
   (
     | { method: "bank"; pay: { checkout_url: string } }
     | {
         method: "crypto";
-        pay: { asset: string; chain: string; amount: string; address: string; memo: string | null };
+        pay: {
+          asset: string;
+          chain: string;
+          amount: string;
+          address: string;
+          memo: string | null;
+        };
       }
   );
 
@@ -289,25 +248,27 @@ export type ResolvedAccount = BankAccount & { account_name: string };
 
 export type WithdrawInput = BankAccount & { amount_ngn: number };
 
-/** `asset_id` comes from `cryptoAssets`; `address` is the user's, on that asset's chain. */
-export type CryptoWithdrawInput = { amount_ngn: number; asset_id: string; address: string };
+export type CryptoWithdrawInput = {
+  amount_ngn: number;
+  asset_id: string;
+  address: string;
+};
 
 type WithdrawalCommon = {
   id: string;
   amount_ngn: number;
-  /** Why it was returned, when it was. */
   note: string | null;
   created_at: string;
   updated_at: string;
 };
 
-/**
- * `sending`: the transfer is going out (a bank transfer Flutterwave has not taken yet,
- * or the swap for a crypto withdrawal). `returned`: the money came back to the balance.
- */
 export type Withdrawal = WithdrawalCommon &
   (
-    | { method: "bank"; status: "sending" | "processing" | "paid" | "returned"; crypto: null }
+    | {
+        method: "bank";
+        status: "sending" | "processing" | "paid" | "returned";
+        crypto: null;
+      }
     | {
         method: "crypto";
         status: "sending" | "processing" | "paid" | "returned";
@@ -315,7 +276,6 @@ export type Withdrawal = WithdrawalCommon &
           asset: string;
           chain: string;
           address: string;
-          /** What arrives: the quote until the swap settles, then the settled amount. */
           amount: string;
           tx_hash: string | null;
         };

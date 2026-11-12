@@ -358,8 +358,8 @@ class TestNearAiModelLive(ServerTest):
 
     def test_missing_key_refuses_before_any_request(self):
         with mock.patch.dict(os.environ, {"NEAR_AI_API_KEY": ""}, clear=False):
-            with self.assertRaises(ValueError):
-                NearAiModel(api_key=None)
+            with self.assertRaises(RuntimeError):
+                NearAiModel(api_key=None).turn([{"role": "user", "content": "?"}], [])
         self.assertEqual(self.server.requests, [])
 
 
