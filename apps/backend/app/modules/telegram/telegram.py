@@ -213,6 +213,25 @@ def send_voice_note(chat_id: int, ogg: bytes, *, bot_token: str,
 
 
 @dataclass
+class Turn:
+    """What one update did. Local to its update, never stored on the adapter.
+
+    The adapter is shared by every webhook request, and Telegram delivers updates
+    from different chats concurrently. When these fields lived on the adapter, a
+    chat could be sent the deposit address another chat's turn had just made:
+    paying it credited the other account.
+    """
+
+    outcome: str
+    reply: str | None = None
+    user_id: str | None = None
+    heard: str | None = None
+    said: str | None = None
+    result: Any = None
+    speak: bool = False
+
+
+@dataclass
 class TelegramAdapter:
     agent: AgentLike
     identities: IdentityLike
@@ -310,28 +329,22 @@ class TelegramAdapter:
         text = (message.get("text") or message.get("caption") or "").strip()
 
         try:
-            reply = self._route(message, text, channel_user_id, display_name, chat_id)
+            turn = self._route(message, text, channel_user_id, display_name, chat_id)
         except Exception as err:  # a bad update must not 500 the webhook
             self.log(f"telegram update failed: {err}")
-            reply = "Something went wrong handling that. Nothing was charged."
+            turn = Turn(outcome="failed",
+                        reply="Something went wrong handling that. Nothing was charged.")
 
-        if reply:
-            self._deliver(chat_id, reply, spoken=self._speak_reply)
+        if turn.reply:
+            self._deliver(chat_id, turn.reply, spoken=turn.speak)
         # Always text, even after a voice note: an address is copied, not listened to.
-        deposit = getattr(self._last_result, "deposit", None)
+        deposit = getattr(turn.result, "deposit", None)
         if deposit:
             self._send(chat_id, pay_note(deposit))
-        self._emit_turn(reply)
-        return {"ok": True, "handled": self._last_outcome, "update_id": update.get("update_id")}
+        self._emit_turn(turn)
+        return {"ok": True, "handled": turn.outcome, "update_id": update.get("update_id")}
 
-    _last_outcome = "ignored"
-    _speak_reply = False       # per-update scratch, reset on every _route
-    _last_user_id: str | None = None
-    _last_heard: str | None = None
-    _last_said: str | None = None
-    _last_result: Any = None
-
-    def _emit_turn(self, reply: str | None) -> None:
+    def _emit_turn(self, turn: Turn) -> None:
         """Hand the exchange to the log, if anything is listening.
 
         `turnlog` used to be written only by `/v1/voice`, so the channel people
@@ -343,12 +356,12 @@ class TelegramAdapter:
             return
         try:
             self.on_turn({
-                "outcome": self._last_outcome,
-                "heard": self._last_heard or "",
-                "said": self._last_said,
-                "reply": reply,
-                "result": self._last_result,
-                "account_id": self._last_user_id,
+                "outcome": turn.outcome,
+                "heard": turn.heard or "",
+                "said": turn.said,
+                "reply": turn.reply,
+                "result": turn.result,
+                "account_id": turn.user_id,
             })
         except Exception as err:  # a broken log must not break the reply
             self.log(f"telegram turn log failed: {err}")
@@ -386,24 +399,16 @@ class TelegramAdapter:
     # --- routing -------------------------------------------------------------
 
     def _route(self, message: dict, text: str, channel_user_id: str,
-               display_name: str | None, chat_id: int) -> str | None:
-        self._speak_reply = False
-        self._last_user_id = None
-        self._last_heard = None
-        self._last_said = None
-        self._last_result = None
+               display_name: str | None, chat_id: int) -> Turn:
         if text.startswith("/"):
             self.stats["commands"] += 1
-            self._last_outcome = "command"
-            self._last_heard = text
-            return self._command(text, channel_user_id, display_name)
+            return Turn(outcome="command", heard=text,
+                        reply=self._command(text, channel_user_id, display_name))
 
         user_id = self.identities.resolve(CHANNEL, channel_user_id)
         if user_id is None:
             self.stats["unlinked"] += 1
-            self._last_outcome = "unlinked"
-            self._last_heard = text or None
-            return NOT_LINKED_REPLY
+            return Turn(outcome="unlinked", heard=text or None, reply=NOT_LINKED_REPLY)
 
         transcript = None
         said = None            # what the agent reads: the transcript, addressed
@@ -412,39 +417,31 @@ class TelegramAdapter:
             from_voice = True
             self.stats["voice"] += 1
             transcript = self._transcribe(message)
-            self._last_heard = transcript
             if transcript is None:
-                self._last_outcome = "voice_unheard"
-                return VOICE_NO_STT
+                return Turn(outcome="voice_unheard", reply=VOICE_NO_STT)
             # Same wake rule as /v1/voice (wake.py): a misheard wake word is
             # still an address, anything else stays silent, not chatty.
             said = wake.wake_attempt(transcript)
             if said is None:
                 self.stats["ignored"] += 1
-                self._last_outcome = "asleep"
-                return VOICE_ASLEEP
+                return Turn(outcome="asleep", heard=transcript, reply=VOICE_ASLEEP)
         elif text:
             transcript = said = text
         else:
             self.stats["ignored"] += 1
-            self._last_outcome = "ignored"
-            return "I can only read text and voice notes for now."
+            return Turn(outcome="ignored",
+                        reply="I can only read text and voice notes for now.")
 
         self.stats["agent"] += 1
-        self._last_outcome = "agent"
-        self._last_heard = transcript
-        self._last_said = said
-        self._last_user_id = user_id
         self.log(f"telegram user={user_id} transcript={transcript!r}")
         # The chat is the thread: a bare "500" is only an amount because the
         # previous line asked how much. Memory is per chat, so two people
         # messaging the bot cannot answer each other's questions.
         result = self.agent.respond(user_id, said, thread=f"{CHANNEL}:{chat_id}")
-        self._last_result = result
         # Spoken only when the question was a voice note: you spoke to Stark,
         # Stark speaks back. A typed message gets a typed reply.
-        self._speak_reply = bool(from_voice)
-        return result.reply
+        return Turn(outcome="agent", reply=result.reply, user_id=user_id,
+                    heard=transcript, said=said, result=result, speak=from_voice)
 
     def _transcribe(self, message: dict) -> str | None:
         voice = message.get("voice") or message.get("audio") or {}

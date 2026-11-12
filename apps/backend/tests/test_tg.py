@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import io
 import itertools
+import os
 import tempfile
 import time
 import unittest
 import wave
+from unittest import mock
 from pathlib import Path
 
 from app.modules.voice import audio
@@ -160,7 +162,7 @@ class TestWebhookSecret(AdapterCase):
 class TestIdentityGate(AdapterCase):
     def test_unlinked_sender_never_reaches_the_agent(self):
         reply = self.adapter._route(_update(text="hello stark pay 5000").get("message"),
-                                    "hello stark pay 5000", "42", "Tunde", 42)
+                                    "hello stark pay 5000", "42", "Tunde", 42).reply
         # The agent was never called, and the reply is only linking instructions.
         self.assertEqual(self.agent.transcripts, [])
         self.assertIn("do not know this chat", (reply or "").lower())
@@ -176,18 +178,18 @@ class TestIdentityGate(AdapterCase):
     def test_link_command_binds_and_rejects_bad_codes(self):
         code = self.ids.issue_code(self.account.id)
         bad = self.adapter._route(_update(text="/link 999999").get("message"),
-                                  "/link 999999", "42", None, 42)
+                                  "/link 999999", "42", None, 42).reply
         self.assertIn("did not work", bad)
         good = self.adapter._route(_update(text=f"/link {code}").get("message"),
-                                   f"/link {code}", "42", "Tunde", 42)
+                                   f"/link {code}", "42", "Tunde", 42).reply
         self.assertIn("Linked", good)
         self.assertEqual(self.ids.resolve(telegram.CHANNEL, "42"), self.account.id)
 
     def test_whoami_and_unlink(self):
         self.linked()
         self.assertIn(self.account.id, self.adapter._route(_update(text="/whoami").get("message"),
-                                                        "/whoami", "42", None, 42))
-        self.adapter._route(_update(text="/unlink").get("message"), "/unlink", "42", None, 42)
+                                                        "/whoami", "42", None, 42).reply)
+        self.adapter._route(_update(text="/unlink").get("message"), "/unlink", "42", None, 42).reply
         self.assertIsNone(self.ids.resolve(telegram.CHANNEL, "42"))
 
     def test_duplicate_update_is_processed_once(self):
@@ -203,7 +205,7 @@ class TestLinkCode(AdapterCase):
 
     def _say(self, text: str, chat_id: int = 42):
         return self.adapter._route(_update(text=text).get("message"), text,
-                                   str(chat_id), "Tunde", chat_id)
+                                   str(chat_id), "Tunde", chat_id).reply
 
     def test_payload_carries_a_code_and_a_deep_link(self):
         self.adapter.username_lookup = lambda token: "hellostarkai_bot"
@@ -291,9 +293,11 @@ class TestVoice(AdapterCase):
         self.assertEqual(self.agent.transcripts, [])
 
     def test_no_speech_backend_says_so_instead_of_guessing(self):
-        self.adapter.transcribe = stt.transcribe   # no key in the environment
-        result = self.adapter.handle_update(
-            _update(text=None, voice={"file_id": "f1"}))
+        self.adapter.transcribe = stt.transcribe
+        # No key, whatever the shell has: a real key would really transcribe.
+        with mock.patch.dict(os.environ, {"NEAR_AI_API_KEY": ""}):
+            result = self.adapter.handle_update(
+                _update(text=None, voice={"file_id": "f1"}))
         self.assertEqual(result["handled"], "voice_unheard")
         self.assertEqual(self.agent.transcripts, [])
         self.assertIn("cannot hear voice notes", self.sent[-1][1])
@@ -465,3 +469,63 @@ class TestChatContext(AdapterCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConcurrentChats(unittest.TestCase):
+    """Two chats at once on the one shared adapter: each keeps its own deposit.
+
+    Hermetic — no database. Chat 1's reply delivery is held open while chat 2's
+    whole update runs, which is exactly the window in which chat 1 used to read
+    chat 2's result off the adapter and send chat 2's deposit address to chat 1.
+    """
+
+    def test_a_chat_is_never_sent_another_chats_deposit(self):
+        import threading
+
+        class Identities:
+            def claim_message(self, channel, message_id):
+                return True
+
+            def resolve(self, channel, channel_user_id):
+                return {"1": "acct_victim", "2": "acct_attacker"}.get(channel_user_id)
+
+        def deposit_for(user_id):
+            return {"id": f"dep_{user_id}", "method": "crypto", "amount_ngn": 50_000,
+                    "pay": {"asset": "USDT", "chain": "tron", "amount": "33.5",
+                            "address": f"ADDR_{user_id}", "memo": None}}
+
+        class Agent:
+            def respond(self, user_id, said, thread):
+                class Reply:
+                    reply = "Here's how to add ₦50,000."
+                    deposit = deposit_for(user_id)
+                    actions, code, receipt_id, token, conversation = [], None, None, None, []
+                return Reply()
+
+        sent: dict[int, list[str]] = {1: [], 2: []}
+        chat_two_done = threading.Event()
+
+        def send(chat_id, text):
+            if chat_id == 1 and not sent[1]:
+                chat_two_done.wait(5)     # hold chat 1 mid-delivery
+            sent[chat_id].append(text)
+            return True
+
+        adapter = TelegramAdapter(agent=Agent(), identities=Identities(),
+                                  bot_token="123:TEST", secret="s", send=send,
+                                  speak=lambda text: None)
+
+        def update(chat_id, message_id):
+            return {"update_id": message_id, "message": {
+                "message_id": message_id, "chat": {"id": chat_id},
+                "from": {"id": chat_id}, "text": "stark add 50000 with usdt"}}
+
+        victim = threading.Thread(target=adapter.handle_update, args=(update(1, 101),))
+        victim.start()
+        adapter.handle_update(update(2, 102))
+        chat_two_done.set()
+        victim.join(5)
+
+        self.assertIn("ADDR_acct_victim", sent[1][-1])
+        self.assertNotIn("ADDR_acct_attacker", "".join(sent[1]))
+        self.assertIn("ADDR_acct_attacker", sent[2][-1])
