@@ -54,6 +54,28 @@ class TelegramService:
             self._owner_id = row["id"] if row else None
         return self._owner_id or ""
 
+    def tell(self, account_id: str, text: str) -> int:
+        """Send `text` to every Telegram chat linked to this account; returns how many
+        took it. Without a bot token nothing is sent."""
+        token = self.adapter.bot_token
+        if not token:
+            return 0
+        sent = 0
+        for ident in self.adapter.identities.identities_for(account_id):
+            if ident["channel"] != telegram.CHANNEL:
+                continue
+            try:
+                chat_id = int(ident["channel_user_id"])
+            except ValueError:
+                continue
+            sent += telegram.send_message(chat_id, text, bot_token=token)
+        return sent
+
+    def tell_owner(self, text: str) -> int:
+        """Operator alerts: the bot owner's (`STARK_TG_OWNER_EMAIL`) linked chats."""
+        owner = self.owner_account_id()
+        return self.tell(owner, text) if owner else 0
+
     def respond(self, user_id: str, said: str, thread: str) -> Any:
         """The linked account's agent — the same `Agent.respond` every door uses."""
         return self.accounts.state(user_id).agent.respond(said, thread=thread)

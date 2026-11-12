@@ -40,6 +40,7 @@ Every non-2xx response has this body:
 | `code` | HTTP | When |
 |---|---|---|
 | `unauthorized` | 401 | Missing, malformed or expired bearer token — sign in first |
+| `admin_disabled` | 403 | `STARK_ADMIN_KEY` is not set, so admin routes refuse everyone (additive, 2026-11-11) |
 | `paused` | 423 | The owner paused Stark; no payment is made until it is resumed (additive, 2026-11-03) |
 | `unknown_request` | 404 | No payment request with that id (additive, 2026-11-03) |
 | `request_closed` | 409 | The request was already approved, denied or has expired (additive, 2026-11-03) |
@@ -668,6 +669,37 @@ the secret hash set in Flutterwave's dashboard (`FLW_SECRET_HASH`); **401**
 `charge.completed` is never credited from its body: the deposit is verified with
 Flutterwave first. `transfer.completed` settles a withdrawal.
 
+### `GET /v1/admin/overview`
+
+Operator only. No bearer token: send `X-Stark-Admin-Key` equal to `STARK_ADMIN_KEY`,
+compared in constant time. A wrong or missing key is **401** `unauthorized`; with no
+key configured every request is **403** `admin_disabled`.
+
+```json
+{
+  "treasury": {
+    "owed_to_users_ngn": 1250000,
+    "held": {"flutterwave_ngn": 900000, "pending_purchases_ngn": 5000,
+             "treasury_usdc_as_ngn": 600000},
+    "treasury_usdc": "400.25",
+    "coverage_ngn": 245000,
+    "unsettled_vault_ops": 0
+  },
+  "deposits": [{"method": "bank", "status": "credited", "count": 12, "amount_ngn": 300000}],
+  "withdrawals": [{"method": "crypto", "status": "processing", "count": 1, "amount_ngn": 20000}],
+  "withdrawals_in_flight": [{"id": "wd_…", "user_id": "…", "method": "crypto",
+                             "amount_ngn": 20000, "status": "processing", "note": null,
+                             "created_at": "…", "updated_at": "…"}],
+  "deposits_open": [{"id": "dep_…", "user_id": "…", "method": "crypto",
+                     "amount_ngn": 15000, "status": "open", "created_at": "…",
+                     "expires_at": "…"}]
+}
+```
+
+A balance that could not be read is `null`, not zero, and `coverage_ngn` then counts
+only what was read. `treasury_usdc` is a decimal string. The in-flight lists hold at
+most 50 rows each, oldest first.
+
 ### `GET /v1/suggestions`
 
 ```json
@@ -1054,3 +1086,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
+| 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |

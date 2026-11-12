@@ -8,6 +8,7 @@ database it likes and hand it to `create_app`.
 from __future__ import annotations
 
 from app.database import neon
+from app.modules.admin.admin_service import AdminService
 from app.modules.account.account_repository import AccountRepository
 from app.modules.account.account_service import AccountService
 from app.modules.agent import agent as agent_layer
@@ -41,6 +42,7 @@ from app.modules.telegram.telegram_service import TelegramService
 from app.modules.telemetry.telemetry_repository import TelemetryRepository
 from app.modules.telemetry.telemetry_service import TelemetryService
 from app.modules.treasury.treasury_service import TreasuryService
+from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.modules.vault.vault_service import VaultService
 from app.modules.vending.catalog import CATALOG
 from app.modules.vending.vending import VendingGateway
@@ -121,6 +123,9 @@ class AppModule:
                 self.receipts, gateway, vaults=self.vaults, floats=self.floats
             ),
         )
+        self.telegram = TelegramService(
+            config, db, self.identities, self.accounts, self.controls
+        )
         self.treasury = TreasuryService(
             db,
             self.vaults,
@@ -132,7 +137,9 @@ class AppModule:
             money.funding.treasury_account,
             self.usdc_rate,
             near_tx.NearRpc(near_tx.MAINNET_RPC),
+            TreasuryWatch(money.watch, self.telegram.tell_owner),
         )
+        self.admin = AdminService(db, self.treasury)
         self.approvals = ApprovalService(ApprovalRepository(db), self.bill_payments)
         self.limits = LimitService(self.accounts, self.wallet, self.approvals)
         self.state = StateService(self.accounts, self.wallet, self.telemetry)
@@ -140,9 +147,6 @@ class AppModule:
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )
         self.voice = VoiceService(self.accounts)
-        self.telegram = TelegramService(
-            config, db, self.identities, self.accounts, self.controls
-        )
         self.whatsapp = WhatsAppService(
             WhatsAppConfig.from_env(), self.identities, self.accounts, self.controls
         )
