@@ -2,7 +2,6 @@ import { Icons } from "@stark/ui/components/icons";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-// A plain link, not a padded button, so its chevron lines up with the title below it.
 export function BackLink({ to, children }: { to: string; children: ReactNode }) {
   return (
     <Link

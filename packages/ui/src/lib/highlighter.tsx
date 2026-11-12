@@ -56,8 +56,6 @@ function getLanguage(language: string) {
   return aliases[name] ?? null;
 }
 
-// Loads a language and returns a highlighter for it, or null for a language
-// that is not listed.
 export async function loadHighlighter(language: string) {
   const lang = getLanguage(language);
 
@@ -72,8 +70,10 @@ export async function loadHighlighter(language: string) {
   }
 
   return {
-    // Returns one React node per line, and the grammar state after the last
-    // line. Pass that state back to continue where the code left off.
+    /**
+     * Returns one React node per line and the grammar state after the last line; pass that state
+     * back to continue where the code left off.
+     */
     highlight(code: string, state?: GrammarState) {
       const tokenize = (text: string) =>
         shiki.codeToTokens(text, {
@@ -83,8 +83,6 @@ export async function loadHighlighter(language: string) {
           grammarState: state,
         }).tokens;
 
-      // ANSI has no grammar state, so each line is tokenized on its own and
-      // gets the same colors whether it arrives in one piece or streams.
       const tokens =
         lang === "ansi" ? code.split("\n").flatMap((line) => tokenize(line)) : tokenize(code);
 
@@ -106,7 +104,6 @@ export async function loadHighlighter(language: string) {
   };
 }
 
-// Returns one React node per line, or null for a language that is not listed.
 export async function highlightCode(code: string, language: string) {
   const highlighter = await loadHighlighter(language);
 

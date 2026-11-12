@@ -8,7 +8,6 @@ export function useClipRecorder() {
   const recordStop = useRef<number | null>(null);
   const disposed = useRef(false);
 
-  /** Finish one recorded clip: stop timers, release the mic, send it up. */
   const stop = () => {
     if (recordStop.current !== null) {
       window.clearTimeout(recordStop.current);
@@ -70,9 +69,7 @@ export function useClipRecorder() {
     if (rec && rec.state !== "inactive") {
       try {
         rec.stop();
-      } catch {
-        /* already stopped */
-      }
+      } catch {}
     }
   };
 

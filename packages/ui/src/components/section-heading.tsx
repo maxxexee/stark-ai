@@ -1,7 +1,6 @@
 import { cn } from "@stark/ui/utils/cn";
 import type { ReactNode } from "react";
 
-/** A section title with an optional trailing action or count, on one 32px line. */
 export function SectionHeading({
   children,
   action,

@@ -2,9 +2,9 @@ import { cn } from "@stark/ui/utils/cn";
 import { type ReactNode, type Ref, type RefObject, useId, useLayoutEffect, useRef } from "react";
 
 /**
- * One side of Add money: a white panel with a label, a big amount and what it is in.
- * The label and the figure are one <label>, so a click anywhere left of the currency
- * chip lands in the amount; the panel shows a ring while its amount has focus.
+ * The label and the figure are one <label>, so a click anywhere left of the currency chip lands in
+ * the amount. Reformatting adds or drops commas, so the caret is restored after the same number of
+ * digits.
  */
 export function SwapPanel({
   label,
@@ -28,9 +28,6 @@ export function SwapPanel({
   const id = useId();
   const ownInput = useRef<HTMLInputElement>(null);
   const input = inputRef ?? ownInput;
-  // Digits (and the decimal point) before the caret at the last keystroke. Reformatting
-  // adds or drops commas, so the caret goes back after the same number of digits rather
-  // than jumping to the end.
   const caretDigits = useRef<number | null>(null);
 
   useLayoutEffect(() => {
@@ -74,7 +71,6 @@ export function SwapPanel({
           )}
         />
       </label>
-      {/* Centred on the figure: 14px panel padding + (40px figure − 36px chip) / 2. */}
       <div className="mb-4 flex-none">{currency}</div>
     </div>
   );

@@ -5,9 +5,8 @@ import { formatAmountInput, parseAmountInput } from "@stark/utils/format";
 import { type ReactNode, useId } from "react";
 
 /**
- * A typed naira amount plus quick-pick chips. This is how every amount, cap and threshold
- * is set in Stark: there are no sliders anywhere in the product. Drawn like Add money's
- * Send panel: a white panel in a grey tray, the figure on the left, the currency chip right.
+ * Every amount, cap and threshold in Stark is set this way: there are no sliders anywhere in the
+ * product.
  */
 export function AmountField({
   label,

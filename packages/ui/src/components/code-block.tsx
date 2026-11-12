@@ -184,13 +184,13 @@ const codeBlockLineVariants = cva(
   },
 );
 
+/** An empty line holds a newline so copying a selection keeps blank lines. */
 function CodeBlockLine({
   className,
   variant = "default",
   children,
   ...props
 }: React.ComponentProps<"span"> & VariantProps<typeof codeBlockLineVariants>) {
-  // An empty line holds a newline so copying a selection keeps blank lines.
   const empty =
     children === undefined ||
     children === null ||

@@ -7,7 +7,6 @@ type ChoiceChipProps = Omit<ComponentProps<typeof Toggle>, "pressed" | "size"> &
   size?: "sm" | "lg";
 };
 
-/** A toggle in a group of quick picks (amounts, bill types). Never a slider. */
 export function ChoiceChip({ selected, size = "lg", className, ...props }: ChoiceChipProps) {
   return (
     <Toggle

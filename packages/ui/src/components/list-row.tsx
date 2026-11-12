@@ -4,7 +4,6 @@ import type { HTMLAttributes, ReactNode } from "react";
 export const listRowClass =
   "flex min-h-14 flex-wrap items-center gap-3 px-4 py-2.5 text-fg no-underline transition-colors hover:bg-surface-2";
 
-/** A row's title and grey subtitle. Grows to fill the row. */
 export function RowText({
   title,
   subtitle,
@@ -26,7 +25,6 @@ export function ListRow({ className, ...props }: HTMLAttributes<HTMLDivElement>)
   return <div className={cn(listRowClass, className)} {...props} />;
 }
 
-/** Rows grouped in one card, split by hairlines. */
 export function RowList({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div

@@ -10,8 +10,6 @@ setApiBaseUrl(import.meta.env.VITE_STARK_API_URL ?? "");
 setAuthToken(sessionStore.token());
 
 export function getRouter() {
-  // A 401 from /v1 means the session is gone (expired, or logged out elsewhere).
-  // Drop it and go to sign-in, so the shell never keeps rendering a dead account.
   const signOutOnUnauthorized = (error: Error) => {
     if (!(error instanceof ApiError) || error.status !== 401 || !sessionStore.token()) return;
     sessionStore.forget();

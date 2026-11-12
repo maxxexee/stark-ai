@@ -1,5 +1,3 @@
-// Reicon Outline icons (reicon.dev, MIT), named for what they mean in Stark.
-// Import from here rather than from reicon-react so one icon means one thing everywhere.
 import {
   Activity,
   Add,

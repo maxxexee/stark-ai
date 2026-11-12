@@ -1,7 +1,6 @@
 import { Icons } from "@stark/ui/components/icons";
 import { Link } from "@tanstack/react-router";
 
-// The one round control in the bar: Talk opens the voice orb, so it borrows its shape.
 export function TabBarTalkLink() {
   return (
     <Link

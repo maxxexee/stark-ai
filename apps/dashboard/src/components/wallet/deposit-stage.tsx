@@ -18,9 +18,9 @@ const BANK_WAITING: Record<Pending, string> = {
     "Payment received. It lands in your balance once your bank confirms it, so you can leave this page.",
 };
 
+/** Polls only while someone waits, because reading an open deposit checks it with 1Click. */
 export function DepositStage({ depositId }: { depositId: string }) {
   const qc = useQueryClient();
-  // When the user said they sent it; null while they're still looking at the address.
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [openedAt] = useState(Date.now);
   const {
@@ -30,7 +30,6 @@ export function DepositStage({ depositId }: { depositId: string }) {
     refetch,
   } = useQuery({
     ...depositQuery(depositId),
-    // Reading an open deposit checks it with 1Click, so poll only while someone waits.
     refetchInterval: (query) =>
       sentAt !== null || query.state.data?.status === "confirming" ? 10_000 : false,
   });

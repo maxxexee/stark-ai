@@ -29,24 +29,7 @@
   }
 }
 
-/* ---------------------------------------------------------------------------
-  The closing section's power layer.
-
-  Four treatments on what was a static footer: the bill chips rise and then
-  drift, a current runs along the pill's rule, the status line cycles through
-  what is true, and links wipe their underline in. The helmet's glint lives
-  with the mark itself (UI globals), because the component owns it.
-
-  Every animated rule sits inside prefers-reduced-motion — reduced motion still
-  gets the chips, one status line and the underline on hover. Nothing here is
-  information that only motion delivers.
---------------------------------------------------------------------------- */
-
-/* The chips: a staggered rise when the section arrives, then a drift with real
-   travel in it — 10–18px a side on 4.5–6.5s loops, so the four visibly breathe
-   without marching in step. `scale` and `translate` are their own properties,
-   so neither animation ever touches `transform`, which still carries each
-   chip's tilt. */
+/* Animates `scale` and `translate`, never `transform`, which carries each chip's tilt. */
 @media (prefers-reduced-motion: no-preference) {
   .closing.is-armed .floater {
     opacity: 0;
@@ -80,8 +63,6 @@
   }
 }
 
-/* Current in the wire: one ember segment crossing the pill's top rule, then a
-   rest. Masked at both ends so it never appears from nowhere. */
 .powerline {
   position: absolute;
   inset-inline: 1.5rem;
@@ -128,8 +109,7 @@
   }
 }
 
-/* Three statuses in one grid cell, so the pill is as wide as the longest line
-   and never twitches when the text changes. */
+/* All statuses share one grid cell, so the pill is as wide as the longest and never twitches. */
 .status-rail {
   display: grid;
   text-align: left;
@@ -192,7 +172,6 @@
   }
 }
 
-/* Footer links: an ember underline wiping left to right, and a 1px lift. */
 .sweep-link {
   background-image: linear-gradient(var(--color-brand-warm), var(--color-brand-warm));
   background-position: 0 100%;

@@ -14,8 +14,9 @@ import type { RefObject } from "react";
 import { Networks } from "@/lib/wallet/networks";
 import { type SendGroup, type SendOption, SendOptions } from "@/lib/wallet/send-options";
 
-/** The Send side's currency chip. The list opens under the whole panel (`anchor`), as wide
- * as it, searchable by coin or network and grouped by network. */
+/**
+ * The list opens under the whole panel (`anchor`), as wide as it, searchable by coin or network.
+ */
 export function SendCurrencyPicker({
   groups,
   value,
@@ -27,7 +28,6 @@ export function SendCurrencyPicker({
   value: SendOption;
   onChange: (option: SendOption) => void;
   anchor: RefObject<HTMLDivElement | null>;
-  /** The amount to type next: picking (or dismissing) the list hands focus back to it. */
   returnFocusTo: RefObject<HTMLInputElement | null>;
 }) {
   const handleOptionChange = (option: SendOption | null) => {
@@ -58,8 +58,6 @@ export function SendCurrencyPicker({
       <ComboboxContent
         anchor={anchor}
         finalFocus={() => {
-          // Selected, so a new figure replaces the old one; after the list's own focus
-          // handling has run.
           requestAnimationFrame(() => returnFocusTo.current?.select());
           return returnFocusTo.current;
         }}

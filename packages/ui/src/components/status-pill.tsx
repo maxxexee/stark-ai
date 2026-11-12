@@ -2,7 +2,6 @@ import { Badge } from "@stark/ui/components/badge";
 import { cn } from "@stark/ui/utils/cn";
 import type { ReactNode } from "react";
 
-/** A small status badge with a dot, e.g. "Running low". */
 export function StatusPill({
   children,
   tone = "brand",

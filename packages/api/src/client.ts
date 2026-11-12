@@ -41,19 +41,16 @@ let baseUrl = "";
 let authToken: string | null = null;
 
 /**
- * Where the backend lives. Leave it empty in the browser during development: Vite proxies
- * `/v1` to the backend, so calls stay same-origin. Set it for deployed builds.
+ * Leave it empty for browser development, where Vite proxies `/v1` to the backend; set it for
+ * deployed builds.
  */
 export function setApiBaseUrl(url: string) {
   baseUrl = url.replace(/\/$/, "");
 }
 
 /**
- * The Neon Auth session token, sent as `Authorization: Bearer`.
- *
- * Set once at boot from storage, and again after sign-in or sign-out. Kept here
- * rather than read from storage per request so a signed-out tab cannot keep
- * working because localStorage still had a token in it.
+ * Held in memory rather than read from storage per request, so a signed-out tab cannot keep working
+ * off a token left in localStorage.
  */
 export function setAuthToken(token: string | null) {
   authToken = token;
@@ -140,24 +137,18 @@ export const api = {
     request<PaymentRequest>("POST", `/v1/approvals/${encodeURIComponent(id)}/deny`, {}),
   pause: () => request<Controls>("POST", "/v1/controls/pause", {}),
   resume: () => request<Controls>("POST", "/v1/controls/resume", {}),
-  /**
-   * Ends the session server-side as well as locally: the provider's session row
-   * is deleted, so the token this tab was holding cannot be replayed.
-   */
+  /** Deletes the provider's session row, so the token this tab held cannot be replayed. */
   logout: () => request<{ logged_out: true }>("POST", "/v1/auth/logout", {}),
   /** A fresh single-use code for linking a chat. Every call mints a new one. */
   linkCode: () => request<LinkCode>("POST", "/v1/link/code", {}),
   voice: (transcript_hint: string, opts?: { speak?: boolean }) =>
     request<VoiceReply>("POST", "/v1/voice", {
       transcript_hint,
-      // Ask for text only: the dashboard fetches its voice from /v1/speak
-      // right after, so reading never waits on synthesis.
       ...(opts?.speak === undefined ? {} : { speak: opts.speak }),
     }),
   /**
-   * Real audio: the clip goes up, the server transcribes it (Whisper) and the
-   * wake gate runs on what came back — the path for browsers without the Web
-   * Speech API. The reply's `stt` field says whether the server heard it.
+   * Uploads the clip for server-side transcription (Whisper), for browsers without the Web Speech
+   * API. The reply's `stt` field says whether the server heard it.
    */
   voiceAudio: async (audio: Blob, opts?: { speak?: boolean }) =>
     request<VoiceReply>("POST", "/v1/voice", {
@@ -165,19 +156,10 @@ export const api = {
       audio_type: audio.type || "audio/webm",
       ...(opts?.speak === undefined ? {} : { speak: opts.speak }),
     }),
-  /** Speak text the client already has — the reply of an answered `/v1/voice`. */
   speak: (text: string) => request<SpeakReply>("POST", "/v1/speak", { text }),
   /**
-   * Where the streamed voice lives: `new Audio(api.speakStreamUrl(text))` starts
-   * talking on the first bytes instead of waiting for the whole clip to be built.
-   * Point an `<audio>` at it and fall back to `speak` if it errors.
-   *
-   * An `<audio>` element cannot set an `Authorization` header, so the session
-   * token rides along as `?token=` — the one route the contract accepts it on
-   * (docs/API.md). Without it the stream answers 401 and the Talk screen never
-   * gets past the refusal. `URLSearchParams` also encodes a literal `+` in the
-   * text, which `encodeURIComponent` would leave for the server to read as a
-   * space.
+   * Streams the voice from its first bytes; fall back to `speak` if it errors. An `<audio>` element
+   * cannot send an `Authorization` header, so the token rides along as `?token=`.
    */
   speakStreamUrl: (text: string) => {
     const params = new URLSearchParams({ text });

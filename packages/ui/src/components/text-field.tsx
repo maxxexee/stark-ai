@@ -2,7 +2,6 @@ import { Field, FieldDescription, FieldLabel } from "@stark/ui/components/field"
 import { Input } from "@stark/ui/components/input";
 import { type ComponentProps, useId } from "react";
 
-/** A labelled text input: shadcn Field + Input. */
 export function TextField({
   label,
   hint,

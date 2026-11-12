@@ -6,6 +6,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { sessionStore } from "@/lib/auth/session-store";
 
+/**
+ * Logs out on the server before forgetting the local token, which alone would leave a live session
+ * behind.
+ */
 export function SignOut() {
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
@@ -15,11 +19,8 @@ export function SignOut() {
     setPending(true);
     setError(null);
     try {
-      // Server first: forgetting the token locally would leave a live session behind.
       await api.logout();
-    } catch {
-      // A dead session is exactly what we are trying to end, so keep going.
-    }
+    } catch {}
     try {
       sessionStore.forget();
       setAuthToken(null);

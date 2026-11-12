@@ -1,26 +1,6 @@
 @import "tailwindcss";
 @import "@stark/ui/globals.css";
 
-/* ---------------------------------------------------------------------------
-  The app's design system. One of each, and nothing in between:
-
-  Type     12 caption · 13 secondary · 14 body · 16 section · 20 page · 32 figure.
-           One family (Inter). Weight carries hierarchy: 400 body, 500 labels,
-           600 titles. No uppercase eyebrows, no letter-spacing tricks.
-  Space    A 4px grid. Rows 8 apart, blocks 16, sections 24–32.
-  Shape    One radius, 8px, for everything with a corner: buttons, fields,
-           selects, tabs, chips, badges, nav items, rows, cards, dialogs. Every
-           rounded-* step resolves to it, so no size can drift. Fully round is
-           reserved for things that are circles: avatars, status dots, the mic.
-  Height   Controls are 32px (sm) or 36px (default), 40px for a form's main
-           action. A field and the button beside it are always the same height.
-  Colour   Neutral greys carry the interface. Burnt orange is the one accent:
-           the main action, the current selection, focus. Never decoration.
-
-  These override the shared tokens for the dashboard only; the website keeps
-  its own paper-and-ink look from @stark/ui/globals.css.
---------------------------------------------------------------------------- */
-
 @theme {
   --text-xs: 12px;
   --text-xs--line-height: 16px;
@@ -103,8 +83,6 @@
   --sidebar-border: #e5e5ea;
 }
 
-/* Talk is the one immersive, dark screen: it re-declares the palette it was
-   designed in, so its orb, glow and cards keep their contrast. */
 .talk-scope {
   --background: #111214;
   --foreground: #f2f3f1;
@@ -160,21 +138,10 @@
   }
 }
 
-/* ---------------------------------------------------------------------------
-  The Talk screen's voice orb.
-
-  Four states, all CSS: idle breathes, listening runs an aurora with ripples
-  and an equaliser, thinking orbits a comet while the reply card scans, and the
-  answer arrives out of a blur. Everything animated sits inside
-  prefers-reduced-motion — a voice assistant that ignores the OS setting is a
-  voice assistant that hurts people.
---------------------------------------------------------------------------- */
-
 .voice-orb {
   position: relative;
 }
 
-/* Rotating nebula behind the mic. Opacity carries the state; spin carries the mood. */
 .voice-aura {
   position: absolute;
   inset: -26%;
@@ -202,8 +169,6 @@
   opacity: 0.34;
 }
 
-/* Concentric ripples, listening only: two rings out of phase so the surface
-   never looks like it is strobing. */
 .voice-ring {
   position: absolute;
   inset: 0;
@@ -212,7 +177,6 @@
   opacity: 0;
 }
 
-/* The comet: a conic sliver masked into a hairline ring, only while thinking. */
 .voice-orbit {
   position: absolute;
   inset: -10%;
@@ -224,7 +188,7 @@
     #ffffff 344deg,
     transparent 360deg
   );
-  /* Masking to a 3px band — the black is a mask shape, not a colour. */
+  /* The black is a mask shape, not a colour. */
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
   opacity: 0;
@@ -235,8 +199,6 @@
   opacity: 0.95;
 }
 
-/* Equaliser: parked below the mic, invisible until someone is speaking to us,
-   so nothing jumps when the state changes. */
 .voice-eq {
   display: flex;
   align-items: flex-end;
@@ -260,12 +222,10 @@
   transform-origin: bottom;
 }
 
-/* Answer arriving: out of focus, into focus — the words land instead of popping. */
 .voice-in {
   animation: none;
 }
 
-/* A sweep across the reply card while the model is working. */
 .voice-scan {
   position: relative;
   overflow: hidden;

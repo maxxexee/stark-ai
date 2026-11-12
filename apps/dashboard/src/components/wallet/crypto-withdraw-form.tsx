@@ -12,13 +12,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { CryptoAssetSelect } from "@/components/wallet/crypto-asset-select";
 
-// The server's floor for a crypto withdrawal; below it the swap fees eat the payout.
 const MIN_CRYPTO_NGN = 1000;
 
 /**
- * What to receive, where, and how much. The server checks the address against the
- * asset's chain when it prices the swap, so a wrong one is refused before anything
- * leaves the balance.
+ * The server checks the address against the asset's chain when it prices the swap, so a wrong one
+ * is refused before anything leaves the balance.
  */
 export function CryptoWithdrawForm({
   balance,

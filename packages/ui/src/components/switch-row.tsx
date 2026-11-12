@@ -1,7 +1,6 @@
 import { Switch } from "@stark/ui/components/switch";
 import { type ReactNode, useId } from "react";
 
-/** A setting with a title, an optional subtitle and an on/off switch. */
 export function SwitchRow({
   checked,
   onChange,

@@ -2,8 +2,6 @@ import { Icons } from "@stark/ui/components/icons";
 import { TooltipTrigger } from "@stark/ui/components/tooltip";
 import { Link } from "@tanstack/react-router";
 
-// Round on purpose: it opens the voice orb, and the one circle in the dock marks it
-// as the thing you talk to rather than another place to go.
 export function DockTalkLink() {
   return (
     <TooltipTrigger

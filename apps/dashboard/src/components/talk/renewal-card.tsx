@@ -5,8 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { Bills } from "@/lib/bills/bills";
 import { Renewals } from "@/lib/renewals/renewals";
 
-/** The reminder the server already judged due. It goes to the pay screen
- *  rather than paying on a tap: one spend path, one confirm. */
+/** Links to the pay screen rather than paying on a tap: one spend path, one confirm. */
 export function RenewalCard({ due }: { due: DueBill }) {
   return (
     <Link
