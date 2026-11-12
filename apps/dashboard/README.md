@@ -45,6 +45,7 @@ balance, bills and activity keys so every screen stays in step.
 |---|---|---|
 | `VITE_STARK_API_URL` | empty (same origin, via the proxy) | API base URL for a deployed build |
 | `VITE_STARK_LIVE_PAYMENTS` | unset | set to `true` once tokens are real; until then tokens are labelled samples |
+| `VITE_STARK_NEAR_NETWORK` | `testnet` | the backend's `STARK_NETWORK` (`testnet` or `mainnet`), so a receipt's "View on NEAR" opens the right explorer |
 
 ## Rules
 
