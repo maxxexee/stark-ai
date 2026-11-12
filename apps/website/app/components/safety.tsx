@@ -177,7 +177,7 @@ export function Safety() {
               What keeps your money safe
             </h2>
             <p className="m-0 text-[17px] text-[#B9BCC2]">
-              Stark is careful by design. These four rules hold on every single payment.
+              These four rules apply to every payment.
             </p>
           </div>
           <div className="flex items-center gap-3">

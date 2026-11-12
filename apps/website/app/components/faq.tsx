@@ -24,7 +24,7 @@ const questions = [
   },
   {
     q: "Who holds my money?",
-    a: "You do. Stark can only pay the bills you added, inside limits only you can change. You can withdraw at any time.",
+    a: "Your balance is yours to withdraw at any time. Stark can only pay the bills you added, inside limits only you can change.",
   },
 ];
 
