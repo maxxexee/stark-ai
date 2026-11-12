@@ -13,6 +13,8 @@ class ApiResponses:
         "admin_disabled": 403,
         "bad_fee": 400,
         "unknown_fee": 400,
+        "bad_limit": 400,
+        "unknown_limit": 400,
         "unknown_bill": 404,
         "bill_unconfirmed": 409,
         "no_route": 404,

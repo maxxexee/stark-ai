@@ -118,7 +118,8 @@ class ApiHarness:
     """
 
     def __init__(self, account: TempAccount, *, opened: bool = True,
-                 fees: dict[str, int] | None = None, **config: Any) -> None:
+                 fees: dict[str, int] | None = None, live_limits: bool = False,
+                 **config: Any) -> None:
         settings = replace(ApiConfigService.from_env(), reminders_enabled=False, **config)
         self.account = account
         self.opened = opened
@@ -127,6 +128,10 @@ class ApiHarness:
         # write the real row: each harness charges only the fees it names.
         named = {**dict.fromkeys(DEFAULT_FEES_NGN, 0), **(fees or {})}
         self.module.settings_service.fees = lambda: named
+        # Operator limits are global too: a harness keeps them in memory, starting at
+        # their defaults, unless the test is about the stored rows themselves.
+        if not live_limits:
+            self.module.operator_limits.db = None
         # No test holds a signer for real money: the treasury key signs USDC on
         # mainnet whatever STARK_NETWORK says, and dev secrets carry one.
         self.module.crypto_withdrawals.treasury = None

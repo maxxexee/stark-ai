@@ -85,6 +85,19 @@ export interface AdminOverview {
   alerts?: OperatorAlert[];
   egress_ip: string | null;
   fees_ngn?: Fees;
+  limits?: OperatorLimit[];
+}
+
+/** One operator limit; the API owns the set, so a key the page does not know still shows. */
+export interface OperatorLimit {
+  key: string;
+  label: string;
+  unit: string;
+  value: number;
+  default: number;
+  minimum: number;
+  maximum: number;
+  overridden: boolean;
 }
 
 export interface Fees {
@@ -114,22 +127,26 @@ export class AdminApi {
   }
 
   static async updateFees(key: string, fees: Partial<Fees>): Promise<Fees> {
-    const data = await AdminApi.request<{ fees_ngn: Fees }>(
-      key,
-      "/v1/admin/fees",
-      {
-        method: "PATCH",
-        body: JSON.stringify(fees),
-      },
-    );
+    const data = await AdminApi.request<{ fees_ngn: Fees }>(key, "/v1/admin/fees", {
+      method: "PATCH",
+      body: JSON.stringify(fees),
+    });
     return data.fees_ngn;
   }
 
-  private static async request<T>(
+  /** `null` puts a limit back on its default. */
+  static async updateLimits(
     key: string,
-    path: string,
-    init: RequestInit = {},
-  ): Promise<T> {
+    changes: Record<string, number | null>,
+  ): Promise<OperatorLimit[]> {
+    const data = await AdminApi.request<{ limits: OperatorLimit[] }>(key, "/v1/admin/limits", {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+    return data.limits;
+  }
+
+  private static async request<T>(key: string, path: string, init: RequestInit = {}): Promise<T> {
     const base = (import.meta.env.VITE_STARK_API_URL ?? "").replace(/\/$/, "");
     let res: Response;
     try {

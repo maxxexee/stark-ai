@@ -26,15 +26,13 @@ from app.modules.chain import near_tx, vault_chain
 from app.modules.chain.treasury_chain import SignedTransfer
 from app.modules.chain.vault_chain import ChainResult, VaultChain
 from app.modules.intents.one_click import OneClickError
-from app.modules.liquidity.float_service import FloatService, FloatSettings
+from app.modules.liquidity.float_service import FloatService
 from app.modules.liquidity.usdc_rate import STALE_SECONDS, RateUnavailable, UsdcRate
 from app.modules.payment import payment_service
 from app.modules.vault.vault_service import AuthorisationFailed, VaultService
+from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.vending import vending
-from app.modules.wallet.crypto_withdrawal_service import (
-    CryptoPayoutSettings,
-    CryptoWithdrawalService,
-)
+from app.modules.wallet.crypto_withdrawal_service import CryptoWithdrawalService
 from app.modules.wallet.deposit_service import (
     MAX_CHECK_SECONDS,
     MIN_CHECK_SECONDS,
@@ -45,20 +43,21 @@ from app.modules.wallet.deposit_service import (
     _payable,
 )
 from app.modules.account.account_repository import AccountRepository
-from app.modules.wallet.withdrawal_service import WithdrawalService, WithdrawalSettings
+from app.modules.wallet.withdrawal_service import WithdrawalService
 from tests import support
 
-OPEN_WITHDRAWALS = WithdrawalSettings(daily_ngn=10**12, lookups_per_day=10**6)
+OPEN_WITHDRAWALS = OperatorLimits.fixed(withdraw_daily_ngn=10**12, bank_lookups_per_day=10**6)
 CARD_HOLD_HOURS = 72
+CARD_HOLD = OperatorLimits.fixed(card_hold_hours=CARD_HOLD_HOURS)
 
 KEY = near_tx.KeyPair.from_secret(bytes(range(32)))
-RATE_1500 = UsdcRate(spread_ngn=Decimal(0), fixed=Decimal("1500"))
-SPREAD_RATE = UsdcRate(spread_ngn=Decimal(10), fixed=Decimal("1500"))
+RATE_1500 = UsdcRate(OperatorLimits.fixed(usdc_spread_ngn=0, usdc_rate_pinned=1500))
+SPREAD_RATE = UsdcRate(OperatorLimits.fixed(usdc_spread_ngn=10, usdc_rate_pinned=1500))
 
 
 class DownRate(UsdcRate):
     def __init__(self):
-        super().__init__(spread_ngn=Decimal(10))
+        super().__init__(OperatorLimits.fixed(usdc_spread_ngn=10))
 
     def _fetch(self):
         raise RateUnavailable("Paycrest down")
@@ -287,9 +286,9 @@ class MoneyCase(unittest.TestCase):
     def wallet(self):
         return self.receipts.wallet(self.account.id)
 
-    def ledger(self, flutterwave, settings=OPEN_WITHDRAWALS):
+    def ledger(self, flutterwave, limits=OPEN_WITHDRAWALS):
         return WithdrawalService(self.db, self.receipts, self.vaults, flutterwave,
-                                 AccountRepository(self.db), settings)
+                                 AccountRepository(self.db), limits)
 
     def pause(self):
         self.db.query("UPDATE accounts SET paused_at = $2 WHERE id = $1",
@@ -624,7 +623,8 @@ class FloatServiceTests(MoneyCase):
     def floats(self, balance=500_000, test_mode=False):
         self.flutterwave = FakeFlutterwave(balance)
         self.flutterwave.test_mode = test_mode
-        return FloatService(self.db, self.flutterwave, FloatSettings(low_water_ngn=100_000))
+        return FloatService(self.db, self.flutterwave,
+                            OperatorLimits.fixed(float_low_ngn=100_000))
 
     def test_test_mode_has_nothing_to_cover(self):
         self.floats(balance=0, test_mode=True).ensure_can_cover(5000)
@@ -641,7 +641,8 @@ class FloatServiceTests(MoneyCase):
 
     def test_an_unreadable_balance_refuses_too(self):
         with self.assertRaises(ApiError) as caught:
-            FloatService(self.db, None, FloatSettings(1)).ensure_can_cover(5000)
+            FloatService(self.db, None, OperatorLimits.fixed(float_low_ngn=1)) \
+                .ensure_can_cover(5000)
         self.assertEqual(caught.exception.code, "float_low")
 
     def test_pending_purchases_count_as_spent(self):
@@ -685,7 +686,7 @@ class PaymentPathTests(MoneyCase):
     def service(self, gateway, *, float_balance=500_000):
         live = FakeFlutterwave(float_balance)
         live.test_mode = False
-        floats = FloatService(self.db, live, FloatSettings(100_000))
+        floats = FloatService(self.db, live, OperatorLimits.fixed(float_low_ngn=100_000))
         return payment_service.PaymentService(self.receipts, gateway, vaults=self.vaults,
                                               floats=floats)
 
@@ -752,10 +753,9 @@ class DepositTests(MoneyCase):
         self.flutterwave = FakeFlutterwave()
         self.one_click = FakeOneClick()
         settings = FundingSettings(app_url="https://app.test",
-                                   treasury_account="stark-treasury.near" if crypto else None,
-                                   usdc_rate=rate, card_hold_hours=CARD_HOLD_HOURS)
+                                   treasury_account="stark-treasury.near" if crypto else None)
         return DepositService(self.db, self.receipts, self.vaults, self.flutterwave,
-                              self.one_click, settings)
+                              self.one_click, settings, rate, CARD_HOLD)
 
     def test_a_bank_deposit_is_a_checkout_with_our_reference(self):
         deposit = self.deposits().start(self.account.id, 20_000, "bank", None)
@@ -952,7 +952,7 @@ class DepositTests(MoneyCase):
         self.assertEqual(caught.exception.code, "bad_asset")
         no_flutterwave = DepositService(self.db, self.receipts, self.vaults, None,
                                         FakeOneClick(),
-                                        FundingSettings(None, None, RATE_1500, CARD_HOLD_HOURS))
+                                        FundingSettings(None, None), RATE_1500, CARD_HOLD)
         with self.assertRaises(ApiError) as caught:
             no_flutterwave.start(self.account.id, 20_000, "bank", None)
         self.assertEqual(caught.exception.code, "not_available")
@@ -964,9 +964,9 @@ class DepositTests(MoneyCase):
 class WithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def withdrawals(self, settings=OPEN_WITHDRAWALS):
+    def withdrawals(self, limits=OPEN_WITHDRAWALS):
         self.flutterwave = FakeFlutterwave()
-        return self.ledger(self.flutterwave, settings)
+        return self.ledger(self.flutterwave, limits)
 
     def test_money_is_held_at_once_and_sent_with_our_reference(self):
         service = self.withdrawals()
@@ -1106,7 +1106,7 @@ class WithdrawalTests(MoneyCase):
         self.assertEqual(self.wallet()["balance_ngn"], 50_000)
 
     def test_the_daily_bank_limit_is_per_account_and_counts_what_was_not_returned(self):
-        service = self.withdrawals(WithdrawalSettings(daily_ngn=25_000, lookups_per_day=20))
+        service = self.withdrawals(OperatorLimits.fixed(withdraw_daily_ngn=25_000))
         first = service.request(self.account.id, 10_000, "058", "0123456789")
         with self.assertRaises(ApiError) as caught:
             service.request(self.account.id, 20_000, "058", "0123456789")
@@ -1137,8 +1137,19 @@ class WithdrawalTests(MoneyCase):
         self.assertIn(withdrawal["id"], [c[1]["reference"] for c in self.chain.calls
                                          if c[0] == "debit"])
 
+    def test_a_raised_daily_cap_applies_to_the_next_withdrawal(self):
+        limits = OperatorLimits.fixed(withdraw_daily_ngn=5_000)
+        service = self.withdrawals(limits)
+        with self.assertRaises(ApiError) as caught:
+            service.request(self.account.id, 8_000, "058", "0123456789")
+        self.assertIn("₦5,000", caught.exception.message)
+        limits.set({"withdraw_daily_ngn": 10_000})
+        self.assertEqual(service.request(self.account.id, 8_000, "058", "0123456789")["status"],
+                         "processing")
+
     def test_name_lookups_are_limited_per_account(self):
-        service = self.withdrawals(WithdrawalSettings(daily_ngn=10**12, lookups_per_day=2))
+        service = self.withdrawals(OperatorLimits.fixed(withdraw_daily_ngn=10**12,
+                                                        bank_lookups_per_day=2))
         for _ in range(2):
             service.lookup(self.account.id, "058", "0123456789")
         with self.assertRaises(ApiError) as caught:
@@ -1164,7 +1175,7 @@ class CardHoldTests(MoneyCase):
         self.flutterwave = FakeFlutterwave()
         self.deposits = DepositService(
             self.db, self.receipts, self.vaults, self.flutterwave, FakeOneClick(),
-            FundingSettings("https://app.test", None, RATE_1500, CARD_HOLD_HOURS))
+            FundingSettings("https://app.test", None), RATE_1500, CARD_HOLD)
         self.withdrawals = self.ledger(self.flutterwave)
 
     def add(self, amount, payment_type):
@@ -1282,16 +1293,19 @@ ADDRESS = "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE"
 class CryptoWithdrawalTests(MoneyCase):
     balance = 50_000
 
-    def service(self, *, treasury=True, max_ngn=200_000, max_usdc=Decimal(10**6),
+    def service(self, *, treasury=True, max_ngn=200_000, max_usdc=10**6,
                 daily_ngn=10**12, user_daily_ngn=10**12, rate=RATE_1500, sandbox_naira=False):
         self.one_click = FakePayoutOneClick()
         self.treasury = FakeTreasury() if treasury else None
         deposits = DepositService(
             self.db, self.receipts, self.vaults, None, self.one_click,
-            FundingSettings(None, "stark-treasury.near", RATE_1500, CARD_HOLD_HOURS))
+            FundingSettings(None, "stark-treasury.near"), RATE_1500, CARD_HOLD)
         self.payouts = CryptoWithdrawalService(
             self.db, self.ledger(None), self.vaults, deposits, self.one_click, self.treasury,
-            CryptoPayoutSettings(rate, max_ngn, max_usdc, daily_ngn, user_daily_ngn),
+            rate, OperatorLimits.fixed(
+                crypto_withdraw_max_ngn=max_ngn, crypto_withdraw_max_usdc=max_usdc,
+                crypto_withdraw_daily_ngn=daily_ngn,
+                crypto_withdraw_user_daily_ngn=user_daily_ngn),
             sandbox_naira=sandbox_naira,
         )
         return self.payouts
@@ -1468,8 +1482,9 @@ class CryptoWithdrawalTests(MoneyCase):
 
     def test_a_bad_rate_cannot_multiply_the_usdc_sent(self):
         # ₦20,000 should be ~13 USDC; at a rate of ₦15 it would be 1,333.
-        self.service(rate=UsdcRate(spread_ngn=Decimal(0), fixed=Decimal(15)),
-                     max_usdc=Decimal(200))
+        self.service(rate=UsdcRate(OperatorLimits.fixed(usdc_spread_ngn=0,
+                                                         usdc_rate_pinned=15)),
+                     max_usdc=200)
         with self.assertRaises(ApiError) as caught:
             self.request()
         self.assertEqual(caught.exception.code, "over_limit")
@@ -1504,8 +1519,8 @@ class CryptoWithdrawalTests(MoneyCase):
 class ScriptedRate(UsdcRate):
     """Paycrest answering from a list, one rate per fetch."""
 
-    def __init__(self, *answers, spread_ngn=Decimal(10)):
-        super().__init__(spread_ngn=spread_ngn)
+    def __init__(self, *answers, limits=None):
+        super().__init__(limits or OperatorLimits.fixed(usdc_spread_ngn=10))
         self.answers = list(answers)
 
     def _fetch(self):
@@ -1539,23 +1554,25 @@ class UsdcRateBoundsTests(unittest.TestCase):
         self.assertEqual(rate.market(), Decimal(1650))
 
     def test_a_spread_that_leaves_no_price_is_refused(self):
-        rate = UsdcRate(spread_ngn=Decimal(1500), fixed=Decimal(1500))
+        rate = UsdcRate(OperatorLimits.fixed(usdc_spread_ngn=1500, usdc_rate_pinned=1500))
         with self.assertRaises(RateUnavailable):
             rate.buying()
         self.assertEqual(rate.selling(), Decimal(3000))
 
-    def test_the_bounds_are_read_from_the_environment(self):
-        from app.shared.services.money_config import MoneyConfig
-        config = MoneyConfig.from_env({"STARK_USDC_RATE_MIN": "1000",
-                                       "STARK_USDC_RATE_MAX": "2000",
-                                       "STARK_USDC_RATE_MAX_MOVE": "0.05"})
-        usdc = config.funding.usdc_rate
-        self.assertEqual((usdc.floor, usdc.ceiling, usdc.max_move),
-                         (Decimal(1000), Decimal(2000), Decimal("0.05")))
-        self.assertIs(config.crypto_payouts.usdc_rate, usdc)
-        self.assertEqual(config.withdrawals, WithdrawalSettings(200_000, 20))
-        self.assertEqual((config.crypto_payouts.user_daily_ngn, config.crypto_payouts.max_usdc,
-                          config.funding.card_hold_hours), (200_000, Decimal(200), 72))
+    def test_the_bounds_are_the_operator_limits_of_the_moment(self):
+        limits = OperatorLimits.fixed(usdc_rate_min=1000, usdc_rate_max=2000,
+                                      usdc_rate_max_move_pct=5)
+        rate = ScriptedRate("1500", "1600", "1600", "2500", limits=limits)
+        rate.market()
+        rate.age(120)
+        with self.assertLogs("stark.rate", "ERROR"):
+            self.assertEqual(rate.market(), Decimal(1500), "a 6.7% move is over 5%")
+        limits.set({"usdc_rate_max_move_pct": 10})
+        rate.age(120)
+        self.assertEqual(rate.market(), Decimal(1600))
+        limits.set({"usdc_rate_max": 3000, "usdc_rate_max_move_pct": 100})
+        rate.age(120)
+        self.assertEqual(rate.market(), Decimal(2500), "inside the raised ceiling")
 
 
 class FlutterwaveClientTests(unittest.TestCase):
@@ -1705,7 +1722,7 @@ class WalletRouteTests(unittest.TestCase):
     def test_too_many_name_lookups_answer_429(self):
         withdrawals = self.api.module.withdrawals
         withdrawals.flutterwave = FakeFlutterwave()
-        withdrawals.settings = WithdrawalSettings(daily_ngn=10**12, lookups_per_day=1)
+        withdrawals.limits = OperatorLimits.fixed(bank_lookups_per_day=1)
         body = {"bank_code": "058", "account_number": "0123456789"}
         first = self.api.client.post("/v1/wallet/bank-accounts/resolve", json=body)
         self.assertEqual(first.json()["account_name"], "ADA OKAFOR")

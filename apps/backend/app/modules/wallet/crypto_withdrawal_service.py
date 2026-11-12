@@ -11,10 +11,11 @@ after 1Click's swap; a refund returns the USDC to the treasury and the naira to 
 user.
 
 **Caps.** The treasury key can move real money, so every request is checked against
-`STARK_CRYPTO_WITHDRAW_MAX_NGN` (one withdrawal), `STARK_CRYPTO_WITHDRAW_MAX_USDC`
-(the same withdrawal in USDC, so a bad rate cannot multiply what leaves),
-`STARK_CRYPTO_WITHDRAW_USER_DAILY_NGN` (one account, so one user cannot use up the
-day for everyone) and `STARK_CRYPTO_WITHDRAW_DAILY_NGN` (all users), each daily one
+the operator limits `crypto_withdraw_max_ngn` (one withdrawal),
+`crypto_withdraw_max_usdc` (the same withdrawal in USDC, so a bad rate cannot
+multiply what leaves), `crypto_withdraw_user_daily_ngn` (one account, so one user
+cannot use up the day for everyone) and `crypto_withdraw_daily_ngn` (all users), read
+on every request so the admin page's change applies at once; each daily one
 counting what was not returned in the last 24 hours, before anything is quoted or
 held. The daily checks and the hold run under one lock, so two requests cannot both
 squeeze under a limit; the lock is per process, so several replicas would each
@@ -32,7 +33,6 @@ from __future__ import annotations
 import math
 import threading
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
@@ -45,6 +45,7 @@ from app.modules.chain.treasury_chain import SignedTransfer, TreasuryChain
 from app.modules.intents import one_click
 from app.modules.intents.one_click import OneClickClient, OneClickError
 from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
+from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.vault.vault_service import VaultService
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.withdrawal_service import WithdrawalService, shape
@@ -55,27 +56,19 @@ QUOTE_MINUTES = 60
 NEVER_LANDS = ("Expired", "InvalidNonce")
 
 
-@dataclass(frozen=True)
-class CryptoPayoutSettings:
-    usdc_rate: UsdcRate
-    max_ngn: int
-    max_usdc: Decimal
-    daily_ngn: int
-    user_daily_ngn: int
-
-
 class CryptoWithdrawalService:
     def __init__(self, db: neon.Database, ledger: WithdrawalService, vaults: VaultService,
                  deposits: DepositService, one_click_client: OneClickClient,
-                 treasury: Optional[TreasuryChain], settings: CryptoPayoutSettings,
-                 *, sandbox_naira: bool = False) -> None:
+                 treasury: Optional[TreasuryChain], usdc_rate: UsdcRate,
+                 limits: OperatorLimits, *, sandbox_naira: bool = False) -> None:
         self.db = db
         self.ledger = ledger
         self.vaults = vaults
         self.deposits = deposits
         self.one_click = one_click_client
         self.treasury = treasury
-        self.settings = settings
+        self.usdc_rate = usdc_rate
+        self.limits = limits
         # The naira balance can hold money nobody paid (a Flutterwave test key's
         # checkouts), so it must never become mainnet USDC.
         self.sandbox_naira = sandbox_naira
@@ -95,9 +88,10 @@ class CryptoWithdrawalService:
         if amount_ngn < MIN_CRYPTO_WITHDRAWAL_NGN:
             raise ApiError(400, "bad_amount",
                            f"Withdraw at least ₦{MIN_CRYPTO_WITHDRAWAL_NGN:,} as crypto.")
-        if amount_ngn > self.settings.max_ngn:
+        max_ngn = self.limits.get("crypto_withdraw_max_ngn")
+        if amount_ngn > max_ngn:
             raise ApiError(400, "over_limit",
-                           f"Send at most ₦{self.settings.max_ngn:,} as crypto at a time.")
+                           f"Send at most ₦{max_ngn:,} as crypto at a time.")
         token = self.deposits.crypto_token(asset_id)
         if token is None:
             raise ApiError(400, "bad_asset", "Stark can't send that.")
@@ -107,25 +101,28 @@ class CryptoWithdrawalService:
                            f"That doesn't look like a {token['symbol']} address.")
 
         try:
-            rate = self.settings.usdc_rate.selling()
+            rate = self.usdc_rate.selling()
         except RateUnavailable as err:
             raise ApiError(502, "provider_failed",
                            "Couldn't get a price for that right now. Nothing was taken.") \
                 from err
         usdc_in = math.floor(Decimal(amount_ngn) / rate * 10 ** one_click.USDC_DECIMALS)
-        if usdc_in > self.settings.max_usdc * 10 ** one_click.USDC_DECIMALS:
+        max_usdc = self.limits.get("crypto_withdraw_max_usdc")
+        if usdc_in > max_usdc * 10 ** one_click.USDC_DECIMALS:
             raise ApiError(400, "over_limit",
                            "That's more than Stark sends as crypto at once right now. "
                            "Try a smaller amount. Nothing was taken.")
         withdrawal_id = f"wd_{uuid.uuid4().hex[:16]}"
+        user_daily_ngn = self.limits.get("crypto_withdraw_user_daily_ngn")
+        daily_ngn = self.limits.get("crypto_withdraw_daily_ngn")
         with self._lock:
             everyone, yours = self._sent_today(account_id)
-            if yours + amount_ngn > self.settings.user_daily_ngn:
+            if yours + amount_ngn > user_daily_ngn:
                 raise ApiError(409, "daily_limit",
-                               f"You can send at most ₦{self.settings.user_daily_ngn:,} as "
+                               f"You can send at most ₦{user_daily_ngn:,} as "
                                "crypto in a day. Try a smaller amount, or try again "
                                "tomorrow. Nothing was taken.")
-            if everyone + amount_ngn > self.settings.daily_ngn:
+            if everyone + amount_ngn > daily_ngn:
                 raise ApiError(409, "daily_limit",
                                "Crypto withdrawals are full for today. Try a bank "
                                "withdrawal, or try again tomorrow. Nothing was taken.")

@@ -7,9 +7,9 @@ Drives the API over HTTP as a throwaway account on the real database
 from __future__ import annotations
 
 import unittest
-from decimal import Decimal
 
 from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
+from app.modules.settings.operator_limits import OperatorLimits
 from tests import support as test_support
 
 
@@ -98,18 +98,18 @@ class AccountDataTest(unittest.TestCase):
         self.assertEqual(methods["withdraw"], {"bank": False, "crypto": False})
 
     def test_rates_take_the_spread_each_way(self):
-        self.api.module.usdc_rate = UsdcRate(spread_ngn=Decimal("10"),
-                                             fixed=Decimal("1380.56"))
+        self.api.module.usdc_rate = UsdcRate(OperatorLimits.fixed(usdc_spread_ngn=10,
+                                                                  usdc_rate_pinned=1380))
         response = self.client.get("/v1/wallet/rates")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"deposit": "1370.56", "withdraw": "1390.56"})
+        self.assertEqual(response.json(), {"deposit": "1370", "withdraw": "1390"})
 
     def test_rates_without_a_market_rate_are_provider_failed(self):
         class Down(UsdcRate):
             def _fetch(self):
                 raise RateUnavailable("down")
 
-        self.api.module.usdc_rate = Down(spread_ngn=Decimal("10"))
+        self.api.module.usdc_rate = Down(OperatorLimits.fixed(usdc_spread_ngn=10))
         response = self.client.get("/v1/wallet/rates")
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["code"], "provider_failed")

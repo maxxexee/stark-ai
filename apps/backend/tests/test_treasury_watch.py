@@ -11,10 +11,9 @@ from fastapi.testclient import TestClient
 
 from app.filters.http_exception_filter import HttpExceptionFilter
 from app.modules.admin import admin_controller
-from app.modules.treasury.treasury_watch import TreasuryWatch, WatchSettings
+from app.modules.settings.operator_limits import OperatorLimits
+from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.shared.services.api_config_service import _admin_key
-
-SETTINGS = WatchSettings(float_low_ngn=100_000, treasury_low_usdc=Decimal(100))
 
 
 def report(flutterwave=500_000, usdc=Decimal(1000), coverage=200_000):
@@ -54,7 +53,8 @@ class MemoryAlerts:
 class WatchTests(unittest.TestCase):
     def setUp(self):
         self.alerts = MemoryAlerts()
-        self.watch = TreasuryWatch(SETTINGS, self.alerts)
+        self.limits = OperatorLimits.fixed(float_low_ngn=100_000, treasury_low_usdc=100)
+        self.watch = TreasuryWatch(self.limits, self.alerts)
 
     def test_healthy_balances_raise_nothing(self):
         self.watch.check(report())
@@ -80,6 +80,13 @@ class WatchTests(unittest.TestCase):
         self.watch.check(report(coverage=-5_000))
         self.assertIn("-₦5,000", self.alerts.active()["coverage"])
 
+    def test_a_raised_threshold_applies_to_the_next_check(self):
+        self.watch.check(report(flutterwave=150_000))
+        self.assertEqual(self.alerts.active(), {})
+        self.limits.set({"float_low_ngn": 200_000})
+        self.watch.check(report(flutterwave=150_000))
+        self.assertIn("under ₦200,000", self.alerts.active()["flutterwave"])
+
     def test_unreadable_balances_change_nothing(self):
         self.watch.check(report(flutterwave=40_000))
         self.watch.check(report(flutterwave=None, usdc=None, coverage=-1_000_000))
@@ -90,11 +97,12 @@ class WatchTests(unittest.TestCase):
 KEY = "k" * 32
 
 
-def client(admin_key):
+def client(admin_key, limits=None):
     app = FastAPI()
     app.state.module = SimpleNamespace(
         config=SimpleNamespace(admin_key=admin_key),
         admin=SimpleNamespace(overview=lambda: {"ok": True}),
+        operator_limits=limits or OperatorLimits.fixed(),
     )
     HttpExceptionFilter.register(app)
     app.include_router(admin_controller.router)
@@ -119,6 +127,48 @@ class AdminGuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _admin_key("short")
         self.assertIsNone(_admin_key("  "))
+
+
+class LimitsRouteTests(unittest.TestCase):
+    """`PATCH /v1/admin/limits` on in-memory limits: the body, the codes, the guard."""
+
+    def setUp(self):
+        self.limits = OperatorLimits.fixed()
+        self.client = client(KEY, self.limits)
+
+    def patch(self, body, key=KEY):
+        return self.client.patch("/v1/admin/limits", json=body,
+                                 headers={"X-Stark-Admin-Key": key})
+
+    def test_a_change_answers_every_limit(self):
+        res = self.patch({"withdraw_daily_ngn": 300_000})
+        self.assertEqual(res.status_code, 200)
+        row = next(r for r in res.json()["limits"] if r["key"] == "withdraw_daily_ngn")
+        self.assertEqual((row["value"], row["default"], row["overridden"]),
+                         (300_000, 200_000, True))
+        self.assertEqual(self.limits.get("withdraw_daily_ngn"), 300_000)
+
+    def test_null_puts_a_limit_back_on_its_default(self):
+        self.patch({"card_hold_hours": 24})
+        res = self.patch({"card_hold_hours": None})
+        row = next(r for r in res.json()["limits"] if r["key"] == "card_hold_hours")
+        self.assertEqual((row["value"], row["overridden"]), (72, False))
+
+    def test_refusals_carry_their_codes(self):
+        for body, code in (({"nope": 1}, "unknown_limit"),
+                           ({"card_hold_hours": 721}, "bad_limit"),
+                           ({"usdc_rate_min": 6000}, "bad_limit"),
+                           ({"card_hold_hours": 1.5}, "bad_request"),
+                           ({"card_hold_hours": "24"}, "bad_request")):
+            with self.subTest(body=body):
+                res = self.patch(body)
+                self.assertEqual((res.status_code, res.json()["code"]), (400, code))
+        self.assertEqual(self.limits.stored(), {})
+
+    def test_the_admin_key_is_required(self):
+        res = self.patch({"card_hold_hours": 24}, key="k" * 31 + "x")
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(self.limits.get("card_hold_hours"), 72)
 
 
 if __name__ == "__main__":

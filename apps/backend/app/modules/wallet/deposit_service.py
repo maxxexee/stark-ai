@@ -22,9 +22,9 @@ NGN, for at least the amount asked.
 **Card money is held.** A card charge can be disputed weeks later, long after the
 naira has been withdrawn, and a stolen card's chargeback would land on Stark. So a
 charge Flutterwave reports with any `payment_type` other than a push payment
-(`bank_transfer`, `ussd`, `account`) sets the deposit's `hold_until`,
-`STARK_CARD_HOLD_HOURS` ahead, before it is credited. The money pays bills at
-once; withdrawals leave it in the balance until the hold passes.
+(`bank_transfer`, `ussd`, `account`) sets the deposit's `hold_until`, the
+`card_hold_hours` operator limit ahead, before it is credited. The money pays bills
+at once; withdrawals leave it in the balance until the hold passes.
 
 **Due checks, not a scan.** 1Click has no webhook and a Flutterwave webhook can be
 missed, so each deposit in flight carries its own `next_check_at`, half its age from
@@ -58,6 +58,7 @@ from app.modules.intents import one_click
 from app.modules.intents.one_click import OneClickClient, OneClickError
 from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.receipt.receipt_repository import ReceiptRepository
+from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.vault.vault_service import VaultService
 
 log = logging.getLogger("stark.deposits")
@@ -78,20 +79,21 @@ UNIQUE_VIOLATION = "23505"
 class FundingSettings:
     app_url: Optional[str]
     treasury_account: Optional[str]
-    usdc_rate: UsdcRate
-    card_hold_hours: int
 
 
 class DepositService:
     def __init__(self, db: neon.Database, receipts: ReceiptRepository, vaults: VaultService,
                  flutterwave: Optional[FlutterwaveClient], one_click_client: OneClickClient,
-                 settings: FundingSettings) -> None:
+                 settings: FundingSettings, usdc_rate: UsdcRate,
+                 limits: OperatorLimits) -> None:
         self.db = db
         self.receipts = receipts
         self.vaults = vaults
         self.flutterwave = flutterwave
         self.one_click = one_click_client
         self.settings = settings
+        self.usdc_rate = usdc_rate
+        self.limits = limits
         self._tokens: Optional[tuple[float, list[dict[str, Any]]]] = None
         self._tokens_lock = threading.Lock()
         self._wake = threading.Event()
@@ -211,7 +213,7 @@ class DepositService:
         if token is None:
             raise ApiError(400, "bad_asset", "That isn't something Stark accepts.")
         try:
-            return token, self.settings.usdc_rate.buying()
+            return token, self.usdc_rate.buying()
         except RateUnavailable as err:
             raise ApiError(502, "provider_failed",
                            "Couldn't get a price for that right now. Nothing was taken.") \
@@ -360,7 +362,7 @@ class DepositService:
                 # Before the credit, so the money is never withdrawable unheld.
                 self.db.query(
                     "UPDATE deposits SET hold_until = $2 WHERE id = $1 AND hold_until IS NULL",
-                    [row["id"], Clock.in_minutes(self.settings.card_hold_hours * 60)],
+                    [row["id"], Clock.in_minutes(self.limits.get("card_hold_hours") * 60)],
                 )
             self._credit(row, int(row["amount_ngn"]))
         elif charge["status"] == "failed":

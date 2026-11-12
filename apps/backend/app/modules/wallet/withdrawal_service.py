@@ -15,11 +15,11 @@ its way to their bank.
 card added until its hold has passed (`hold_until` on the deposit, see
 `deposit_service`): a stolen card's charge comes back weeks later, after the cash
 has gone, so card money pays bills at once but leaves only later. A bank
-withdrawal is also capped per account at `STARK_WITHDRAW_DAILY_NGN` over a rolling
-24 hours; the cap check and the hold run under one lock in this process (each
-replica, if there were several, would have its own).
+withdrawal is also capped per account at the `withdraw_daily_ngn` operator limit
+over a rolling 24 hours; the cap check and the hold run under one lock in this
+process (each replica, if there were several, would have its own).
 
-**Name lookups are limited** to `STARK_BANK_LOOKUPS_PER_DAY` per account: the name
+**Name lookups are limited** to `bank_lookups_per_day` per account: the name
 behind an account number is someone's personal data, and an unlimited lookup lets
 anyone signed in read it for every number they guess.
 
@@ -49,7 +49,6 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from app.common.api_error import ApiError
@@ -58,6 +57,7 @@ from app.database import neon
 from app.modules.account.account_repository import AccountRepository
 from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError
 from app.modules.receipt.receipt_repository import ReceiptRepository
+from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.vault.vault_service import VaultService
 
 log = logging.getLogger("stark.withdrawals")
@@ -66,22 +66,16 @@ MIN_WITHDRAWAL_NGN = 100
 UNIQUE_VIOLATION = "23505"
 
 
-@dataclass(frozen=True)
-class WithdrawalSettings:
-    daily_ngn: int
-    lookups_per_day: int
-
-
 class WithdrawalService:
     def __init__(self, db: neon.Database, receipts: ReceiptRepository, vaults: VaultService,
                  flutterwave: Optional[FlutterwaveClient], accounts: AccountRepository,
-                 settings: WithdrawalSettings) -> None:
+                 limits: OperatorLimits) -> None:
         self.db = db
         self.receipts = receipts
         self.vaults = vaults
         self.flutterwave = flutterwave
         self.accounts = accounts
-        self.settings = settings
+        self.limits = limits
         self._banks: Optional[tuple[float, list[dict[str, str]]]] = None
         self._banks_lock = threading.Lock()
         self._lock = threading.Lock()
@@ -119,7 +113,8 @@ class WithdrawalService:
             " WHERE (SELECT COUNT(*) FROM bank_lookups"
             " WHERE user_id = $1 AND created_at > $3) < $4"
             " RETURNING user_id",
-            [account_id, Clock.now_iso(), Clock.ago(days=1), self.settings.lookups_per_day],
+            [account_id, Clock.now_iso(), Clock.ago(days=1),
+             self.limits.get("bank_lookups_per_day")],
         )
         if counted is None:
             raise ApiError(429, "too_many_lookups",
@@ -154,10 +149,11 @@ class WithdrawalService:
 
         withdrawal_id = f"wd_{uuid.uuid4().hex[:16]}"
         now = Clock.now_iso()
+        daily_ngn = self.limits.get("withdraw_daily_ngn")
         with self._lock:
-            if self._withdrawn_today(account_id) + amount_ngn > self.settings.daily_ngn:
+            if self._withdrawn_today(account_id) + amount_ngn > daily_ngn:
                 raise ApiError(409, "daily_limit",
-                               f"You can send at most ₦{self.settings.daily_ngn:,} to a bank "
+                               f"You can send at most ₦{daily_ngn:,} to a bank "
                                "in a day. Try a smaller amount, or try again tomorrow. "
                                "Nothing was taken.")
             self.hold(account_id, {

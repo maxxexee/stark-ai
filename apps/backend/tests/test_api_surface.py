@@ -56,8 +56,8 @@ def build(speak_per_minute=30, telemetry_per_minute=120):
         accounts=SimpleNamespace(state=lambda *_a, **_k: SimpleNamespace(first_name=None)),
         voice=FakeVoice(),
         speak_tickets=SpeakTickets(),
-        speak_limit=RateLimiter(speak_per_minute),
-        telemetry_limit=RateLimiter(telemetry_per_minute),
+        speak_limit=RateLimiter(lambda: speak_per_minute),
+        telemetry_limit=RateLimiter(lambda: telemetry_per_minute),
         telemetry=SimpleNamespace(record=lambda _id, _dto: {"accepted": True, "count": 1}),
     )
     app = FastAPI()
@@ -177,7 +177,7 @@ class RateLimitTests(unittest.TestCase):
 
     def test_the_window_slides(self):
         now = [0.0]
-        limiter = RateLimiter(1, clock=lambda: now[0])
+        limiter = RateLimiter(lambda: 1, clock=lambda: now[0])
         limiter.hit("a")
         limiter.hit("b")                                  # accounts are separate
         with self.assertRaises(ApiError) as caught:
@@ -185,6 +185,15 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 429)
         self.assertGreater(caught.exception.detail["retry_after_seconds"], 0)
         now[0] += RateLimiter.WINDOW_SECONDS
+        limiter.hit("a")
+
+    def test_a_changed_limit_applies_to_the_next_call(self):
+        limit = [1]
+        limiter = RateLimiter(lambda: limit[0], clock=lambda: 0.0)
+        limiter.hit("a")
+        with self.assertRaises(ApiError):
+            limiter.hit("a")
+        limit[0] = 2
         limiter.hit("a")
 
 

@@ -28,9 +28,6 @@ class ApiConfigService:
     admin_key: Optional[str]
     # Swagger, ReDoc and the spec are a map of every route; local dev only.
     docs_enabled: bool
-    # Per account per minute. Speaking spends voice credits; a reading is a row.
-    speak_per_minute: int
-    telemetry_per_minute: int
     money: MoneyConfig
 
     @classmethod
@@ -46,8 +43,6 @@ class ApiConfigService:
             telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET"),
             admin_key=_admin_key(os.environ.get("STARK_ADMIN_KEY")),
             docs_enabled=os.environ.get("STARK_DOCS") == "1",
-            speak_per_minute=int(os.environ.get("STARK_SPEAK_PER_MINUTE", "30")),
-            telemetry_per_minute=int(os.environ.get("STARK_TELEMETRY_PER_MINUTE", "120")),
             money=MoneyConfig.from_env(),
         )
 
