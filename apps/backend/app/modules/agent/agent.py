@@ -863,13 +863,12 @@ class NearAiModel:
         self.timeout = timeout
 
     def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "temperature": 0,
-        }
+        payload = {"model": self.model, "messages": messages, "temperature": 0}
+        # A question is offered no tools. Some providers (DeepSeek on NEAR AI) reject
+        # `tools: []` with a 400, so the field is left out rather than sent empty.
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         body = self._post(payload)
 
         choices = body.get("choices") or []

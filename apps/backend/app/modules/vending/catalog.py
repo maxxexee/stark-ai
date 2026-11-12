@@ -19,7 +19,12 @@ Which billers Stark sells, by name, since that is what the catalogue is keyed on
 | airtime | `is_airtime: true` — MTN, Airtel, Glo, 9mobile |
 | data | `… DATA BUNDLE` |
 | tv | DSTV, GOTV, STARTIMES |
-| electricity | Ikeja's prepaid item (`IKEDC  PREPAID`) |
+| electricity | each disco's prepaid meter item (`IKEDC  PREPAID`, `EKEDC PREPAID TOPUP`, …) |
+
+Electricity rows are named inconsistently (`IKEDC  PREPAID`, `PHC DISCO  PREPAID
+TOPUP`, `Kaduna Prepaid`), so a disco is recognised by the first word of its row name
+(`DISCOS`), and a bill's provider ("Eko Electric", "EKEDC") by the disco's name or a
+common abbreviation.
 """
 
 from __future__ import annotations
@@ -36,7 +41,14 @@ REFRESH_SECONDS = 3600
 
 # What a bill's provider is called, against the first word of Flutterwave's biller name.
 NETWORKS = ("mtn", "airtel", "glo", "9mobile", "dstv", "gotv", "startimes")
-ALIASES = {"etisalat": "9mobile", "dstvcompact": "dstv"}
+# The first word of a disco's prepaid row → the disco, as a bill's provider names it.
+# Test mode names Ikeja "IKEJA DISCO ELECTRICITY BILLS"; live names it "IKEDC  PREPAID".
+DISCOS = {"ikeja": "ikeja", "ikedc": "ikeja", "ekedc": "eko", "abuja": "abuja", "benin": "benin",
+          "enugu": "enugu", "ibadan": "ibadan", "jos": "jos", "kaduna": "kaduna",
+          "kano": "kano", "phc": "portharcourt"}
+ALIASES = {"etisalat": "9mobile", "dstvcompact": "dstv", "ikedc": "ikeja", "ekedc": "eko",
+           "aedc": "abuja", "bedc": "benin", "eedc": "enugu", "ibedc": "ibadan",
+           "jed": "jos", "kaedco": "kaduna", "kedco": "kano", "phed": "portharcourt"}
 
 
 @dataclass(frozen=True)
@@ -101,7 +113,7 @@ class Catalog:
                 by_biller.setdefault(row["biller_code"], []).append(row)
         products = []
         for biller_code, items in by_biller.items():
-            name = _network(items[0]) or items[0]["name"]
+            name = _network(items[0]) or _disco(items[0]) or items[0]["name"]
             if kind in ("data", "tv"):
                 products.append(Product(kind, biller_code, name.upper(), PLAN))
             else:
@@ -113,7 +125,7 @@ class Catalog:
         """The biller for a bill kind and provider, or `None`.
 
         `provider` is what the bill was saved with: a name (`MTN`, `DStv`,
-        `Ikeja Electric`) or a biller code (`BIL104`).
+        `Eko Electric`), an abbreviation (`EKEDC`) or a biller code (`BIL104`).
         """
         wanted = ALIASES.get(slug(provider), slug(provider))
         if not wanted:
@@ -122,7 +134,8 @@ class Catalog:
             network = slug(product.name)
             if wanted in (slug(product.biller_code), network, f"{network}data"):
                 return product
-            if kind == "electricity" and wanted.startswith("ikeja"):
+            # "Eko Electric", "Eko Electricity Distribution" → eko
+            if kind == "electricity" and wanted.startswith(network):
                 return product
         return None
 
@@ -147,6 +160,11 @@ def _network(row: dict[str, Any]) -> str | None:
     return first if first in NETWORKS else None
 
 
+def _disco(row: dict[str, Any]) -> str | None:
+    first = slug(row["name"].split()[0]) if row["name"].split() else ""
+    return DISCOS.get(first)
+
+
 def _kind_of(row: dict[str, Any]) -> str | None:
     name = row["name"].upper()
     if row["is_airtime"]:
@@ -155,7 +173,9 @@ def _kind_of(row: dict[str, Any]) -> str | None:
         return "data"
     if _network(row) in ("dstv", "gotv", "startimes") and int(row["amount"]) > 0:
         return "tv"
-    if "IKEJA" in name and "PREPAID" in row["biller_name"].upper():
+    # Prepaid only: a token is what Stark hands back. Jos says "Prepaid" only in
+    # `biller_name`; "POSTPAID" does not contain "PREPAID".
+    if _disco(row) and "PREPAID" in f"{name} {row['biller_name'].upper()}":
         return "electricity"
     return None
 

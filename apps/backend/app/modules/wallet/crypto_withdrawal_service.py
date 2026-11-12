@@ -4,7 +4,8 @@
     → sign the treasury's transfer and store it → broadcast → `processing`
     → 1Click `SUCCESS` (`paid`) or `REFUNDED`/`FAILED` (the money comes back)
 
-The naira is converted at `STARK_USDC_NGN_RATE`, rounded down, so Stark never sends
+The naira is converted at Stark's selling rate (Paycrest's market rate plus the
+spread, see `usdc_rate`), rounded down, so Stark never sends
 more USDC than the naira covers. What arrives is `amountOutFormatted` of the asset,
 after 1Click's swap; a refund returns the USDC to the treasury and the naira to the
 user.
@@ -38,6 +39,7 @@ from app.modules.chain import near_tx
 from app.modules.chain.treasury_chain import SignedTransfer, TreasuryChain
 from app.modules.intents import one_click
 from app.modules.intents.one_click import OneClickClient, OneClickError
+from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.vault.vault_service import VaultService
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.withdrawal_service import WithdrawalService, shape
@@ -50,7 +52,7 @@ NEVER_LANDS = ("Expired", "InvalidNonce")
 
 @dataclass(frozen=True)
 class CryptoPayoutSettings:
-    usdc_ngn_rate: Optional[Decimal]
+    usdc_rate: UsdcRate
     max_ngn: int
     daily_ngn: int
 
@@ -69,7 +71,7 @@ class CryptoWithdrawalService:
         self._lock = threading.Lock()
 
     def available(self) -> bool:
-        return self.treasury is not None and self.settings.usdc_ngn_rate is not None
+        return self.treasury is not None
 
     # --- the withdrawal -----------------------------------------------------------
 
@@ -78,7 +80,7 @@ class CryptoWithdrawalService:
         if not self.available():
             raise ApiError(501, "not_available",
                            "Withdrawing as crypto isn't set up yet. Nothing was taken.")
-        assert self.treasury is not None and self.settings.usdc_ngn_rate is not None
+        assert self.treasury is not None
         if amount_ngn < MIN_CRYPTO_WITHDRAWAL_NGN:
             raise ApiError(400, "bad_amount",
                            f"Withdraw at least ₦{MIN_CRYPTO_WITHDRAWAL_NGN:,} as crypto.")
@@ -93,8 +95,13 @@ class CryptoWithdrawalService:
             raise ApiError(400, "bad_address",
                            f"That doesn't look like a {token['symbol']} address.")
 
-        usdc_in = math.floor(Decimal(amount_ngn) / self.settings.usdc_ngn_rate
-                             * 10 ** one_click.USDC_DECIMALS)
+        try:
+            rate = self.settings.usdc_rate.selling()
+        except RateUnavailable as err:
+            raise ApiError(502, "provider_failed",
+                           "Couldn't get a price for that right now. Nothing was taken.") \
+                from err
+        usdc_in = math.floor(Decimal(amount_ngn) / rate * 10 ** one_click.USDC_DECIMALS)
         withdrawal_id = f"wd_{uuid.uuid4().hex[:16]}"
         with self._lock:
             if self._sent_today() + amount_ngn > self.settings.daily_ngn:

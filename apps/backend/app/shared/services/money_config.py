@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Mapping, Optional
 
 from app.modules.liquidity.float_service import FloatSettings
+from app.modules.liquidity.usdc_rate import UsdcRate
 from app.modules.wallet.crypto_withdrawal_service import CryptoPayoutSettings
 from app.modules.wallet.deposit_service import FundingSettings
 
@@ -23,19 +24,23 @@ class MoneyConfig:
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "MoneyConfig":
         source = os.environ if env is None else env
-        rate = (source.get("STARK_USDC_NGN_RATE") or "").strip()
+        fixed = (source.get("STARK_USDC_NGN_RATE") or "").strip()
+        usdc_rate = UsdcRate(
+            spread_ngn=Decimal(source.get("STARK_USDC_NGN_SPREAD") or "10"),
+            fixed=Decimal(fixed) if fixed else None,
+        )
         return cls(
             funding=FundingSettings(
                 app_url=(source.get("STARK_APP_URL") or "").strip() or None,
                 treasury_account=(source.get("STARK_TREASURY_NEAR_ACCOUNT") or "").strip()
                 or None,
-                usdc_ngn_rate=Decimal(rate) if rate else None,
+                usdc_rate=usdc_rate,
             ),
             float_settings=FloatSettings(
                 low_water_ngn=int(source.get("STARK_FLOAT_LOW_NGN") or 100_000),
             ),
             crypto_payouts=CryptoPayoutSettings(
-                usdc_ngn_rate=Decimal(rate) if rate else None,
+                usdc_rate=usdc_rate,
                 max_ngn=int(source.get("STARK_CRYPTO_WITHDRAW_MAX_NGN") or 200_000),
                 daily_ngn=int(source.get("STARK_CRYPTO_WITHDRAW_DAILY_NGN") or 1_000_000),
             ),

@@ -990,6 +990,24 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertEqual(len(attempts), agent_mod.NearAiModel.ATTEMPTS)
         self.assertEqual(turn.content, "fine")
 
+    def test_a_turn_without_tools_leaves_the_field_out(self):
+        # DeepSeek on NEAR AI answers `tools: []` with a 400, which broke every question.
+        from unittest import mock
+
+        sent = []
+
+        def capture(request, timeout=None):
+            sent.append(json.loads(request.data))
+            return self.response(self.OK)
+
+        with mock.patch.object(agent_mod.urllib.request, "urlopen", capture):
+            self.model().turn([{"role": "user", "content": "how much is left?"}], [])
+            self.model().turn([{"role": "user", "content": "pay it"}], agent_mod.TOOLS)
+
+        self.assertNotIn("tools", sent[0])
+        self.assertNotIn("tool_choice", sent[0])
+        self.assertEqual(sent[1]["tools"], agent_mod.TOOLS)
+
     def test_it_gives_up_and_says_why(self):
         from unittest import mock
 

@@ -50,6 +50,7 @@ class ApiResponses:
         "bad_account": 400,
         "bad_address": 400,
         "over_limit": 400,
+        "below_minimum": 400,
         "daily_limit": 409,
         "authorisation_failed": 502,
         "provider_failed": 502,

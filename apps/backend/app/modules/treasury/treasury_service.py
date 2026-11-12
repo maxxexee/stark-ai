@@ -39,6 +39,7 @@ from app.modules.flutterwave.flutterwave import FlutterwaveError
 from app.modules.chain import near_tx
 from app.modules.intents import one_click
 from app.modules.liquidity.float_service import FloatService
+from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.payment.bill_payment_service import BillPaymentService
 from app.modules.vault.vault_service import VaultService
 from app.modules.wallet.deposit_service import DepositService
@@ -54,7 +55,7 @@ class TreasuryService:
                  bill_payments: BillPaymentService,
                  withdrawals: WithdrawalService, crypto_withdrawals: CryptoWithdrawalService,
                  floats: FloatService, treasury_account: Optional[str],
-                 usdc_ngn_rate: Optional[Decimal],
+                 usdc_rate: UsdcRate,
                  mainnet_rpc: near_tx.NearRpc) -> None:
         self.db = db
         self.vaults = vaults
@@ -64,7 +65,7 @@ class TreasuryService:
         self.crypto_withdrawals = crypto_withdrawals
         self.floats = floats
         self.treasury_account = treasury_account
-        self.usdc_ngn_rate = usdc_ngn_rate
+        self.usdc_rate = usdc_rate
         self.mainnet_rpc = mainnet_rpc
 
     def report(self) -> dict[str, Any]:
@@ -86,12 +87,12 @@ class TreasuryService:
         }
 
     def _treasury_usdc_as_ngn(self) -> Optional[int]:
-        if not (self.treasury_account and self.usdc_ngn_rate):
+        if not self.treasury_account:
             return None
         raw = self.mainnet_rpc.view(USDC_CONTRACT, "ft_balance_of",
                                     {"account_id": self.treasury_account})
         usdc = Decimal(str(raw)) / 10 ** one_click.USDC_DECIMALS
-        return int(usdc * self.usdc_ngn_rate)
+        return int(usdc * self.usdc_rate.market())
 
     # --- the loop -------------------------------------------------------------
 
@@ -119,7 +120,7 @@ def _read(read: Callable[[], Optional[int]]) -> Optional[int]:
     """A balance that could not be read is unknown, not zero."""
     try:
         return read()
-    except (FlutterwaveError, near_tx.NearRpcError) as err:
+    except (FlutterwaveError, near_tx.NearRpcError, RateUnavailable) as err:
         log.warning("balance unreadable: %s", err)
         return None
 
