@@ -343,7 +343,7 @@ class VaultChainTests(unittest.TestCase):
                                      monthly_cap_ngn=30_000, per_payment_cap_ngn=10_000,
                                      meters=[METER])
         self.assertFalse(result.broadcast)
-        self.assertEqual(len(result.tx_hash), 64)
+        self.assertIn(len(result.tx_hash), (43, 44), "base58, as explorers spell it")
 
     def test_create_is_one_transaction_of_five_actions_then_a_token_registration(self):
         signed: list[dict] = []

@@ -600,7 +600,7 @@ class TestNearRpcLive(ServerTest):
         result = chain(self.rpc(), broadcast=True).pay(VAULT, "0101170026583", 5000)
 
         self.assertTrue(result.broadcast)
-        self.assertEqual(len(result.tx_hash), 64)
+        self.assertIn(len(result.tx_hash), (43, 44), "base58, as explorers spell it")
         self.assertEqual(result.value["payment_id"], 7, "the contract's return is decoded")
 
         broadcast = [r for r in self.server.requests if r.json["method"] == "broadcast_tx_commit"]

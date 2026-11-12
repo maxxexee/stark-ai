@@ -58,9 +58,9 @@ ONE_YOCTO = 1
 AGENT_ALLOWANCE_YOCTO = YOCTO_PER_NEAR
 
 
-# Circle's native USDC on each network.
+# Mintable test USDC on testnet (Circle's testnet faucet needs a captcha); Circle's USDC on mainnet.
 USDC_TOKENS = {
-    "testnet": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "testnet": "usdc.fakes.testnet",
     "mainnet": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
 }
 
@@ -199,7 +199,7 @@ class VaultChain:
                 key=key, signer_id=signer_id, receiver_id=receiver_id, nonce=0,
                 block_hash=bytes(32), actions=actions,
             )
-            return ChainResult(signed.hash_hex, None, False)
+            return ChainResult(signed.hash_b58, None, False)
 
         for attempt in (0, 1):
             signed = self._sign_live(signer_id, key, receiver_id, actions, fresh=attempt == 1)
@@ -209,7 +209,7 @@ class VaultChain:
                 if attempt == 0 and "InvalidNonce" in str(err.detail or err):
                     continue
                 raise
-            return ChainResult(signed.hash_hex, near_tx.success_value(outcome), True)
+            return ChainResult(signed.hash_b58, near_tx.success_value(outcome), True)
         raise near_tx.NearRpcError("nonce kept colliding")  # pragma: no cover
 
     def _sign_live(self, signer_id: str, key: near_tx.KeyPair, receiver_id: str,
