@@ -237,6 +237,33 @@ class ReceiptRepository:
             "spent_ngn": int(row["wallet"]["spent_ngn"]),
         }
 
+    def record_withdrawal(self, user_id: str, receipt: dict[str, Any], amount_ngn: int, *,
+                          keep_ngn: int, withdrawal: dict[str, Any]) -> None:
+        """`record_debit` plus the `withdrawals` row, in the same statement.
+
+        Written as one so a crash cannot leave money held with no withdrawal to send
+        or return it. `keep_ngn` must stay in the balance afterwards (card money
+        still on hold: spendable, not withdrawable). Raises if that cannot be met.
+        """
+        head, user_index, amount_index = _insert_sql(from_wallet=True)
+        keep_index = amount_index + 1
+        columns = list(withdrawal)
+        first = keep_index + 1
+        placeholders = ", ".join(f"${first + i}" for i in range(len(columns)))
+        row = self.db.one(
+            f"WITH w AS (UPDATE wallets SET balance_ngn = balance_ngn - ${amount_index}"
+            f" WHERE user_id = ${user_index}"
+            f" AND balance_ngn - ${keep_index} >= ${amount_index} RETURNING balance_ngn)"
+            f", r AS ({head} RETURNING id)"
+            f", d AS (INSERT INTO withdrawals ({', '.join(columns)})"
+            f" SELECT {placeholders} FROM r RETURNING id)"
+            " SELECT id FROM d",
+            [*_values(receipt, user_id), int(amount_ngn), int(keep_ngn),
+             *withdrawal.values()],
+        )
+        if row is None:
+            raise ValueError("insufficient_balance")
+
     def added_this_month(self, user_id: str) -> int:
         """Deposits that landed since the first of the current UTC month."""
         month_start = datetime.now(timezone.utc).replace(

@@ -11,10 +11,15 @@ after 1Click's swap; a refund returns the USDC to the treasury and the naira to 
 user.
 
 **Caps.** The treasury key can move real money, so every request is checked against
-`STARK_CRYPTO_WITHDRAW_MAX_NGN` (one withdrawal) and `STARK_CRYPTO_WITHDRAW_DAILY_NGN`
-(everything not returned in the last 24 hours, across all users) before anything is
-quoted or held. The daily check and the hold run under one lock, so two requests
-cannot both squeeze under the limit.
+`STARK_CRYPTO_WITHDRAW_MAX_NGN` (one withdrawal), `STARK_CRYPTO_WITHDRAW_MAX_USDC`
+(the same withdrawal in USDC, so a bad rate cannot multiply what leaves),
+`STARK_CRYPTO_WITHDRAW_USER_DAILY_NGN` (one account, so one user cannot use up the
+day for everyone) and `STARK_CRYPTO_WITHDRAW_DAILY_NGN` (all users), each daily one
+counting what was not returned in the last 24 hours, before anything is quoted or
+held. The daily checks and the hold run under one lock, so two requests cannot both
+squeeze under a limit; the lock is per process, so several replicas would each
+allow the full amount. The shared ledger (`WithdrawalService.hold`) also refuses
+while the account is paused and keeps card money on hold out.
 
 **Never twice.** The signed transfer is written to the row before it is broadcast.
 A timeout or crash is retried with the same bytes, and a failed broadcast is checked
@@ -54,7 +59,9 @@ NEVER_LANDS = ("Expired", "InvalidNonce")
 class CryptoPayoutSettings:
     usdc_rate: UsdcRate
     max_ngn: int
+    max_usdc: Decimal
     daily_ngn: int
+    user_daily_ngn: int
 
 
 class CryptoWithdrawalService:
@@ -106,31 +113,34 @@ class CryptoWithdrawalService:
                            "Couldn't get a price for that right now. Nothing was taken.") \
                 from err
         usdc_in = math.floor(Decimal(amount_ngn) / rate * 10 ** one_click.USDC_DECIMALS)
+        if usdc_in > self.settings.max_usdc * 10 ** one_click.USDC_DECIMALS:
+            raise ApiError(400, "over_limit",
+                           "That's more than Stark sends as crypto at once right now. "
+                           "Try a smaller amount. Nothing was taken.")
         withdrawal_id = f"wd_{uuid.uuid4().hex[:16]}"
         with self._lock:
-            if self._sent_today() + amount_ngn > self.settings.daily_ngn:
+            everyone, yours = self._sent_today(account_id)
+            if yours + amount_ngn > self.settings.user_daily_ngn:
+                raise ApiError(409, "daily_limit",
+                               f"You can send at most ₦{self.settings.user_daily_ngn:,} as "
+                               "crypto in a day. Try a smaller amount, or try again "
+                               "tomorrow. Nothing was taken.")
+            if everyone + amount_ngn > self.settings.daily_ngn:
                 raise ApiError(409, "daily_limit",
                                "Crypto withdrawals are full for today. Try a bank "
                                "withdrawal, or try again tomorrow. Nothing was taken.")
             quote = self._quote(token, usdc_in, address)
-            receipt_id = self.ledger.hold(
-                account_id, withdrawal_id, amount_ngn,
-                label=f"As {token['symbol']}",
-                source=f"{token['symbol']} on {token['blockchain']} ····{address[-4:]}",
-                vendor="near-intents",
-            )
             now = Clock.now_iso()
-            self.db.query(
-                "INSERT INTO withdrawals (id, user_id, method, amount_ngn, receipt_id,"
-                " status, asset_id, asset_symbol, asset_chain, address, deposit_address,"
-                " usdc_in, amount_out_formatted, created_at, updated_at)"
-                " VALUES ($1, $2, 'crypto', $3, $4, 'sending', $5, $6, $7, $8, $9, $10,"
-                " $11, $12, $12)",
-                [withdrawal_id, account_id, amount_ngn, receipt_id, asset_id,
-                 token["symbol"], token["blockchain"], address, quote["depositAddress"],
-                 str(usdc_in), quote["amountOutFormatted"], now],
-            )
-        self.vaults.debit(account_id, amount_ngn, withdrawal_id)
+            self.ledger.hold(account_id, {
+                "id": withdrawal_id, "user_id": account_id, "method": "crypto",
+                "amount_ngn": amount_ngn, "status": "sending", "asset_id": asset_id,
+                "asset_symbol": token["symbol"], "asset_chain": token["blockchain"],
+                "address": address, "deposit_address": quote["depositAddress"],
+                "usdc_in": str(usdc_in), "amount_out_formatted": quote["amountOutFormatted"],
+                "created_at": now, "updated_at": now,
+            }, label=f"As {token['symbol']}",
+                source=f"{token['symbol']} on {token['blockchain']} ····{address[-4:]}",
+                vendor="near-intents")
         self._send(self._row(withdrawal_id))
         return shape(self._row(withdrawal_id))
 
@@ -155,12 +165,17 @@ class CryptoWithdrawalService:
                            f"That isn't a {token['symbol']} address on "
                            f"{token['blockchain']}.") from err
 
-    def _sent_today(self) -> int:
-        return int(self.db.value(
-            "SELECT COALESCE(SUM(amount_ngn), 0) FROM withdrawals"
+    def _sent_today(self, account_id: str) -> tuple[int, int]:
+        """Crypto not returned in the last 24 hours: across everyone, and this account's."""
+        row = self.db.one(
+            "SELECT COALESCE(SUM(amount_ngn), 0) AS everyone,"
+            " COALESCE(SUM(amount_ngn) FILTER (WHERE user_id = $2), 0) AS yours"
+            " FROM withdrawals"
             " WHERE method = 'crypto' AND status <> 'returned' AND created_at > $1",
-            [Clock.ago(days=1)],
-        ) or 0)
+            [Clock.ago(days=1), account_id],
+        )
+        assert row is not None
+        return int(row["everyone"]), int(row["yours"])
 
     # --- moving it along ------------------------------------------------------------
 
@@ -179,6 +194,8 @@ class CryptoWithdrawalService:
 
     def _send(self, row: dict[str, Any]) -> None:
         assert self.treasury is not None
+        # Idempotent on the reference: catches up a crash between the hold and here.
+        self.vaults.debit(row["user_id"], int(row["amount_ngn"]), row["id"])
         if row["signed_tx"] is None:
             try:
                 transfer = self.treasury.sign_usdc_transfer(row["deposit_address"],

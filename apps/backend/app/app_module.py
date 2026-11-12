@@ -86,7 +86,8 @@ class AppModule:
             one_click_client,
             money.funding,
         )
-        self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.flutterwave)
+        self.withdrawals = WithdrawalService(db, self.receipts, self.vaults, self.flutterwave,
+                                             self.account_repository, money.withdrawals)
         treasury = treasury_chain.treasury_from_env()
         # Real USDC leaves only against real naira. A Flutterwave test key credits
         # checkouts nobody paid for, so it switches crypto payouts off.
