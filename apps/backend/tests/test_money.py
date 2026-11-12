@@ -529,9 +529,13 @@ class VaultServiceTests(MoneyCase):
 
 
 class FloatServiceTests(MoneyCase):
-    def floats(self, balance=500_000):
+    def floats(self, balance=500_000, test_mode=False):
         self.flutterwave = FakeFlutterwave(balance)
+        self.flutterwave.test_mode = test_mode
         return FloatService(self.db, self.flutterwave, FloatSettings(low_water_ngn=100_000))
+
+    def test_test_mode_has_nothing_to_cover(self):
+        self.floats(balance=0, test_mode=True).ensure_can_cover(5000)
 
     def test_covers_a_purchase_that_fits(self):
         self.floats().ensure_can_cover(5000)
@@ -587,8 +591,9 @@ class PaymentPathTests(MoneyCase):
     balance = 64_200
 
     def service(self, gateway, *, float_balance=500_000):
-        floats = FloatService(self.db, FakeFlutterwave(float_balance),
-                              FloatSettings(100_000))
+        live = FakeFlutterwave(float_balance)
+        live.test_mode = False
+        floats = FloatService(self.db, live, FloatSettings(100_000))
         return payment_service.PaymentService(self.receipts, gateway, vaults=self.vaults,
                                               floats=floats)
 

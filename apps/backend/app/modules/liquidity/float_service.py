@@ -79,8 +79,11 @@ class FloatService:
         """Refuse before anything is signed when the balance cannot cover the purchase.
 
         A balance that cannot be read is treated the same way: buying blind is how a
-        purchase fails halfway with nothing to show for it.
+        purchase fails halfway with nothing to show for it. In Flutterwave's test mode
+        purchases are mocked and draw nothing, so there is nothing to cover.
         """
+        if self.flutterwave is not None and self.flutterwave.test_mode:
+            return
         try:
             available = self.available()
         except FlutterwaveError as err:
