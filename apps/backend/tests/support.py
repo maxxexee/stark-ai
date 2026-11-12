@@ -173,6 +173,8 @@ CATALOGUE = [
     catalogue_row("BIL112", "EKEDC PREPAID TOPUP", "UB157", "EKEDC PREPAID TOPUP", 0),
     catalogue_row("BIL116", "PHC DISCO  PREPAID TOPUP", "UB633", "PHC DISCO  PREPAID TOPUP", 0),
     catalogue_row("BIL215", "JOS DISCO ELECTRICITY BILLS", "UB676", "JOS DISCO Prepaid", 0),
+    catalogue_row("BIL140", "BEDC Prepaid Payment", "UB300", "BEDC Prepaid Payment", 0),
+    catalogue_row("BIL141", "PORT HARCOURT DISCO ELECTRICITY BILLS", "UB301", "PHED PREPAID", 0),
     catalogue_row("BIL130", "Federal Inland Revenue Service", "TP214", "FIRS Tax", 0),
 ]
 

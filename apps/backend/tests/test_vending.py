@@ -467,7 +467,8 @@ class CatalogTests(unittest.TestCase):
     def test_every_disco_is_found_by_its_name_or_abbreviation(self):
         for provider, biller in [("Eko Electric", "BIL112"), ("EKEDC", "BIL112"),
                                  ("IKEDC", "BIL113"), ("Port Harcourt Electric", "BIL116"),
-                                 ("Jos Electricity", "BIL215")]:
+                                 ("Jos Electricity", "BIL215"), ("Benin Electric", "BIL140"),
+                                 ("BEDC", "BIL140")]:
             with self.subTest(provider=provider):
                 self.assertEqual(self.catalog.product("electricity", provider).biller_code,
                                  biller)

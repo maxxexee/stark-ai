@@ -43,7 +43,8 @@ REFRESH_SECONDS = 3600
 NETWORKS = ("mtn", "airtel", "glo", "9mobile", "dstv", "gotv", "startimes")
 # The first word of a disco's prepaid row → the disco, as a bill's provider names it.
 # Test mode names Ikeja "IKEJA DISCO ELECTRICITY BILLS"; live names it "IKEDC  PREPAID".
-DISCOS = {"ikeja": "ikeja", "ikedc": "ikeja", "ekedc": "eko", "abuja": "abuja", "benin": "benin",
+DISCOS = {"ikeja": "ikeja", "ikedc": "ikeja", "eko": "eko", "ekedc": "eko", "bedc": "benin",
+          "port": "portharcourt", "abuja": "abuja", "benin": "benin",
           "enugu": "enugu", "ibadan": "ibadan", "jos": "jos", "kaduna": "kaduna",
           "kano": "kano", "phc": "portharcourt"}
 ALIASES = {"etisalat": "9mobile", "dstvcompact": "dstv", "ikedc": "ikeja", "ekedc": "eko",
