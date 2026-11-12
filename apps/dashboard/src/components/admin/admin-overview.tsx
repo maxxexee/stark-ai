@@ -3,6 +3,7 @@ import { Button } from "@stark/ui/components/button";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { AdminChain } from "@/components/admin/admin-chain";
+import { AdminChainOps } from "@/components/admin/admin-chain-ops";
 import { AdminFees } from "@/components/admin/admin-fees";
 import { AdminInFlightTable } from "@/components/admin/admin-in-flight-table";
 import { AdminPots } from "@/components/admin/admin-pots";
@@ -64,6 +65,7 @@ export function AdminOverview({
           <AdminInFlightTable title="Withdrawals in flight" rows={data.withdrawals_in_flight} />
           <AdminInFlightTable title="Deposits open" rows={data.deposits_open} />
           <AdminChain chain={data.chain} vaults={data.vaults} egressIp={data.egress_ip} />
+          {data.chain_ops_stuck ? <AdminChainOps ops={data.chain_ops_stuck} /> : null}
         </>
       ) : null}
     </div>

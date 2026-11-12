@@ -6,6 +6,8 @@ from the DTOs the routes actually use, with "Authorize" for a Neon Auth token.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 
@@ -67,4 +69,5 @@ class SwaggerSetup:
 
     @staticmethod
     def announce(app: FastAPI, host: str, port: int) -> None:
-        print(f"  Documentation: http://{host}:{port}{app.docs_url}")
+        logging.getLogger("stark").info("Documentation: http://%s:%s%s",
+                                        host, port, app.docs_url)

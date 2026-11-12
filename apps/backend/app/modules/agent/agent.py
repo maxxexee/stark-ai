@@ -16,6 +16,7 @@ refusal and no signature.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -29,6 +30,8 @@ from typing import Any, Protocol
 from app.modules.agent import memory
 from app.modules.agent import policy as policy_rules
 from app.modules.bill.dtos.create_bill_dto import CreateBillDto
+
+log = logging.getLogger("stark.agent")
 
 # How long the same charge stays "already done". Measured 2026-10-24: the same
 # spoken phrase — "recharge my airtime number" — bought ₦1,000 twice, 29 seconds
@@ -873,7 +876,8 @@ class Agent:
             # not a turn. The user still gets a sentence: the alternative is a
             # 500 JSON blob the wall phone renders as silence (measured
             # 2026-10-24 — `stub_error: Could not reach NEAR AI`).
-            print(f"  agent model failed after {len(reply.actions)} action(s): {err}")
+            log.warning("agent model failed after %d action(s): %s",
+                        len(reply.actions), err)
             # Effects first: whether the sentence may claim a payment went
             # through depends on the receipt, not on the reply's fields yet.
             applied = self._apply_effects(reply, effect)
@@ -987,9 +991,14 @@ class Agent:
             return {"ok": False,
                     "error": {"code": err.code, "message": err.message,
                               "detail": err.detail}}
-        except Exception as err:  # a tool must never take the agent down
+        except Exception:  # a tool must never take the agent down
+            # Logged in full here; the model only learns that it failed, so a
+            # database or provider message is never read out to the user.
+            log.exception("agent tool %s failed", call.name)
             return {"ok": False,
-                    "error": {"code": "tool_error", "message": str(err), "detail": {}}}
+                    "error": {"code": "tool_error",
+                              "message": "That didn't work just now. Nothing was charged.",
+                              "detail": {}}}
 
     def _pay_bill(self, arguments: dict, effect: dict[str, Any],
                   transcript: str = "") -> dict:

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import os
 import ssl
 import threading
@@ -41,6 +42,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 from urllib.parse import unquote, urlparse
+
+log = logging.getLogger("stark.db")
 
 
 class DatabaseError(RuntimeError):
@@ -205,10 +208,8 @@ class Database:
             raise DatabaseError(f"database unreachable: {last}")
 
         if os.environ.get("STARK_DB_TRACE"):
-            print(
-                f"  [db] {round((time.perf_counter() - started) * 1000)}ms "
-                f"{sql.strip().splitlines()[0][:70]}"
-            )
+            log.debug("%sms %s", round((time.perf_counter() - started) * 1000),
+                      sql.strip().splitlines()[0][:70])
         if response.status >= 400:
             raise DatabaseError(
                 _error_message(raw, response.status), _error_code(raw), query=sql

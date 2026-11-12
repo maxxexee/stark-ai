@@ -10,6 +10,7 @@ every update until both Telegram secrets are set (fail closed).
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from app.common.api_error import ApiError
@@ -21,6 +22,8 @@ from app.modules.telegram.identity_repository import IdentityRepository
 from app.modules.turnlog.turn_logger import TurnLogger
 from app.modules.voice import stt
 from app.shared.services.api_config_service import ApiConfigService
+
+log = logging.getLogger("stark.telegram")
 
 
 class TelegramService:
@@ -43,7 +46,7 @@ class TelegramService:
             # every voice note ("I cannot hear voice notes right now").
             transcribe=stt.transcribe,
             on_turn=self.log_turn,
-            log=lambda line: print(f"  [tg] {line}"),
+            log=log.info,
         )
 
     def owner_account_id(self) -> str:

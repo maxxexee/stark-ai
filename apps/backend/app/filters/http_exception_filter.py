@@ -14,6 +14,9 @@ past the frozen contract, so each kind of failure is mapped here:
 
 from __future__ import annotations
 
+import logging
+import uuid
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -21,6 +24,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.common.api_error import ApiError
 from app.common.dto.contract_field import CONTRACT
+
+log = logging.getLogger("stark.http")
 
 
 class HttpExceptionFilter:
@@ -61,7 +66,13 @@ class HttpExceptionFilter:
 
     @staticmethod
     async def unexpected(request: Request, err: Exception) -> JSONResponse:
-        # Logged, not just returned: a 500 the operator never sees is how
-        # "nothing happens" stays unexplained.
-        print(f"  error {request.method} {request.url.path}: {err}")
-        return JSONResponse(ApiError(500, "stub_error", str(err)).body, status_code=500)
+        # Logged in full, with its traceback, under an id the client is given: the
+        # operator can find it in the platform's logs, while the client never sees
+        # a database message or a provider's error body.
+        ref = uuid.uuid4().hex[:12]
+        log.error("unhandled error ref=%s %s %s", ref, request.method, request.url.path,
+                  exc_info=err)
+        return JSONResponse(
+            ApiError(500, "stub_error",
+                     f"Something went wrong on our side. Reference {ref}.").body,
+            status_code=500)
