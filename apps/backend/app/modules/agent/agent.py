@@ -212,6 +212,9 @@ _PERMISSION = re.compile(
 )
 _WAKE = re.compile(r"^\s*(?:hey\s+|ok\s+|okay\s+)?stark[,\s]+", re.IGNORECASE)
 
+# A web link in the model's reply. See `Agent.respond`.
+_LINK = re.compile(r"(?:https?://|www\.)\S+", re.I)
+
 # The words that turn a refused repeat into an intended one. The duplicate gate
 # below stops the same charge twice in five minutes, but a user who is asked
 # "you already did that — still want it?" and answers "again" must not be stuck
@@ -484,6 +487,42 @@ def parse_amount(text: str) -> int | None:
             break
     amount = total + current
     return amount if seen and amount > 0 else None
+
+
+def heard_amounts(text: str) -> set[int]:
+    """Every naira figure the user said, for checking the one the model chose.
+
+    `parse_amount` keeps only the first, which is right for a default and wrong for
+    a check: "home with 5000 and office with 3000" names two payments. Same forms
+    as `parse_amount`; each run of spoken number words is one figure.
+    """
+    heard = text.lower().replace(",", "").replace("₦", " ").replace("naira", " ")
+    found = {int(round(float(m) * 1000)) for m in re.findall(r"\b(\d+(?:\.\d+)?)\s*k\b", heard)}
+    # Not the halves of a decimal: "1.5k" is ₦1,500, not also ₦1.
+    found |= {int(m) for m in re.findall(r"(?<![\d.])\b(\d{1,9})\b(?!\.\d)", heard)}
+    total = current = 0
+    seen = False
+    # A trailing "" closes the last run.
+    for word in [*re.findall(r"[a-z]+", heard), ""]:
+        if word in _ONES:
+            current += _ONES[word]
+        elif word in _TENS:
+            current += _TENS[word]
+        elif word == "hundred":
+            current = max(current, 1) * 100
+        elif word == "thousand":
+            total += max(current, 1) * 1000
+            current = 0
+        elif word == "and" and seen:
+            continue
+        else:
+            if total + current > 0:
+                found.add(total + current)
+            total = current = 0
+            seen = False
+            continue
+        seen = True
+    return found
 
 
 # --- recency ----------------------------------------------------------------
@@ -788,7 +827,7 @@ class Agent:
         """
         try:
             recent = self.toolbox.recent_activity()
-            bills = self.toolbox.list_bills()
+            bills = [self._as_seen(b) for b in self.toolbox.list_bills()]
             # A receipt names its bill, not its destination. On 2026-10-25 the
             # model was asked "what number" straight after a ₦500 airtime
             # top-up and answered "I can't see the number that was topped up" —
@@ -818,9 +857,10 @@ class Agent:
             # turns a guess into a read. Absent when no airtime bill is saved:
             # there is then nowhere real to get it from, and inventing one is the
             # failure this exists to prevent.
+            # An unconfirmed line is not theirs until they say so in the app.
             phone = next((str(b.get("reference") or "") for b in bills
                           if isinstance(b, dict) and b.get("kind") == "airtime"
-                          and b.get("reference")), "")
+                          and b.get("reference") and not b.get("needs_confirmation")), "")
             if phone:
                 snapshot["phone"] = phone
             # The gate's own numbers, so a refusal can be explained before the
@@ -883,6 +923,9 @@ class Agent:
             applied = self._apply_effects(reply, effect)
             applied.reply = self._lost_reply(applied)
             applied.code = applied.code or "model_unavailable"
+        # Links reach the user only from the deposit itself (`deposit`), never from
+        # the model's words: a link it writes is one something it read put there.
+        applied.reply = _LINK.sub("(link removed)", applied.reply)
         # Every path returns this same `reply` object, so the exchange the model
         # actually saw — prompt, account, tool results, answers — is attached once.
         applied.conversation = messages
@@ -937,6 +980,19 @@ class Agent:
         return self._apply_effects(reply, effect)
 
     @staticmethod
+    def _as_seen(bill: dict) -> dict:
+        """A bill as the model may read it.
+
+        An unconfirmed bill's label and provider are whatever was said to Stark,
+        stored and then read back into every later prompt: a place to plant an
+        instruction. Until the owner confirms it, the model sees its kind only.
+        """
+        if not bill.get("needs_confirmation"):
+            return bill
+        return {**bill, "label": f"unconfirmed {bill.get('kind')} bill",
+                "provider": "unconfirmed"}
+
+    @staticmethod
     def _lost_reply(reply: AgentReply) -> str:
         """A sentence a person can act on, never a stack trace.
 
@@ -966,7 +1022,8 @@ class Agent:
             if call.name == "get_state":
                 return {"ok": True, "data": self.toolbox.get_state()}
             if call.name == "list_bills":
-                return {"ok": True, "data": self.toolbox.list_bills()}
+                return {"ok": True,
+                        "data": [self._as_seen(b) for b in self.toolbox.list_bills()]}
             if call.name == "recent_activity":
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":
@@ -1051,7 +1108,7 @@ class Agent:
                 "error": {
                     "code": "bill_unconfirmed",
                     "message": (
-                        f"{bill.get('label', 'That bill')} is saved but not confirmed. "
+                        f"That {bill.get('kind')} bill is saved but not confirmed. "
                         "Confirm it in the Stark app, then I can pay it. Nothing was "
                         "charged."
                     ),
@@ -1084,7 +1141,10 @@ class Agent:
         #    reach here unpriced — and that is exactly where a model picks the
         #    number for the user: measured 2026-10-24, "recharge my airtime
         #    number" bought ₦1,000 twice, 29 seconds apart.
-        if parse_amount(transcript) is None and not isinstance(plan_price, int):
+        #    The figure must also be one they said, not merely some figure: "pay
+        #    500" must never let the model choose ₦5,000.
+        heard = heard_amounts(transcript)
+        if not heard and not isinstance(plan_price, int):
             effect["code"] = "amount_required"
             return {
                 "ok": False,
@@ -1095,6 +1155,19 @@ class Agent:
                         "charged yet."
                     ),
                     "detail": {"bill_id": bill.get("id")},
+                },
+            }
+        if not isinstance(plan_price, int) and amount not in heard:
+            effect["code"] = "amount_mismatch"
+            return {
+                "ok": False,
+                "error": {
+                    "code": "amount_mismatch",
+                    "message": (
+                        "That is not the amount the user said. Pay exactly what they "
+                        "said, or ask. Nothing has been charged."
+                    ),
+                    "detail": {"amount_ngn": amount, "heard_ngn": sorted(heard)},
                 },
             }
 

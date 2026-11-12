@@ -6,7 +6,8 @@ Renames, removals and type changes mean bumping to `/v2`.
 
 The FastAPI app in `apps/backend` implements all of this, and serves the same
 surface as Swagger UI at **`/docs`** (spec at `/docs/openapi.json`), generated from
-the DTOs the routes use. This file stays the written contract: where they differ,
+the DTOs the routes use — **only with `STARK_DOCS=1`** (local dev; off in production,
+2026-11-12). This file stays the written contract: where they differ,
 this file is the rule and the code is the bug.
 
 ---
@@ -21,7 +22,7 @@ this file is the rule and the code is the bug.
 | IDs | Opaque strings. Don't parse them, don't assume numeric. |
 | Casing | `snake_case` everywhere. |
 | CORS | Open on the stub, so any dev port works. |
-| Auth | **Neon Auth session, enforced.** Sign up / sign in at the branch's Auth URL, then send `Authorization: Bearer <token>` on every `/v1` request — otherwise **401** `unauthorized`. `GET /v1/speak/stream` also accepts `?token=` (an `<audio>` element cannot set a header). The Telegram webhook is the only `/v1` route without it: it authenticates with `X-Telegram-Bot-Api-Secret-Token`. Every token resolves to its own account, wallet and receipts. |
+| Auth | **Neon Auth session, enforced.** Sign up / sign in at the branch's Auth URL, then send `Authorization: Bearer <token>` on every `/v1` request — otherwise **401** `unauthorized`. The token is accepted **only** from that header, never from `?token=` (2026-11-12); `GET /v1/speak/stream` takes a short-lived ticket from `POST /v1/speak/ticket` instead. The Telegram webhook is the only `/v1` route without it: it authenticates with `X-Telegram-Bot-Api-Secret-Token`. Every token resolves to its own account, wallet and receipts. |
 
 ### Error shape
 
@@ -52,10 +53,12 @@ Every non-2xx response has this body:
 | `insufficient_balance` | 409 | Payment or withdrawal exceeds the wallet balance |
 | `bad_kind` | 400 | Bill or plan `kind` is not one of the supported kinds |
 | `bad_reference` | 400 | Bill reference is not 4–32 characters |
-| `bad_bill` | 400 | A bill add/patch field is invalid (e.g. empty label) |
+| `bad_bill` | 400 | A bill add/patch field is invalid: an empty, too long (label over 40, provider over 48) or oddly spelled name — only letters, digits, spaces and `- ' . , & ( ) /` (2026-11-12) |
 | `bad_renews_on` | 400 | `renews_on` is not a date like `2026-11-03` |
 | `bad_audio` | 400 | `/v1/voice` `audio` is not valid base64 |
-| `audio_too_large` | 413 | `/v1/voice` clip is over 8 MB |
+| `audio_too_large` | 413 | `/v1/voice` clip is over 8 MB, or the request body is over 12 MB |
+| `bad_text` | 400 | `/v1/speak` or `/v1/speak/ticket` `text` is empty or over 2,000 characters |
+| `rate_limited` | 429 | Too many speak or telemetry calls this minute for this account; `detail.retry_after_seconds` says when to try again (additive, 2026-11-12) |
 | `unsupported_product` | 400 | No confirmed vendor product for that provider |
 | `plan_required` | 400 | A data/TV bill was sent without a `plan` |
 | `unknown_plan` | 400 | `plan` is not a code in the vendor catalogue |
@@ -213,7 +216,9 @@ Add a bill. Returns **201** with the `Bill` object.
   2026-11-12); anything else is `unsupported_product`. `internet` and `water`
   can be saved, but paying them refuses and charges nothing.
 - `reference` — meter / phone / smartcard number; whitespace is stripped, 4–32 chars.
-- `label` — optional, defaults to `provider`.
+- `label` — optional, defaults to `provider`. At most 40 characters (provider: 48),
+  letters, digits, spaces and `- ' . , & ( ) /` only, else `bad_bill` (2026-11-12):
+  both are read to the agent, so free text there is a place to hide instructions.
 - `plan` — required when the product is sold as a plan (data, DStv/GOtv/Showmax).
   Take the `plan` value from `GET /v1/plans`; the price is stored server-side as
   `plan_price_ngn`, so the client never sends a price the user could edit.
@@ -223,7 +228,7 @@ Add a bill. Returns **201** with the `Bill` object.
 - Adding a bill updates the payer's meter allowlist immediately — the agent can pay
   the new bill in the next turn.
 
-Errors: `bad_kind`, `bad_reference`, `bad_renews_on`, `unsupported_product`,
+Errors: `bad_bill`, `bad_kind`, `bad_reference`, `bad_renews_on`, `unsupported_product`,
 `plan_required`, `unknown_plan`, and `duplicate_bill` (same `kind` + `reference`).
 
 ### `PATCH /v1/bills/{bill_id}`
@@ -236,7 +241,8 @@ Rename a bill, or change a data/TV plan. Every field is optional; returns the fu
 ```
 
 Changing `plan` also rewrites `plan_price_ngn`. Errors: `unknown_bill`,
-`bad_bill` (empty label, or a plan on a kind that has none), `unsupported_product`,
+`bad_bill` (a label that is empty or breaks the rules under `POST /v1/bills`, or a
+plan on a kind that has none), `unsupported_product`,
 `unknown_plan`, and `bad_renews_on`.
 
 `renews_on` is **additive** (2026-10-24) and has three states, because clearing a date
@@ -886,27 +892,49 @@ of an answered `/v1/voice`.
 ```
 
 `audio` is a WAV data URL, or `null` when voice is off — **200 either way** (voice is
-an enhancement, never an error). Missing/empty `text` is **400 `bad_text`**.
+an enhancement, never an error). Missing/empty `text`, or more than **2,000
+characters**, is **400 `bad_text`**. Each call counts toward the account's speak limit
+(`STARK_SPEAK_PER_MINUTE`, default 30 a minute): over it is **429 `rate_limited`**.
+
+### `POST /v1/speak/ticket`
+
+**Additive** (2026-11-12). A link for an `<audio>` element, which cannot send
+`Authorization`. Same body and `bad_text` rules as `POST /v1/speak`:
+
+```json
+{ "text": "Your light bill is 5,000 naira." }
+```
+
+```json
+{ "url": "/v1/speak/stream?ticket=3q2-7wQ…", "expires_in_seconds": 120 }
+```
+
+`url` is relative to the API's base URL. The ticket opens only
+`GET /v1/speak/stream`, only for this text, for two minutes; the text stays on the
+server, so neither it nor the session token travels in a URL. It may be fetched more
+than once while it lives (browsers re-request an `src`). Counts toward the speak limit.
 
 ### `GET /v1/speak/stream`
 
 **Additive** (2026-10-24). The same voice, sent as it is produced, for a player that
-can start on partial data:
+can start on partial data. **Changed 2026-11-12:** it takes only a ticket from
+`POST /v1/speak/ticket` — no `?text=`, no `?token=`, no `Authorization`:
 
 ```
-GET /v1/speak/stream?text=Your%20light%20bill%20is%205%2C000%20naira.
+GET /v1/speak/stream?ticket=3q2-7wQ…
 ```
 
 - **200**, `Content-Type: audio/mpeg` when streaming (no `Content-Length` — the body
   is deliberately not buffered), `audio/wav` when a whole buffered clip is substituted.
-- **400 `bad_text`** with no text, **503 `no_voice`** (JSON) when no provider is
+- **401 `unauthorized`** for an unknown or expired ticket, **429 `rate_limited`**
+  when the account is over its speak limit (every fetch counts), **503 `no_voice`** (JSON) when no provider is
   configured at all, so a client expecting audio can tell "quiet" from "refused".
 - Measured 2026-10-24: first byte **~0.5s**, whole clip ~1.0s, against **~1.3s** for
   the buffered `POST /v1/speak` before a single sample could play.
 
 `POST /v1/speak` remains the simple contract — Telegram and anything that needs one
-complete `data:` URL should keep using it. The dashboard plays this stream and
-falls back to `POST /v1/speak` if it errors.
+complete `data:` URL should keep using it. The dashboard fetches a ticket, plays this
+stream and falls back to `POST /v1/speak` if it errors.
 
 ### `POST /v1/telemetry`
 
@@ -920,6 +948,8 @@ Stored per account, and stamped with the **server's** clock when it arrives: a `
 in the body is ignored (2026-10-27), because `units_left` and `days_left` are worked
 out from the gaps between readings, and a wrong device clock would move the meter.
 Post each sample as it is taken. `watts` must be a number of 0 or more (`bad_watts`).
+At most `STARK_TELEMETRY_PER_MINUTE` readings (default 120) a minute per account;
+beyond that **429 `rate_limited`** (2026-11-12).
 **It feeds `/v1/suggestions`** (2026-10-24):
 the `load_imbalance` line needs two or more `device_id`s in the last 24 hours, and
 reads each device's **average** watts — ten samples of one plug are one habit, not
@@ -1150,5 +1180,6 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-03 | Crypto withdrawals: `POST /v1/wallet/withdraw/crypto`. `Withdrawal` gains `method` and `crypto` (null for bank), and `status` gains `sending`; `/v1/wallet/methods` gains `withdraw`. New codes `bad_address`, `over_limit`, `daily_limit`. Additive only. |
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
+| 2026-11-12 | **API surface hardening.** The session token is read only from `Authorization: Bearer`; `?token=` is refused on every route. `GET /v1/speak/stream` now takes only `?ticket=` from the new `POST /v1/speak/ticket` (`?text=` and `?token=` are gone). `/v1/speak` and `/v1/speak/ticket` refuse `text` over 2,000 characters (`bad_text`); `/v1/voice` refuses a body over 12 MB (`audio_too_large`) while reading it. New code `rate_limited` (429) on speak routes and `/v1/telemetry`. Bill `label` (40) and `provider` (48) are length- and charset-checked (`bad_bill`). `/docs`, `/redoc` and the spec are served only with `STARK_DOCS=1`, and `GET /` no longer lists routes. The agent pays only an amount the user said (`amount_mismatch` on its reply `code`) and strips web links from its reply text. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
 | 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |

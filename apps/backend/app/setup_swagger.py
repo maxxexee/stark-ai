@@ -2,6 +2,10 @@
 
 `docs/API.md` remains the written contract; this is the same surface, generated
 from the DTOs the routes actually use, with "Authorize" for a Neon Auth token.
+
+Served only with `STARK_DOCS=1`, which is a local-dev setting: in production the
+spec is a map of every route for whoever asks. The token pasted into "Authorize"
+is not persisted, so it does not outlive the tab in localStorage.
 """
 
 from __future__ import annotations
@@ -29,15 +33,15 @@ class SwaggerSetup:
     OPENAPI_URL = "/docs/openapi.json"
 
     @staticmethod
-    def options(version: str) -> dict:
+    def options(version: str, *, enabled: bool) -> dict:
+        """With `enabled` false, FastAPI mounts none of the three routes."""
         return {
             "title": "Stark API",
             "description": DESCRIPTION,
             "version": version,
-            "docs_url": SwaggerSetup.DOCS_URL,
-            "redoc_url": "/redoc",
-            "openapi_url": SwaggerSetup.OPENAPI_URL,
-            "swagger_ui_parameters": {"persistAuthorization": True},
+            "docs_url": SwaggerSetup.DOCS_URL if enabled else None,
+            "redoc_url": "/redoc" if enabled else None,
+            "openapi_url": SwaggerSetup.OPENAPI_URL if enabled else None,
         }
 
     @staticmethod
@@ -69,5 +73,7 @@ class SwaggerSetup:
 
     @staticmethod
     def announce(app: FastAPI, host: str, port: int) -> None:
+        if app.docs_url is None:
+            return
         logging.getLogger("stark").info("Documentation: http://%s:%s%s",
                                         host, port, app.docs_url)

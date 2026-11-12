@@ -88,7 +88,8 @@ def create_app(module: Optional[AppModule] = None) -> FastAPI:
             if event is not None:
                 event.set()
 
-    app = FastAPI(lifespan=lifespan, **SwaggerSetup.options(module.config.version))
+    app = FastAPI(lifespan=lifespan, **SwaggerSetup.options(module.config.version,
+                                                          enabled=module.config.docs_enabled))
     app.state.module = module
     # Wide open, so the dashboard works from any dev port and any deployed domain.
     app.add_middleware(

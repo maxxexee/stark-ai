@@ -26,6 +26,7 @@ import type {
   Receipt,
   ResolvedAccount,
   SpeakReply,
+  SpeakTicket,
   StartDeposit,
   State,
   Suggestion,
@@ -166,13 +167,13 @@ export const api = {
     }),
   speak: (text: string) => request<SpeakReply>("POST", "/v1/speak", { text }),
   /**
-   * Streams the voice from its first bytes; fall back to `speak` if it errors. An `<audio>` element
-   * cannot send an `Authorization` header, so the token rides along as `?token=`.
+   * A URL that streams the voice from its first bytes; fall back to `speak` if it errors. An
+   * `<audio>` element cannot send `Authorization`, so the URL carries a two-minute ticket for this
+   * text instead of the session token.
    */
-  speakStreamUrl: (text: string) => {
-    const params = new URLSearchParams({ text });
-    if (authToken) params.set("token", authToken);
-    return `${baseUrl}/v1/speak/stream?${params.toString()}`;
+  speakStreamUrl: async (text: string) => {
+    const { url } = await request<SpeakTicket>("POST", "/v1/speak/ticket", { text });
+    return `${baseUrl}${url}`;
   },
   /** Stub only: restores the seeded demo state. Never call it while someone is demoing. */
   resetDemo: () => request<unknown>("POST", "/v1/_stub/reset", {}),

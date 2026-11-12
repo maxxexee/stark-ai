@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
 
 from app.decorators.inject_module import Module
 
 router = APIRouter(tags=["Health"])
 
 
-@router.get("/", summary="Service, version and every route")
-def index(request: Request, module: Module) -> JSONResponse:
-    routes = sorted(
-        f"{method} {route.path}"
-        for route in request.app.routes if isinstance(route, APIRoute)
-        for method in route.methods
-    )
+@router.get("/", summary="Service and version")
+def index(module: Module) -> JSONResponse:
+    """No route list: that is the docs' job, and they are off in production."""
     return JSONResponse({"service": "stark-api", "version": module.config.version,
-                         "stub": True, "routes": routes})
+                         "stub": True})
 
 
 @router.get("/health", summary="Liveness")

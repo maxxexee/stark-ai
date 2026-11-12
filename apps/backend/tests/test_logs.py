@@ -12,6 +12,7 @@ from app.common.logs import Logs, RedactingFormatter, Redactor
 class RedactorTests(unittest.TestCase):
     CASES = [
         ('GET /v1/speak/stream?text=hi&token=abc.def-123 HTTP/1.1', "abc.def-123"),
+        ('GET /v1/speak/stream?ticket=Zx9_kQ-4rT HTTP/1.1', "Zx9_kQ-4rT"),
         ("Authorization: Bearer sess_abcdef123456", "sess_abcdef123456"),
         ("key ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51Dow",
          "3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51Dow"),

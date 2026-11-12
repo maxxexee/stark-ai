@@ -58,6 +58,7 @@ class ApiResponses:
         "authorisation_failed": 502,
         "provider_failed": 502,
         "float_low": 503,
+        "rate_limited": 429,
     }
 
     @staticmethod
