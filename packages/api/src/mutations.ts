@@ -7,6 +7,7 @@ import type {
   BillPatch,
   CryptoWithdrawInput,
   LimitsPatch,
+  LinkedChat,
   NewBill,
   PaymentInput,
   PaymentRequest,
@@ -146,6 +147,15 @@ export function useVoiceAudio() {
 export function useLinkCode() {
   return useMutation({
     mutationFn: () => api.linkCode(),
+  });
+}
+
+/** The chat can no longer see or move money from its next message on. */
+export function useUnlinkChat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (chat: LinkedChat) => api.unlinkChat(chat),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.linkedChats }),
   });
 }
 

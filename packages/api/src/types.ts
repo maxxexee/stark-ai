@@ -141,6 +141,15 @@ export type LinkCode = {
   user_id?: string;
 };
 
+/** A chat that speaks for this account. Show `chat_hint`; `channel_user_id` is what Remove names. */
+export type LinkedChat = {
+  channel: string;
+  channel_user_id: string;
+  chat_hint: string;
+  display_name: string | null;
+  linked_at: string;
+};
+
 export type LimitsPatch = {
   monthly_cap_ngn?: number;
   per_payment_cap_ngn?: number;

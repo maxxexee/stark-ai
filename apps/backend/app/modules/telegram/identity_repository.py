@@ -9,8 +9,9 @@ The rules this file exists to enforce (HANDOFF §8A):
   message or a webhook body is never trusted; the only claim that counts is a
   6-digit code issued by the app and redeemed here.
 - **One identity maps to exactly one user**; one user may have many identities.
-- **Link attempts are rate-limited** and codes expire, are single-use, and are
-  stored hashed.
+- **Link attempts are rate-limited** per sender and across every sender, and codes
+  expire, are single-use, are stored hashed, and an account holds one live code at
+  a time.
 
 Telegram keys on the numeric chat/user id. Nothing here keys on a display name.
 
@@ -37,6 +38,19 @@ from app.database import neon
 CODE_TTL_SECONDS = 600        # 10 minutes, per the handoff design.
 MAX_LINK_ATTEMPTS = 5         # per identity per window.
 ATTEMPT_WINDOW_SECONDS = 600  # sliding window on failed link attempts.
+# Failed redeems from every sender together, per window. The per-sender budget
+# alone did not bound guessing: each new Telegram account is a fresh sender. Past
+# this, every redeem is refused until the window rolls over — a burst of wrong
+# codes can hold linking up for ten minutes, which beats a guessed code binding a
+# stranger's chat to someone's wallet. Twenty guesses at six digits, with two codes
+# live, is one hit in about 25,000 windows: half a year of nonstop guessing.
+MAX_GLOBAL_FAILED_ATTEMPTS = 20
+# The `link_attempts` row that counts every sender's failures together. No Telegram
+# id is "*", so it cannot collide with a real sender.
+EVERY_SENDER = ("*", "*")
+# Telegram retries an update for at most a day; a dedupe row older than this can
+# never be claimed again, so it is dropped.
+PROCESSED_RETENTION_SECONDS = 2 * 24 * 3600
 
 
 def _now() -> datetime:
@@ -60,10 +74,15 @@ class IdentityRepository:
     # --- link codes ----------------------------------------------------------
 
     def issue_code(self, user_id: str, ttl_seconds: int = CODE_TTL_SECONDS) -> str:
-        """Mint a single-use code for `user_id`. Returns the plaintext once."""
+        """Mint a single-use code for `user_id`. Returns the plaintext once.
+
+        Minting cancels the account's earlier codes. Otherwise every tap of "Get
+        another code" left one more live code for a guesser to hit.
+        """
         code = f"{secrets.randbelow(1_000_000):06d}"
         now = _now()
-        self.db.query("DELETE FROM link_codes WHERE expires_at < $1", [_iso(now)])
+        self.db.query("DELETE FROM link_codes WHERE user_id = $1 OR expires_at < $2",
+                      [user_id, _iso(now)])
         self.db.query(
             "INSERT INTO link_codes (code_hash, user_id, created_at, expires_at)"
             " VALUES ($1, $2, $3, $4)",
@@ -77,20 +96,24 @@ class IdentityRepository:
         """Redeem a code: binds the identity to its user and returns the user_id.
 
         Fails (returns None) when the code is unknown, expired, already used, or
-        the sender has burned through its attempt budget.
+        the sender — or every sender together — has burned through its attempt
+        budget. A budget that is spent refuses even the right code, so a guess
+        that lands after the limit is worth nothing.
         """
         code = (code or "").strip()
         if not code:
             return None
         now = _now()
+        if (self._attempts(channel, channel_user_id, now) >= MAX_LINK_ATTEMPTS
+                or self._attempts(*EVERY_SENDER, now) >= MAX_GLOBAL_FAILED_ATTEMPTS):
+            return None
         row = self.db.one(
             "SELECT user_id, expires_at, used_at FROM link_codes WHERE code_hash = $1",
             [_hash(code)],
         )
         if row is None or row["used_at"] or row["expires_at"] < _iso(now):
             self._record_failed_attempt(channel, channel_user_id, now)
-            return None
-        if self._attempts(channel, channel_user_id, now) >= MAX_LINK_ATTEMPTS:
+            self._record_failed_attempt(*EVERY_SENDER, now)
             return None
 
         self.db.query(
@@ -171,6 +194,20 @@ class IdentityRepository:
         )
         return row is not None
 
+    def unlink_for(self, user_id: str, channel: str, channel_user_id: str) -> bool:
+        """Unlink a chat on behalf of the account it speaks for — the app's Remove.
+
+        Scoped to `user_id`, so one account can never unlink another's chat by
+        naming its id.
+        """
+        row = self.db.one(
+            "DELETE FROM channel_identities"
+            " WHERE channel = $1 AND channel_user_id = $2 AND user_id = $3"
+            " RETURNING 1 AS removed",
+            [channel, channel_user_id, user_id],
+        )
+        return row is not None
+
     def identities_for(self, user_id: str) -> list[dict]:
         return self.db.query(
             "SELECT channel, channel_user_id, display_name, linked_at"
@@ -191,11 +228,19 @@ class IdentityRepository:
 
         Telegram re-delivers updates; processing one twice would double-pay or
         double-reply, so every adapter call claims the id first. The claim is the
-        insert itself: the primary key decides, not a read-then-write.
+        insert itself: the primary key decides, not a read-then-write. The caller
+        passes an id that is unique across the whole bot (Telegram's `update_id`),
+        never a per-chat one.
+
+        Rows past `PROCESSED_RETENTION_SECONDS` are dropped in the same statement,
+        so the table stays a few days deep instead of growing forever.
         """
+        now = _now()
         row = self.db.one(
-            "INSERT INTO processed_messages (channel, message_id, processed_at)"
+            "WITH pruned AS (DELETE FROM processed_messages WHERE processed_at < $4)"
+            " INSERT INTO processed_messages (channel, message_id, processed_at)"
             " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING 1 AS claimed",
-            [channel, message_id, _iso(_now())],
+            [channel, message_id, _iso(now),
+             _iso(now - timedelta(seconds=PROCESSED_RETENTION_SECONDS))],
         )
         return row is not None

@@ -63,7 +63,9 @@ class ControlsTest(unittest.TestCase):
         self.assertIsNone(reply.receipt_id)
         self.assertEqual(self.account.store.wallet()["balance_ngn"], 50_000)
 
-    def test_a_linked_chat_can_pause_and_resume(self):
+    def test_a_linked_chat_can_pause_but_only_the_app_resumes(self):
+        # A chat linked with a leaked code could otherwise switch payments back
+        # on right after the owner paused them.
         module = self.api.module
         adapter = module.telegram.adapter
         code = module.identities.issue_code(self.account.id)
@@ -73,8 +75,9 @@ class ControlsTest(unittest.TestCase):
 
         self.assertIn("Paused", adapter._command("/pause", chat, None))
         self.assertTrue(self.client.get("/v1/controls").json()["paused"])
-        self.assertIn("Resumed", adapter._command("/resume", chat, None))
-        self.assertFalse(self.client.get("/v1/controls").json()["paused"])
+        self.assertEqual(adapter._command("/resume", chat, None), telegram.RESUME_IN_APP)
+        self.assertTrue(self.client.get("/v1/controls").json()["paused"])
+        self.assertFalse(self.client.post("/v1/controls/resume").json()["paused"])
 
     def test_an_unlinked_chat_cannot_pause_anyone(self):
         adapter = self.api.module.telegram.adapter

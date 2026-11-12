@@ -65,6 +65,7 @@ Every non-2xx response has this body:
 | `no_route` | 404 | Unknown path |
 | `bad_request` | 400 | The body is not valid JSON, or a field has the wrong type (additive, 2026-10-27) |
 | `not_configured` | 409 | `POST /v1/link/code` while `STARK_TG_OWNER_EMAIL` names no account (additive, 2026-10-27) |
+| `unknown_identity` | 404 | `DELETE /v1/link/identities/...` names no chat linked to this account (additive, 2026-11-12) |
 
 > Ordering note: a **pause** beats everything. Otherwise the **per-payment** cap is checked first, then the **monthly** cap,
 > then the balance. An amount that breaches all three returns `over_per_payment_cap`.
@@ -405,7 +406,9 @@ The owner's off switch (additive, 2026-11-03). All three return:
   Questions are still answered.
 - Pausing twice keeps the first `paused_at`; resuming an active account is a no-op.
 - Stored per account, so a restart keeps it. `/v1/state` mirrors it as `paused`.
-- A linked Telegram chat can send `/pause` and `/resume`.
+- A linked Telegram chat can send `/pause`. Resuming is app-only (2026-11-12): `/resume`
+  in a chat answers with a pointer to the app and changes nothing, so a chat linked with
+  a leaked code cannot undo the owner's pause.
 
 ### `GET /v1/approvals`, `POST /v1/approvals/{id}/approve`, `POST /v1/approvals/{id}/deny`
 
@@ -940,10 +943,19 @@ A verified update returns 200:
 ```
 
 `handled` is for debugging, not display: `agent` (the user asked something),
-`command` (`/link`, `/whoami`, `/unlink`, `/help`), `unlinked` (linking
+`command` (`/link`, `/whoami`, `/unlink`, `/pause`, `/help`), `unlinked` (linking
 instructions only — the agent was never called), `asleep` (a voice note without
-the word "stark"), `voice_unheard` (no STT configured), `duplicate` (a
-re-delivered update — processed once), or `ignored`.
+the word "stark"), `voice_unheard` (no STT configured), `forwarded` (a forwarded
+message: refused, never read as an instruction), `duplicate` (a re-delivered
+update — processed once), or `ignored`.
+
+**Only a person's own DM is read (2026-11-12).** The bot handles a `message`
+update in a `private` chat whose `from.id` is the chat. Everything else is
+`ignored` with no reply: groups, channel posts, edited messages, messages sent on
+behalf of a chat (`sender_chat`) and anonymous group admins (`GroupAnonymousBot`).
+Dedupe keys on `update_id`, which is unique per bot; it used to key on
+`message_id`, which counts per chat, so two chats' messages collided and the
+later one was dropped for good.
 
 How a linked user talks to the bot: send `link 482913` (the code comes from the
 app) to bind the chat, then ask in plain text or as a voice note. Voice notes go
@@ -989,9 +1001,39 @@ gets five redeem attempts before it is locked out. Redeeming it links the chat
 (`/start <code>` from the deep link, or `/link <code>` typed); an already-linked
 chat is never rebound and must `/unlink` first.
 
+Since 2026-11-12: minting a code cancels the account's earlier unredeemed codes,
+so an account has one live code at a time. Twenty failed redeems across all chats
+within ten minutes refuse every redeem until the window rolls over. When a chat
+links, the account's other linked chats are told, with the new chat's name.
+
 No request body. Errors: none specific — a failure to reach Telegram degrades to
 `deep_link: null` rather than an error, because the code is the part that
 matters.
+
+### `GET /v1/link/identities` → `LinkedChat[]`, `DELETE /v1/link/identities/{channel}/{channel_user_id}`
+
+**Additive (2026-11-12).** The chats that speak for this account, oldest first, so
+the owner can spot one they did not link and remove it.
+
+```json
+[
+  {
+    "channel": "telegram",
+    "channel_user_id": "5512094821",
+    "chat_hint": "•••• 4821",
+    "display_name": "Tunde",
+    "linked_at": "2026-11-12T09:12:00Z"
+  }
+]
+```
+
+Show `chat_hint`; `channel_user_id` is what `DELETE` names. `display_name` is the
+Telegram first name (or username) the chat had when it linked, and may be `null`.
+
+`DELETE` unlinks the chat at once — its next message gets linking instructions —
+and returns `{ "unlinked": true, "channel": "telegram", "channel_user_id": "5512094821" }`.
+Only this account's chats can be removed: any other id, linked to another account
+or to nobody, is **404 `unknown_identity`**.
 
 ### `GET /v1/turnlog`
 
@@ -1109,3 +1151,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
+| 2026-11-12 | Telegram identity fixes. `GET /v1/link/identities` and `DELETE /v1/link/identities/{channel}/{channel_user_id}` added (new code `unknown_identity`, 404). The webhook reads only DMs (`handled: "ignored"` for groups, channel posts, anonymous admins) and refuses forwarded messages (`handled: "forwarded"`); dedupe keys on `update_id`. `/resume` from a chat no longer resumes. A new link code cancels the account's earlier ones, failed redeems are capped across all chats, and a new link is announced to the account's other chats. The bot owner is `STARK_TG_OWNER_ACCOUNT_ID`, else the account with `STARK_TG_OWNER_EMAIL` verified. |

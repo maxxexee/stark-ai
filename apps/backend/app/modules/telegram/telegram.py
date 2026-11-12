@@ -11,12 +11,22 @@ Order of checks, and why:
    compared in constant time against `TELEGRAM_WEBHOOK_SECRET`. No secret is
    configured → the adapter refuses everything (`disabled`), because an open
    webhook is a wallet anyone on the internet can talk to.
-2. **Dedupe.** Telegram re-delivers updates; each `update_id` is claimed in
-   `processed_messages` before any work, so a retry cannot double-pay.
-3. **Identity.** An unlinked chat gets link instructions and nothing else —
+2. **Only a person's own DM.** A `message` in a `private` chat with a `from.id`
+   is all that is handled. Groups, channel posts and anonymous admins are dropped
+   unanswered: a channel post has no sender, so each one looked like a fresh
+   stranger with a fresh attempt budget, and every anonymous group admin shares
+   one id (GroupAnonymousBot). A forwarded message is someone else's words, so it
+   is answered with a refusal and never read as an instruction.
+3. **Dedupe.** Telegram re-delivers updates; each `update_id` is claimed in
+   `processed_messages` before any work, so a retry cannot double-pay. It is the
+   `update_id` and not the `message_id`: message ids count per chat, so two chats'
+   messages shared an id and the second was dropped as a "duplicate" — a `/pause`
+   included.
+4. **Identity.** An unlinked chat gets link instructions and nothing else —
    never state, never the agent, never a payment. The only claim that counts is
-   a 6-digit code minted by the app (`identity_repository.py`).
-4. **Wake gate, for voice only.** A voice note must open with an attempt at the
+   a 6-digit code minted by the app (`identity_repository.py`). When a chat
+   links, the account's other linked chats are told, so a stolen code is noticed.
+5. **Wake gate, for voice only.** A voice note must open with an attempt at the
    wake word — the same `wake.py` rule `/v1/voice` enforces, mishearings and all —
    because a voice note can be recorded by accident.
    A typed message in a DM with the bot is deliberate — no wake word needed.
@@ -71,8 +81,20 @@ VOICE_ASLEEP = "I'm here. Say 'stark' first, then your question."
 HELP_TEXT = (
     "Stark pays your household bills inside your limits.\n"
     "Try: 'hello stark how much is left' or 'hello stark pay 5000 for electricity'.\n"
-    "Commands: /pause, /resume, /whoami, /unlink, /help"
+    "Commands: /pause, /whoami, /unlink, /help. Resume payments in the Stark app."
 )
+FORWARDED_REPLY = (
+    "I do not act on forwarded messages. Type or say what you need yourself."
+)
+RESUME_IN_APP = (
+    "Resuming is only done in the Stark app, so a chat alone can never switch "
+    "payments back on. Open the app and tap Resume."
+)
+# Telegram's stand-in sender for every anonymous group admin: one id, many people.
+GROUP_ANONYMOUS_BOT = 1087968824
+# Any of these on a message means it was forwarded from someone else.
+FORWARD_FIELDS = ("forward_origin", "forward_from", "forward_from_chat",
+                  "forward_sender_name", "forward_date")
 
 
 class TelegramError(Exception):
@@ -101,6 +123,7 @@ class IdentityLike(Protocol):
     def consume_code(self, code: str, channel: str, channel_user_id: str,
                      display_name: str | None = None) -> str | None: ...
     def unlink(self, channel: str, channel_user_id: str) -> bool: ...
+    def identities_for(self, user_id: str) -> list[dict]: ...
     def claim_message(self, channel: str, message_id: str) -> bool: ...
 
 
@@ -309,22 +332,25 @@ class TelegramAdapter:
 
     def handle_update(self, update: dict[str, Any]) -> dict[str, Any]:
         self.stats["updates"] += 1
-        update_id = str(update.get("update_id") or "")
-        message = update.get("message") or update.get("channel_post") or {}
-        message_id = str(message.get("message_id") or update_id or "")
-
-        if update_id or message_id:
-            if not self.identities.claim_message(CHANNEL, message_id or update_id):
-                self.stats["duplicates"] += 1
-                return {"ok": True, "handled": "duplicate", "update_id": update.get("update_id")}
-
-        chat_id = (message.get("chat") or {}).get("id")
-        if chat_id is None:
-            self.stats["ignored"] += 1
-            return {"ok": True, "handled": "ignored", "update_id": update.get("update_id")}
-
+        update_id = update.get("update_id")
+        # `channel_post`, `edited_message` and the rest are never read: only a new
+        # message a person sent the bot in their own DM.
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
         sender = message.get("from") or {}
-        channel_user_id = str(sender.get("id") or chat_id)
+        # In a DM the chat is the person, so the reply goes to whoever is linked.
+        if (update_id is None or chat.get("type") != "private"
+                or not sender.get("id") or sender["id"] == GROUP_ANONYMOUS_BOT
+                or chat.get("id") != sender["id"] or message.get("sender_chat")):
+            self.stats["ignored"] += 1
+            return {"ok": True, "handled": "ignored", "update_id": update_id}
+
+        if not self.identities.claim_message(CHANNEL, f"update:{update_id}"):
+            self.stats["duplicates"] += 1
+            return {"ok": True, "handled": "duplicate", "update_id": update_id}
+
+        chat_id = chat["id"]
+        channel_user_id = str(sender["id"])
         display_name = sender.get("first_name") or sender.get("username")
         text = (message.get("text") or message.get("caption") or "").strip()
 
@@ -342,7 +368,7 @@ class TelegramAdapter:
         if deposit:
             self._send(chat_id, pay_note(deposit))
         self._emit_turn(turn)
-        return {"ok": True, "handled": turn.outcome, "update_id": update.get("update_id")}
+        return {"ok": True, "handled": turn.outcome, "update_id": update_id}
 
     def _emit_turn(self, turn: Turn) -> None:
         """Hand the exchange to the log, if anything is listening.
@@ -400,6 +426,10 @@ class TelegramAdapter:
 
     def _route(self, message: dict, text: str, channel_user_id: str,
                display_name: str | None, chat_id: int) -> Turn:
+        if any(key in message for key in FORWARD_FIELDS):
+            self.stats["ignored"] += 1
+            return Turn(outcome="forwarded", reply=FORWARDED_REPLY)
+
         if text.startswith("/"):
             self.stats["commands"] += 1
             return Turn(outcome="command", heard=text,
@@ -479,7 +509,24 @@ class TelegramAdapter:
         if user_id is None:
             return ("That code did not work. Codes expire after 10 minutes and "
                     "work once. Get a fresh one in the app.")
+        self._announce_link(user_id, channel_user_id, display_name)
         return "Linked. Ask me for your balance, or say 'hello stark pay 5000 for electricity'."
+
+    def _announce_link(self, user_id: str, channel_user_id: str,
+                       display_name: str | None) -> None:
+        """Tell the account's other linked chats that a new one just joined.
+
+        A link code that leaked (read over a shoulder, a screenshot) would
+        otherwise bind a stranger's chat silently. The owner sees this in a chat
+        they already use and can remove the stranger from the Connect screen.
+        """
+        who = f" ({display_name})" if display_name else ""
+        text = (f"A new Telegram chat{who} was just linked to your Stark account. "
+                "If that was not you, send /pause here and remove it in the Stark "
+                "app under Connect a chat.")
+        for ident in self.identities.identities_for(user_id):
+            if ident["channel"] == CHANNEL and ident["channel_user_id"] != channel_user_id:
+                self._send(int(ident["channel_user_id"]), text)
 
     def _command(self, text: str, channel_user_id: str, display_name: str | None) -> str:
         parts = text.split()
@@ -503,18 +550,20 @@ class TelegramAdapter:
             user_id = self.identities.resolve(CHANNEL, channel_user_id)
             return f"Linked to {user_id}." if user_id else "Not linked."
 
-        if verb in ("/pause", "/resume"):
+        if verb == "/resume":
+            # Pausing from any chat is safe; resuming is not. A chat linked with a
+            # leaked code must not be able to undo the owner's off switch.
+            return RESUME_IN_APP
+
+        if verb == "/pause":
             user_id = self.identities.resolve(CHANNEL, channel_user_id)
             if user_id is None:
                 return NOT_LINKED_REPLY
             if self.controls is None:
                 return "Pausing from chat is not set up. Use the app for now."
-            if verb == "/pause":
-                self.controls.pause(user_id)
-                return ("Paused. I will not pay anything until you send /resume. "
-                        "You can still ask me questions.")
-            self.controls.resume(user_id)
-            return "Resumed. I can pay your bills again, inside your limits."
+            self.controls.pause(user_id)
+            return ("Paused. I will not pay anything until you resume in the "
+                    "Stark app. You can still ask me questions.")
 
         if verb == "/unlink":
             if self.identities.unlink(CHANNEL, channel_user_id):
