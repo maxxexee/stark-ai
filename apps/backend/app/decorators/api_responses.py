@@ -12,8 +12,6 @@ class ApiResponses:
         "unauthorized": 401,
         "admin_disabled": 403,
         "unknown_bill": 404,
-        "unknown_device": 404,
-        "device_unreachable": 503,
         "no_route": 404,
         "bad_amount": 400,
         "bad_watts": 400,

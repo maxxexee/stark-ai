@@ -21,7 +21,6 @@ from app.modules.flutterwave import flutterwave_controller
 from app.modules.bill import bill_controller, payee_controller
 from app.modules.control import control_controller
 from app.modules.demo import demo_controller
-from app.modules.device import device_controller
 from app.modules.health_checker import health_checker_controller
 from app.modules.limit import limit_controller
 from app.modules.payment import payment_controller
@@ -46,7 +45,6 @@ CONTROLLERS = (
     wallet_controller,
     suggestion_controller,
     telemetry_controller,
-    device_controller,
     voice_controller,
     telegram_controller,
     auth_controller,

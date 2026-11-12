@@ -42,14 +42,3 @@ class AccountToolbox:
             return self.module.bill_payments.pay(self.account_id, bill_id, amount_ngn)
         except ApiError as err:
             raise agent_layer.PaymentError(err.code, err.message, err.detail) from err
-
-    # Devices: the plug is physical and shared, but the registry and the state it
-    # remembers are per account, so the agent only ever sees its own list.
-    def list_devices(self) -> list[dict]:
-        return self.module.devices.devices(self.account_id)
-
-    def switch_appliance(self, device_id: str, on: bool) -> dict:
-        try:
-            return self.module.devices.switch(self.account_id, device_id, on)
-        except ApiError as err:
-            raise agent_layer.PaymentError(err.code, err.message, err.detail) from err

@@ -22,8 +22,6 @@ from app.modules.bill.bill_service import BillService
 from app.modules.chain import near_tx, treasury_chain, vault_chain
 from app.modules.control.control_service import ControlService
 from app.modules.demo.demo_service import DemoService
-from app.modules.device import devices as device_layer
-from app.modules.device.device_service import DeviceService
 from app.modules.intents import one_click
 from app.modules.limit.limit_service import LimitService
 from app.modules.liquidity.float_service import FloatService
@@ -109,9 +107,6 @@ class AppModule:
             self.accounts, self.receipts, self.vaults, test_money=self.flutterwave is None
         )
         self.telemetry = TelemetryService(self.readings, self.receipts)
-        # One TV (or Shelly, or the stub) for the whole server: the plug is a
-        # physical thing in one home, addressed from env, not per account.
-        self.devices = DeviceService(device_layer.plug_from_env())
         self.bill_payments = BillPaymentService(
             self.accounts,
             self.bills,
