@@ -24,6 +24,7 @@ export type ApiErrorCode =
   | "bad_account"
   | "bad_address"
   | "over_limit"
+  | "below_minimum"
   | "daily_limit"
   | "float_low"
   | "authorisation_failed"
@@ -84,6 +85,7 @@ export function errorCopy(error: unknown): string {
     case "bad_account":
     case "bad_address":
     case "over_limit":
+    case "below_minimum":
     case "daily_limit":
     case "float_low":
     case "authorisation_failed":

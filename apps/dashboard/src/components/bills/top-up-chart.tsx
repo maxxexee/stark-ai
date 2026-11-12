@@ -19,15 +19,21 @@ export function TopUpChart({ history }: { history: Receipt[] }) {
       <div
         role="img"
         aria-label={`${paid.length} top-ups from ${formatShortDate(first.created_at)} to ${formatShortDate(last.created_at)}, the latest ${formatNaira(last.amount_ngn)}`}
-        className="flex h-40 items-end gap-2.5"
+        className="flex"
       >
-        {paid.map((r, i) => (
-          <TopUpBar key={r.id} receipt={r} max={max} latest={i === paid.length - 1} />
-        ))}
-      </div>
-      <div className="tabular flex justify-between text-[11px] text-muted-foreground">
-        <span>{formatShortDate(first.created_at)}</span>
-        <span>{formatShortDate(last.created_at)}</span>
+        {paid.map((r, i) => {
+          const date = formatShortDate(r.created_at);
+          const newDay = i === 0 || date !== formatShortDate(paid[i - 1]!.created_at);
+          return (
+            <TopUpBar
+              key={r.id}
+              receipt={r}
+              max={max}
+              latest={i === paid.length - 1}
+              date={newDay ? date : undefined}
+            />
+          );
+        })}
       </div>
     </Card>
   );

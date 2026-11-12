@@ -234,6 +234,24 @@ export type FundingMethods = {
   withdraw: { bank: boolean; crypto: boolean };
 };
 
+/** Naira per USDC right now, as decimal strings: what a deposit credits, what a
+ * withdrawal costs. A quote locks its own rate when it is made. */
+export type UsdcRates = { deposit: string; withdraw: string };
+
+/** Price a crypto deposit from whichever side the user typed. `amount_in` is a decimal
+ * string in the asset. */
+export type DepositPreviewInput =
+  | { asset_id: string; amount_ngn: number }
+  | { asset_id: string; amount_in: string };
+
+/** What a crypto deposit would take (`amount_in`, in the asset) and credit (`amount_ngn`). */
+export type DepositPreview = {
+  asset_id: string;
+  amount_ngn: number;
+  amount_in: string;
+  rate: string;
+};
+
 /** Something a crypto deposit can be paid with (NEAR Intents routes it to naira). */
 export type CryptoAsset = { asset_id: string; symbol: string; chain: string };
 
