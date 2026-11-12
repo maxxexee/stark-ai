@@ -143,7 +143,7 @@ Libraries and services (Q-005): near-sdk (Rust) for the contract. FastAPI and py
 for the API. React, TanStack Start, Router and Query, Tailwind v4 and shadcn/ui on Base
 UI for the web. NEAR AI Cloud for the model and Whisper. NEAR Intents (1Click) for
 crypto deposits. Neon for Postgres and sign-in. Flutterwave for naira bill payments.
-ElevenLabs and Kokoro-82M for speech. The Telegram Bot API. The repository layout
+ElevenLabs for speech. The Telegram Bot API. The repository layout
 follows [midday](https://github.com/midday-ai/midday). AI coding assistants were used.
 
 ## License
