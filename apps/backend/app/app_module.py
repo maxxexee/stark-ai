@@ -22,8 +22,6 @@ from app.modules.bill.bill_service import BillService
 from app.modules.chain import near_tx, treasury_chain, vault_chain
 from app.modules.control.control_service import ControlService
 from app.modules.demo.demo_service import DemoService
-from app.modules.device import devices as device_layer
-from app.modules.device.device_service import DeviceService
 from app.modules.intents import one_click
 from app.modules.limit.limit_service import LimitService
 from app.modules.liquidity.float_service import FloatService
@@ -32,8 +30,6 @@ from app.modules.payment.payment_service import PaymentService
 from app.modules.plan.plan_service import PlanService
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.reminder.reminder_service import ReminderService
-from app.modules.sms.sms_config import SmsConfig
-from app.modules.sms.sms_service import SmsService
 from app.modules.state.state_service import StateService
 from app.modules.stub.stub_service import StubService
 from app.modules.suggestion.suggestion_service import SuggestionService
@@ -51,8 +47,6 @@ from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.wallet_service import WalletService
 from app.modules.wallet.crypto_withdrawal_service import CryptoWithdrawalService
 from app.modules.wallet.withdrawal_service import WithdrawalService
-from app.modules.whatsapp.whatsapp_config import WhatsAppConfig
-from app.modules.whatsapp.whatsapp_service import WhatsAppService
 from app.shared.services.api_config_service import ApiConfigService
 
 
@@ -113,9 +107,6 @@ class AppModule:
             self.accounts, self.receipts, self.vaults, test_money=self.flutterwave is None
         )
         self.telemetry = TelemetryService(self.readings, self.receipts)
-        # One TV (or Shelly, or the stub) for the whole server: the plug is a
-        # physical thing in one home, addressed from env, not per account.
-        self.devices = DeviceService(device_layer.plug_from_env())
         self.bill_payments = BillPaymentService(
             self.accounts,
             self.bills,
@@ -148,12 +139,6 @@ class AppModule:
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )
         self.voice = VoiceService(self.accounts)
-        self.whatsapp = WhatsAppService(
-            WhatsAppConfig.from_env(), self.identities, self.accounts, self.controls
-        )
-        self.sms = SmsService(
-            SmsConfig.from_env(), self.identities, self.accounts, self.controls
-        )
         self.reminders = ReminderService(self.accounts, self.telegram)
         self.stub = StubService(
             config,

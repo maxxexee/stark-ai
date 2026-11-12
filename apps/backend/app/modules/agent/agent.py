@@ -110,23 +110,6 @@ Rules:
   limit", "your balance is ₦6,000 against a ₦50,000 payment". The balance is the
   reason only when it really is the lower number, and a payment the balance cannot
   cover is refused, not sent for approval.
-- To switch an appliance, call switch_appliance with a device_id from the devices
-  in the account. Never invent one. A question about a device, like "is the TV
-  on?", is not an instruction: answer it and switch nothing.
-- A pronoun is a device. The devices in the account are the only things you can
-  switch, so when it lists exactly one, "it", "that" and "the telly" are that
-  device and "turn it off", "turn it on", "switch it on", "put it back on" and
-  "turn it back on" are all orders to call switch_appliance now. Measured
-  failure: with only tv-plug-1 saved, "turn it back on" was answered "which device
-  did you want to switch on" instead of switch_appliance(device_id=tv-plug-1,
-  on=true). Asking which device when the account holds one is a refusal to do the
-  job. Ask which device only when two saved devices could be the one meant.
-- Say only what the plug reported. "The TV is on" needs status on and confirmed
-  true. Standby means the socket is live but the set is asleep, so say that. If
-  the plug did not answer, the TV did not change. When the result says simulated,
-  say it was a simulation.
-- The devices list carries last_status only when Stark switched it in this
-  session. Null means you do not know, and you say so instead of guessing.
 - A payment is only done when the tool returns a token or status "delivered".
   "pending" means it is still going through — say so, and never claim it is done.
 - If they name no amount and the bill has no plan price, ask for the figure in one
@@ -171,11 +154,9 @@ Rules:
 - For a hypothetical about money, do the arithmetic on the numbers in the account and
   answer with the figure. "If I pay A and top up B, how much is left?" is a
   subtraction, not a request to pay either one.
-- You can pay bills and switch the devices saved in the account, and nothing
-  else. You cannot send or forward messages, receipts or money to WhatsApp,
-  Telegram, email or SMS. Say plainly that you cannot do that yet, and never
-  imply something was sent. Switching a saved device is something you can do, so
-  never answer a switch order by saying you cannot control it.
+- You can pay bills, and nothing else. You cannot send or forward messages,
+  receipts or money to Telegram, email or anywhere else. Say plainly that you
+  cannot do that yet, and never imply something was sent.
 - When the account shows something worth acting on before being asked — units
   or days low, a bill renewing within the week, the monthly limit nearly used —
   end with one short sentence saying so, plainly. Once, not after every reply,
@@ -247,41 +228,6 @@ def asks_instead_of_paying(transcript: str) -> bool:
     return not _PERMISSION.search(said)
 
 
-# A question about a device, not an instruction to switch it. "Is the TV on?"
-# must read, never flip the socket: the same failure the payment gate exists for,
-# measured on the model that called pay_bill on "what's my recent subscription".
-# An imperative is needed (`turn|switch|power|shut|cut` … `on|off`), and a
-# sentence that opens as a question keeps its question unless it is asking
-# permission ("can you turn it off" is the user saying yes in advance).
-_SWITCH_IMPERATIVE = re.compile(
-    r"\b(?:turn|switch|power|shut|cut)\b[^.]{0,24}\b(on|off)\b", re.IGNORECASE
-)
-_SWITCH_ASK = re.compile(
-    r"^\s*(?:is|are|was|were|did|does|do|has|have|why|what|whats|what's|how|which"
-    r"|show|tell|explain)\b",
-    re.IGNORECASE,
-)
-_SWITCH_PERMISSION = re.compile(
-    r"^\s*(?:can|could|would|will)\s+(?:you|u)\b", re.IGNORECASE
-)
-
-
-def asks_instead_of_switching(transcript: str) -> bool:
-    """True when the utterance is about a device, not an order to flip it.
-
-    Conservative in both directions: with no imperative switch phrase there is
-    nothing to act on ("is the TV on?", "why is the TV off?", "the TV"), and a
-    question about the past stays a question even though it contains the verb
-    ("did you turn it off?"). Permission still switches.
-    """
-    said = _WAKE.sub("", transcript or "")
-    if not _SWITCH_IMPERATIVE.search(said) and not _PUT_ON.search(said):
-        return True
-    if _SWITCH_ASK.search(said) and not _SWITCH_PERMISSION.search(said):
-        return True
-    return False
-
-
 TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -349,55 +295,13 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_devices",
-            "description": (
-                "List the saved devices (a plug, a TV) with their ids, labels and "
-                "the last state Stark observed. The instructions already carry "
-                "these, so call this only when a device is not in that list."
-            ),
-            "parameters": {"type": "object", "properties": {},
-                           "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "switch_appliance",
-            "description": (
-                "Turn a saved device's power on or off through its plug. Use a "
-                "device_id from the devices in your instructions — never invent "
-                "one. Only call this when the user clearly asked to switch it: a "
-                "question about a device is not an instruction. The result says "
-                "what the plug read back; claim only that."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "device_id": {
-                        "type": "string",
-                        "description": "Id from the devices in your instructions.",
-                    },
-                    "on": {
-                        "type": "boolean",
-                        "description": "true to switch it on, false to switch it off.",
-                    },
-                },
-                "required": ["device_id", "on"],
-                "additionalProperties": False,
-            },
-        },
-    },
 ]
 
 # Reads the snapshot already carries, so they are not offered when it is present
 # (see Agent._tools_for). The definitions stay in TOOLS: `pay_bill` is the only
 # tool the model needs that the prompt cannot answer, and a failed snapshot read
 # puts every read back in play.
-READ_ONLY_TOOLS = frozenset({"get_state", "list_bills", "recent_activity",
-                             "list_devices"})
+READ_ONLY_TOOLS = frozenset({"get_state", "list_bills", "recent_activity"})
 
 
 # --- model interface ---------------------------------------------------------
@@ -540,25 +444,6 @@ _METER_RE = re.compile(r"\b(light|lights|electric|electricity|meter|nepa|prepaid
 _PRODUCT_RE = re.compile(
     r"\b(data|airtime|tv|cable|dstv|gotv|startimes|showmax|water|internet|subscription)\b"
 )
-# A switch, and the thing being switched. Both are needed: "turn it off" names
-# no device, and "the TV" on its own is not an order to do anything.
-_SWITCH_RE = re.compile(
-    r"\b(?:turn|switch|power|shut|cut)\b[^.]{0,24}\b(?:on|off)\b", re.IGNORECASE
-)
-_DEVICE_RE = re.compile(r"\b(tv|telly|television|plug|device|socket)\b", re.IGNORECASE)
-# "turn it back on" names the device the way people actually talk after they have
-# just mentioned it. Measured live 2026-11-04: without this, that sentence read as
-# no device at all, so the switch was never even offered and Stark asked which one.
-_PRONOUN_DEVICE = re.compile(r"\b(?:it|that|this|them)\b", re.IGNORECASE)
-# "Put it back on" is how people say it, and `put` is not one of the switch
-# verbs. Narrow on purpose — a pronoun or a device, then on/off — because
-# "put 500 on my meter" is a payment and must never read as a switch.
-_PUT_ON = re.compile(
-    r"\bput\s+(?:it|that|this|them|the\s+(?:tv|telly|television|plug|device|socket))"
-    r"\s+(?:back\s+)?(on|off)\b",
-    re.IGNORECASE,
-)
-_SWITCH_ON = re.compile(r"\b(on|off)\b", re.IGNORECASE)
 
 
 def _window_phrase(minutes: int) -> str:
@@ -603,47 +488,10 @@ def _choose_bill(bills: list[dict], user_text: str) -> dict | None:
     return bills[0]
 
 
-def _choose_device(devices: list[dict], user_text: str) -> dict | None:
-    """Which device to switch, or None when the words do not name one.
-
-    Same rule as bills: a label match wins, a single device is unambiguous, and
-    two devices with no match is a question rather than a guess.
-    """
-    if not devices:
-        return None
-    matched = _label_match(devices, user_text.lower())
-    if matched is not None:
-        return matched
-    return devices[0] if len(devices) == 1 else None
-
-
 def _default_amount(bill: dict) -> int:
     """A plan-priced bill costs what the plan costs, not the sample ₦5,000."""
     price = bill.get("plan_price_ngn")
     return int(price) if isinstance(price, int) and price > 0 else DEFAULT_AMOUNT_NGN
-
-
-def _switch_sentence(data: dict) -> str:
-    """What a switch may be said to have done, from the plug's own read-back.
-
-    Shared by the model's tool result and the deterministic path below it, so no
-    sentence can ever be more confident than the result behind it.
-    """
-    label = data.get("label", "The device")
-    status = data.get("status")
-    if not data.get("confirmed"):
-        return f"{label} didn't answer, so I can't confirm it changed."
-    if status == "on":
-        spoken = f"{label} is on."
-    elif status == "standby":
-        spoken = f"Power's on but {label} is still asleep. Its remote will wake it."
-    elif status == "off":
-        spoken = f"{label} is off."
-    else:
-        spoken = f"{label} is {status}."
-    if data.get("simulated"):
-        spoken += " That was the simulated plug."
-    return spoken
 
 
 class FakeModel:
@@ -670,12 +518,6 @@ class FakeModel:
         heard = user_text.lower()
         if _ACTIVITY_RE.search(heard):
             return ModelTurn(tool_calls=[ToolCall("recent_activity", {})])
-        if (_DEVICE_RE.search(heard) or _PRONOUN_DEVICE.search(heard)) and (
-                _SWITCH_RE.search(heard) or _PUT_ON.search(heard)
-                or _SWITCH_ASK.search(heard)):
-            # The device list is what names a device, so read it first, exactly
-            # as a careful model would before calling switch_appliance.
-            return ModelTurn(tool_calls=[ToolCall("list_devices", {})])
         if _PAY_RE.search(heard):
             # Read the bill list first, exactly as a careful model would.
             return ModelTurn(tool_calls=[ToolCall("list_bills", {})])
@@ -734,31 +576,6 @@ class FakeModel:
                     spoken += f", roughly {days} days at this rate"
             return ModelTurn(content=spoken + ".")
 
-        if name == "list_devices":
-            devices = result.get("data") or []
-            chosen = _choose_device(devices, user_text)
-            if chosen is None:
-                return ModelTurn(content="I don't have that device saved yet.")
-            if asks_instead_of_switching(user_text):
-                label = chosen.get("label", "the device")
-                last = chosen.get("last_status")
-                if last is None:
-                    return ModelTurn(
-                        content=f"I haven't switched {label} yet, so I don't know."
-                    )
-                spoken = {"on": "on", "off": "off", "standby": "on standby"}[last]
-                return ModelTurn(content=f"{label} is {spoken}.")
-            wanted = _SWITCH_ON.search(user_text)
-            return ModelTurn(
-                tool_calls=[
-                    ToolCall(
-                        "switch_appliance",
-                        {"device_id": chosen["id"],
-                         "on": bool(wanted and wanted.group(1).lower() == "on")},
-                    )
-                ]
-            )
-
         if name == "list_bills":
             bills = result.get("data") or []
             labels = [b.get("label", "a bill") for b in bills]
@@ -804,16 +621,6 @@ class FakeModel:
                     )
                 )
             return ModelTurn(content=f"Done. ₦{amount:,} paid to {label}.")
-
-        if name == "switch_appliance":
-            if not result.get("ok"):
-                error = result.get("error") or {}
-                return ModelTurn(
-                    content=error.get("message") or "That didn't work."
-                )
-            return ModelTurn(
-                content=_switch_sentence(result.get("data") or {})
-            )
 
         return ModelTurn(content="I couldn't do that one. Want to try again?")
 
@@ -949,8 +756,6 @@ class ToolBox(Protocol):
     def list_bills(self) -> list[dict]: ...
     def recent_activity(self) -> list[dict]: ...
     def pay(self, bill_id: str, amount_ngn: int) -> dict: ...
-    def list_devices(self) -> list[dict]: ...
-    def switch_appliance(self, device_id: str, on: bool) -> dict: ...
     # A payment over a limit, filed for the owner to approve in the app. Returns
     # the request with its `window_minutes`.
     def request_approval(self, bill_id: str, amount_ngn: int, reason: str) -> dict: ...
@@ -1076,28 +881,6 @@ class Agent:
                 "bills": bills,
                 "recent_payments": payments,
             }
-            # A device is named the same way a bill is. `last_status` is what the
-            # plug last read back in this session; null means nobody has switched
-            # it, which is a fact to say rather than a state to guess.
-            try:
-                snapshot["devices"] = self.toolbox.list_devices()
-            except Exception:
-                snapshot["devices"] = []
-            # One saved device means a pronoun has an answer, and saying so is
-            # what turns "switch it on" into a call. Measured 2026-11-04 against
-            # the live model: with only tv-plug-1 saved, "turn it back on" and
-            # "switch it on" were answered "which device did you want to switch",
-            # because a prompt rule is advice and the account is the record. The
-            # note names the device, never its state, so nothing is claimed here
-            # that the plug has not read back.
-            saved = snapshot["devices"] if isinstance(snapshot["devices"], list) else []
-            if len(saved) == 1 and isinstance(saved[0], dict):
-                snapshot["note"] = (
-                    f"Only one device is saved: {saved[0].get('label')} "
-                    f"(device_id {saved[0].get('id')}). Any 'it', 'that' or other "
-                    "pronoun in a switch order means this device, so switch it "
-                    "instead of asking which one."
-                )
             # The owner's number lives only as the airtime bill's reference, which
             # is why the model used to answer "what's my phone number?" three
             # different ways in one conversation (measured 2026-10-24). Naming it
@@ -1156,11 +939,6 @@ class Agent:
 
         try:
             applied = self._drive(messages, reply, effect, has_snapshot, transcript)
-            # A clear order for the only saved device has to end in a switch, not
-            # in the model talking itself out of one. Measured live 2026-11-04:
-            # "put it back on" came back "I cannot switch it on without a clear
-            # command" with one device saved and nothing left to disambiguate.
-            applied = self._do_the_obvious_switch(applied, transcript)
         except Exception as err:
             # The model is unreachable, timed out, or answered something that is
             # not a turn. The user still gets a sentence: the alternative is a
@@ -1181,80 +959,9 @@ class Agent:
             self.threads.remember(thread, transcript, applied.reply)
         return applied
 
-    def _unacted_switch(self, transcript: str) -> dict | None:
-        """The switch an unambiguous order asked for, if there is one.
-
-        Only the case with nothing left to reason about: one device saved and an
-        imperative switch phrase. Every other reading stays the model's job.
-        """
-        if asks_instead_of_switching(transcript):
-            return None
-        said = _WAKE.sub("", transcript or "")
-        # A sentence that also names money is not a bare switch: "turn it off and
-        # pay my DStv" has to reach the model with both halves intact, or the
-        # payment silently disappears behind a switch that did happen.
-        if _PAY_RE.search(said) or _BILLS_RE.search(said) or _ACTIVITY_RE.search(said):
-            return None
-        direction = _PUT_ON.search(said) or _SWITCH_IMPERATIVE.search(said)
-        if direction is None:
-            return None
-        try:
-            devices = self.toolbox.list_devices()
-        except Exception:
-            return None
-        if len(devices) != 1 or not isinstance(devices[0], dict):
-            return None
-        return {
-            "device_id": devices[0].get("id", ""),
-            "on": direction.group(1).lower() == "on",
-        }
-
-    def _do_the_obvious_switch(self, reply: AgentReply, transcript: str) -> AgentReply:
-        """Do the order the model only talked about.
-
-        The switch goes through `_switch_appliance`, so it meets the same
-        registry check and the same read-back as any other switch — this path
-        can refuse or report an unconfirmed plug exactly as the model's can.
-        """
-        if "switch_appliance" in reply.actions:
-            return reply
-        arguments = self._unacted_switch(transcript)
-        if arguments is None:
-            return reply
-        try:
-            result = self._switch_appliance(arguments, transcript)
-        except Exception as err:  # a refusal lands the way a tool call's does
-            reply.reply = getattr(err, "message", "") or reply.reply
-            return reply
-        if not result.get("ok"):
-            error = result.get("error") or {}
-            reply.reply = error.get("message") or reply.reply
-            return reply
-        reply.actions.append("switch_appliance")
-        reply.reply = _switch_sentence(result.get("data") or {})
-        return reply
-
-    def _is_plain_switch(self, transcript: str) -> bool:
-        """An order that names a switch and nothing else.
-
-        One saved device, an imperative, and no payment, bill or activity words
-        (all of that lives in `_unacted_switch`) — then there is nothing for a
-        model to route and nothing for it to word, so the turn is the plug's
-        read-back and nothing more.
-        """
-        return self._unacted_switch(transcript) is not None
-
     def _drive(self, messages: list[dict], reply: AgentReply, effect: dict,
                has_snapshot: bool, transcript: str) -> AgentReply:
         """The model loop. Kept separate so one failure can be caught above it."""
-        # The order is unambiguous, so the switch runs first and the model is
-        # never asked: on the demo box a model turn costs 1.3-1.5s of silence
-        # that comes *after* the seconds spent waiting for the set to report
-        # itself dark, and it can only re-say what the plug already reported.
-        if self._is_plain_switch(transcript):
-            applied = self._do_the_obvious_switch(reply, transcript)
-            messages.append({"role": "assistant", "content": applied.reply})
-            return applied
         for _ in range(self.max_turns):
             turn = self.model.turn(
                 messages, self._tools_for(has_snapshot, transcript))
@@ -1290,17 +997,6 @@ class Agent:
                         "content": json.dumps(result),
                     }
                 )
-            # A switch the plug has already answered is a finished answer, so it
-            # is not sent back to the model to be put into words: that costs a
-            # round trip of silence (1.1-2.2s measured on the demo box, and a
-            # second one when the model replies empty) after a switch that just
-            # spent seconds waiting for the set to admit it went dark. The
-            # sentence below comes from the same read-back the model would quote.
-            if (len(turn.tool_calls) == 1
-                    and turn.tool_calls[0].name == "switch_appliance"
-                    and results and results[0].get("ok")):
-                reply.reply = _switch_sentence(results[0].get("data") or {})
-                return self._apply_effects(reply, effect)
             # The tools may have moved money; the next turn must not read a
             # snapshot from before the payment it just made.
             messages[0], has_snapshot = self._system_message()
@@ -1341,10 +1037,6 @@ class Agent:
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":
                 return self._pay_bill(call.arguments, effect, transcript)
-            if call.name == "list_devices":
-                return {"ok": True, "data": self.toolbox.list_devices()}
-            if call.name == "switch_appliance":
-                return self._switch_appliance(call.arguments, transcript)
             return {"ok": False, "error": {"code": "unknown_tool",
                                            "message": f"Unknown tool {call.name}",
                                            "detail": {}}}
@@ -1504,54 +1196,6 @@ class Agent:
         effect["receipt_id"] = receipt.get("id")
         effect["tx_hash"] = receipt.get("tx_hash")
         return {"ok": True, "data": receipt}
-
-    def _switch_appliance(self, arguments: dict, transcript: str = "") -> dict:
-        """Flip one socket, under two rules: no question acts, no device is invented.
-
-        There is no money here — no wallet row, no receipt, no signature — so
-        none of the payment caps apply. What applies is the truth: the result is
-        whatever the plug read back, and a plug that did not answer is an error
-        the reply has to repeat, never a confident "it's off".
-        """
-        if asks_instead_of_switching(transcript):
-            return {
-                "ok": False,
-                "error": {
-                    "code": "not_a_switch_request",
-                    "message": (
-                        "The user asked about the device rather than telling you to "
-                        "switch it. Nothing was switched. Answer from the account, "
-                        "then ask before switching anything."
-                    ),
-                    "detail": {},
-                },
-            }
-
-        device_id = str(arguments.get("device_id") or "")
-        on = arguments.get("on")
-        if not isinstance(on, bool):
-            return {
-                "ok": False,
-                "error": {"code": "bad_switch",
-                          "message": "Say on or off. Nothing was switched.",
-                          "detail": {}},
-            }
-
-        try:
-            devices = self.toolbox.list_devices()
-        except Exception:
-            devices = []
-        if not any(d.get("id") == device_id for d in devices):
-            return {
-                "ok": False,
-                "error": {"code": "unknown_device",
-                          "message": "I don't have that device saved.",
-                          "detail": {"device_id": device_id}},
-            }
-
-        # A refusal here (device_unreachable) becomes a PaymentError and lands in
-        # `_run_tool`'s handler, so the code and the message reach the reply.
-        return {"ok": True, "data": self.toolbox.switch_appliance(device_id, on)}
 
     def _just_paid(self, bill_id: Any, amount: int) -> int | None:
         """Seconds since this exact charge was already made, or None.

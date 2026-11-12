@@ -1,10 +1,8 @@
-"""TTS tests: the client's fail-closed rules, the sidecar's request handling,
-and the ffmpeg voice-note encode — all against a fake sidecar.
+"""TTS tests: the ElevenLabs client's fail-closed rules, streaming, and the
+ffmpeg voice-note encode, all against a fake ElevenLabs.
 
-Hermetic by design. `tts_server` imports kokoro lazily, which is exactly what
-lets these tests import it in the standard-library-only test env — no torch,
-no model, no keys. The only real dependency exercised is `ffmpeg`, and only to
-encode a WAV this test builds itself.
+Hermetic by design: no keys and no network. The only real dependency exercised
+is `ffmpeg`, and only to encode audio this test builds itself.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.modules.voice import audio
 from app.modules.voice import tts
-import tts_server
 
 
 def _tiny_wav(seconds: float = 0.05, rate: int = 16000) -> bytes:
@@ -33,125 +30,6 @@ def _tiny_wav(seconds: float = 0.05, rate: int = 16000) -> bytes:
         w.setframerate(rate)
         w.writeframes(b"\x00\x00" * frames)
     return buf.getvalue()
-
-
-class FakeSidecar:
-    """A real HTTP server speaking the OpenAI speech shape, with canned bytes."""
-
-    def __init__(self, payload: bytes = b"RIFF" + b"\x00" * 60, status: int = 200):
-        self.payload = payload
-        self.status = status
-        self.requests: list[dict] = []
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):  # noqa: N802 - required name
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else b""
-                outer.requests.append(json.loads(raw or b"{}"))
-                self.send_response(outer.status)
-                self.send_header("Content-Type", "audio/wav")
-                self.send_header("Content-Length", str(len(outer.payload)))
-                self.end_headers()
-                self.wfile.write(outer.payload)
-
-            def log_message(self, fmt, *args):
-                pass
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-
-class ClientCase(unittest.TestCase):
-    """`tts` reads STARK_TTS_URL at call time, so the tests own the env."""
-
-    def setUp(self):
-        # ElevenLabs keys are common in a demo shell: without popping them the
-        # "no url" case would go looking for a live API instead of refusing.
-        self.saved = {k: os.environ.pop(k, None)
-                      for k in ("STARK_TTS_URL", "ELEVENLABS_API_KEY",
-                                "ELEVENLABS_API_URL")}
-
-    def tearDown(self):
-        for key, value in self.saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-    def test_no_url_is_a_refusal_not_a_guess(self):
-        wav, why = tts.synthesize("hello stark")
-        self.assertIsNone(wav)
-        self.assertEqual(why, tts.NO_URL)
-
-    def test_no_url_means_no_voice_note(self):
-        self.assertIsNone(tts.voice_note("hello stark"))
-
-    def test_empty_text_is_failed_not_a_request(self):
-        side = FakeSidecar()
-        try:
-            wav, why = tts.synthesize("   ", url=side.url)
-        finally:
-            side.close()
-        self.assertIsNone(wav)
-        self.assertEqual(why, tts.FAILED)
-        self.assertEqual(side.requests, [])
-
-    def test_round_trip_sends_the_openai_shape(self):
-        canned = b"RIFF" + b"\x00" * 60
-        side = FakeSidecar(payload=canned)
-        try:
-            wav, why = tts.synthesize("hello stark", url=side.url)
-        finally:
-            side.close()
-        self.assertEqual(why, tts.OK)
-        self.assertEqual(wav, canned)
-
-        sent = side.requests[0]
-        self.assertEqual(sent["input"], "hello stark")
-        self.assertEqual(sent["response_format"], "wav")
-        self.assertTrue(sent["model"])
-        self.assertTrue(sent["voice"])
-
-    def test_sidecar_error_is_failed_not_empty_audio(self):
-        side = FakeSidecar(payload=b"boom", status=500)
-        try:
-            wav, why = tts.synthesize("hello stark", url=side.url)
-        finally:
-            side.close()
-        self.assertIsNone(wav)
-        self.assertEqual(why, tts.FAILED)
-
-    def test_tiny_response_is_failed_not_audio(self):
-        side = FakeSidecar(payload=b"no")
-        try:
-            wav, why = tts.synthesize("hello stark", url=side.url)
-        finally:
-            side.close()
-        self.assertIsNone(wav)
-        self.assertEqual(why, tts.FAILED)
-
-    def test_sidecar_down_is_failed(self):
-        # A port nothing is listening on: the refusal must be immediate and quiet.
-        wav, why = tts.synthesize("hello stark", url="http://127.0.0.1:1",
-                                  timeout=2.0)
-        self.assertIsNone(wav)
-        self.assertEqual(why, tts.FAILED)
-
-    @unittest.skipUnless(audio.ffmpeg_available(), "ffmpeg not installed")
-    def test_voice_note_is_ogg_opus(self):
-        side = FakeSidecar(payload=_tiny_wav())
-        try:
-            note = tts.voice_note("hello stark", url=side.url)
-        finally:
-            side.close()
-        self.assertIsNotNone(note)
-        self.assertTrue(note.startswith(b"OggS"), note[:8] if note else None)
 
 
 class FakeEleven:
@@ -204,9 +82,9 @@ class FakeEleven:
 
 
 class ElevenLabsCase(unittest.TestCase):
-    """ElevenLabs is preferred when keyed, and never the only voice."""
+    """`tts` reads its ElevenLabs config at call time, so the tests own the env."""
 
-    KEYS = ("ELEVENLABS_API_KEY", "ELEVENLABS_API_URL", "STARK_TTS_URL")
+    KEYS = ("ELEVENLABS_API_KEY", "ELEVENLABS_API_URL")
 
     def setUp(self):
         self.saved = {k: os.environ.pop(k, None) for k in self.KEYS}
@@ -235,50 +113,61 @@ class ElevenLabsCase(unittest.TestCase):
         path, sent, key = eleven.requests[0]
         self.assertIn("text-to-speech/", path)
         self.assertIn("output_format=pcm_24000", path)
-        # Not "₦5,000": both voices say the letter N for the sign (measured
+        # Not "₦5,000": the voice says the letter N for the sign (measured
         # 2026-10-24), so the amount goes over as it is spoken.
         self.assertEqual(sent["text"], "Your light bill is 5,000 naira.")
         self.assertEqual(sent["model_id"], tts.ELEVENLABS_MODEL)
         self.assertEqual(key, "test-key")
 
-    def test_elevenlabs_down_falls_through_to_the_sidecar(self):
-        side = FakeSidecar(payload=b"RIFF" + b"\x00" * 60)
+    def test_no_key_is_a_refusal_not_a_guess(self):
+        wav, why = tts.synthesize("hello stark")
+        self.assertIsNone(wav)
+        self.assertEqual(why, tts.NO_KEY)
+
+    def test_no_key_means_no_voice_note(self):
+        self.assertIsNone(tts.voice_note("hello stark"))
+
+    def test_empty_text_is_failed_not_a_request(self):
+        eleven = FakeEleven()
         try:
             os.environ["ELEVENLABS_API_KEY"] = "test-key"
-            os.environ["ELEVENLABS_API_URL"] = "http://127.0.0.1:1"  # refused
-            os.environ["STARK_TTS_URL"] = side.url
+            os.environ["ELEVENLABS_API_URL"] = eleven.url
+            wav, why = tts.synthesize("   ")
+        finally:
+            eleven.close()
+        self.assertIsNone(wav)
+        self.assertEqual(why, tts.FAILED)
+        self.assertEqual(eleven.requests, [])
+
+    def test_elevenlabs_error_is_failed_not_empty_audio(self):
+        eleven = FakeEleven(payload=b"boom", status=500)
+        try:
+            os.environ["ELEVENLABS_API_KEY"] = "test-key"
+            os.environ["ELEVENLABS_API_URL"] = eleven.url
             wav, why = tts.synthesize("hello stark")
         finally:
-            side.close()
-        self.assertEqual(why, tts.OK)
-        self.assertEqual(wav, b"RIFF" + b"\x00" * 60)
+            eleven.close()
+        self.assertIsNone(wav)
+        self.assertEqual(why, tts.ELEVENLABS_FAILED)
 
-    def test_elevenlabs_refused_with_no_sidecar_is_failed_not_audio(self):
+    @unittest.skipUnless(audio.ffmpeg_available(), "ffmpeg not installed")
+    def test_voice_note_is_ogg_opus(self):
+        eleven = FakeEleven(payload=b"\x00\x00" * 2400)
+        try:
+            os.environ["ELEVENLABS_API_KEY"] = "test-key"
+            os.environ["ELEVENLABS_API_URL"] = eleven.url
+            note = tts.voice_note("hello stark")
+        finally:
+            eleven.close()
+        self.assertIsNotNone(note)
+        self.assertTrue(note.startswith(b"OggS"), note[:8] if note else None)
+
+    def test_elevenlabs_refused_is_failed_not_audio(self):
         os.environ["ELEVENLABS_API_KEY"] = "test-key"
         os.environ["ELEVENLABS_API_URL"] = "http://127.0.0.1:1"
         wav, why = tts.synthesize("hello stark")
         self.assertIsNone(wav)
         self.assertEqual(why, tts.ELEVENLABS_FAILED)
-
-    def test_without_a_key_nothing_calls_elevenlabs(self):
-        side = FakeSidecar(payload=b"RIFF" + b"\x00" * 60)
-        try:
-            os.environ["STARK_TTS_URL"] = side.url
-            wav, why = tts.synthesize("hello stark")
-        finally:
-            side.close()
-        self.assertEqual(why, tts.OK)
-        self.assertEqual(wav, b"RIFF" + b"\x00" * 60)
-
-    def test_the_sidecar_hears_the_same_words_as_elevenlabs(self):
-        side = FakeSidecar(payload=b"RIFF" + b"\x00" * 60)
-        try:
-            os.environ["STARK_TTS_URL"] = side.url
-            tts.synthesize("You have ₦64,200 left of your ₦30,000 cap.")
-        finally:
-            side.close()
-        self.assertEqual(side.requests[0]["input"],
-                         "You have 64,200 naira left of your 30,000 naira cap.")
 
     def test_stream_naira_is_spelled_for_the_voice_too(self):
         # The dashboard plays this stream, not the buffered call — a fix that
@@ -319,127 +208,13 @@ class ElevenLabsCase(unittest.TestCase):
             eleven.close()
 
 
-class FakeSynth:
-    def __init__(self, wav: bytes = b"RIFF" + b"\x00" * 60, boom: bool = False):
-        self.wav = wav
-        self.boom = boom
-
-    def synthesize(self, text: str, voice: str) -> bytes:
-        if self.boom:
-            raise RuntimeError("model on fire")
-        return self.wav
-
-
-class SidecarCase(unittest.TestCase):
-    """`build_response` is pure, so the sidecar is testable without torch."""
-
-    def body_of(self, payload, synth: FakeSynth | None = None) -> tuple[int, str, bytes]:
-        return tts_server.build_response(payload, synth or FakeSynth())
-
-    def error_message(self, body: bytes) -> str:
-        return json.loads(body)["error"]["message"]
-
-    def test_good_request_serves_wav(self):
-        status, ctype, body = self.body_of({"input": "hello stark"})
-        self.assertEqual(status, 200)
-        self.assertEqual(ctype, "audio/wav")
-        self.assertTrue(body.startswith(b"RIFF"))
-
-    def test_defaults_voice_and_format(self):
-        status, _, _ = self.body_of({"input": "hello"})
-        self.assertEqual(status, 200)   # no voice / response_format keys needed
-
-    def test_missing_input_is_400(self):
-        status, _, body = self.body_of({})
-        self.assertEqual(status, 400)
-        self.assertIn("input", self.error_message(body))
-
-    def test_blank_or_non_string_input_is_400(self):
-        for payload in ({"input": "   "}, {"input": 7}, {"input": ["hello"]}):
-            status, _, _ = self.body_of(payload)
-            self.assertEqual(status, 400, payload)
-
-    def test_overlong_input_is_400(self):
-        status, _, _ = self.body_of({"input": "x" * (tts_server.MAX_INPUT_CHARS + 1)})
-        self.assertEqual(status, 400)
-
-    def test_only_wav_is_served(self):
-        status, _, body = self.body_of({"input": "hi", "response_format": "mp3"})
-        self.assertEqual(status, 400)
-        self.assertIn("wav", self.error_message(body))
-
-    def test_bad_voice_is_400_before_any_synthesis(self):
-        for voice in ("af;rm -rf", "../heart", "AF_HEART", "dropin", ""):
-            if not voice:
-                continue   # empty falls back to the default voice, by design
-            status, _, _ = self.body_of({"input": "hi", "voice": voice})
-            self.assertEqual(status, 400, voice)
-
-    def test_non_object_body_is_400(self):
-        for payload in ("hello", ["input"], 7, None):
-            status, _, _ = self.body_of(payload)
-            self.assertEqual(status, 400, payload)
-
-    def test_synth_failure_is_500_not_partial_audio(self):
-        status, ctype, body = self.body_of({"input": "hi"}, FakeSynth(boom=True))
-        self.assertEqual(status, 500)
-        self.assertEqual(ctype, "application/json")
-        self.assertIn("server_error", body.decode())
-
-    def test_empty_synthesis_is_500(self):
-        status, _, _ = self.body_of({"input": "hi"}, FakeSynth(wav=b""))
-        self.assertEqual(status, 500)
-
-
-class NormalizerCase(unittest.TestCase):
-    """Symbol and numeral handling, pinned to misaki's real failures.
-
-    Everything here came from misaki's own output on 2026-10-23: `₦30,000`
-    phonemized as "three zero zero zero zero", `—` and `(` passed through as
-    raw phonemes (the voice says "dash", "bracket").
-    """
-
-    def n(self, text: str) -> str:
-        return tts_server.normalize_for_speech(text)
-
-    def test_naira_prefix_no_longer_breaks_the_number(self):
-        # misaki read `₦30,000` as three-zero-zero-zero-zero because the ₦
-        # glued to the digits; splitting it out is the whole fix.
-        self.assertEqual(self.n("Your cap is ₦30,000."), "Your cap is naira 30,000.")
-
-    def test_dashes_brackets_slashes_never_reach_the_voice(self):
-        s = self.n("11.4 units — left (roughly) at 4 days; data/airtime low")
-        for symbol in "—()[]/":
-            self.assertNotIn(symbol, s)
-        self.assertIn(",", s)
-        self.assertIn("data airtime", s)
-
-    def test_percent_and_ampersand_become_words(self):
-        self.assertEqual(self.n("100% & counting"), "100 percent and counting")
-
-    def test_spelled_out_amount_becomes_a_numeral(self):
-        self.assertEqual(self.n("that's five nine two zero zero naira"), "that's 59200 naira")
-
-    def test_single_digit_words_stay_prose(self):
-        self.assertEqual(self.n("Four days left, about four units."),
-                         "Four days left, about four units.")
-
-    def test_spelled_out_token_stays_digit_by_digit(self):
-        token = " ".join(["four eight two one"] * 5)   # 20 digit-words
-        self.assertEqual(self.n(f"the token is {token},"), f"the token is {token},")
-
-    def test_numeral_text_is_left_alone(self):
-        self.assertEqual(self.n("Your token is 4821 0937 5512 8846 3019."),
-                         "Your token is 4821 0937 5512 8846 3019.")
-
-
 class SpeakableCase(unittest.TestCase):
     """What the voice is asked to say, pinned to a real mispronunciation.
 
     2026-10-24, reported from the Talk screen: "You have ₦64,200" was read as
     "N sixty-four thousand…". Synthesising the reply and transcribing it back
-    showed the same on both providers — the naira sign is simply not in their
-    dictionaries, and no amount of voice settings changes that.
+    showed the naira sign is simply not in the voice's dictionary, and no
+    amount of voice settings changes that.
     """
 
     def test_an_amount_is_spoken_after_the_number(self):

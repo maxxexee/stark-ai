@@ -21,12 +21,10 @@ from app.modules.flutterwave import flutterwave_controller
 from app.modules.bill import bill_controller, payee_controller
 from app.modules.control import control_controller
 from app.modules.demo import demo_controller
-from app.modules.device import device_controller
 from app.modules.health_checker import health_checker_controller
 from app.modules.limit import limit_controller
 from app.modules.payment import payment_controller
 from app.modules.plan import plan_controller
-from app.modules.sms import sms_controller
 from app.modules.state import state_controller
 from app.modules.stub import stub_controller
 from app.modules.suggestion import suggestion_controller
@@ -35,7 +33,6 @@ from app.modules.telemetry import telemetry_controller
 from app.modules.turnlog import turnlog_controller
 from app.modules.voice import voice_controller
 from app.modules.wallet import wallet_controller
-from app.modules.whatsapp import whatsapp_controller
 from app.setup_swagger import SwaggerSetup
 
 CONTROLLERS = (
@@ -48,7 +45,6 @@ CONTROLLERS = (
     wallet_controller,
     suggestion_controller,
     telemetry_controller,
-    device_controller,
     voice_controller,
     telegram_controller,
     auth_controller,
@@ -59,8 +55,6 @@ CONTROLLERS = (
     demo_controller,
     payee_controller,
     flutterwave_controller,
-    whatsapp_controller,
-    sms_controller,
     admin_controller,
 )
 

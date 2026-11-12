@@ -35,7 +35,6 @@ variable in [`.env.example`](.env.example) switches one piece on.
 | `.venv/bin/python -m app` | API on `HOST:PORT` (127.0.0.1:8000; no secrets unless you wrap it in `infisical secrets-manager run`) |
 | `.venv/bin/python -m tests.smoke_test` | 69 end-to-end checks (sign-up, auth, every endpoint) against a running server; `STARK_SMOKE_BASE` points it elsewhere |
 | `.venv/bin/python -m unittest discover -s tests -t .` | the unit tests, no server needed (`bun run test` from the root) |
-| `bun tts` | the local Kokoro voice sidecar on :8010 (needs `.venv-tts`, see Voice output) |
 | `curl -X POST http://127.0.0.1:8000/v1/_stub/reset` | back to the demo seed (only with `STARK_STUB_RESET=1`) |
 
 `ffmpeg` on your `PATH` (`brew install ffmpeg`) is **required for voice input**. It
@@ -75,7 +74,6 @@ app/
     turnlog/  stub/      the conversation log; the demo seed and reset
     health_checker/      GET /, GET /health
 tests/                   unit tests, support.py (TempAccount, ApiHarness), smoke_test.py
-tts_server.py            the Kokoro-82M sidecar: OpenAI `/v1/audio/speech`, own venv
 requirements*.txt        the API's dependencies; -dev adds the test client
 ```
 
@@ -145,7 +143,7 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
   repeat can still be confirmed. A plan-priced bill needs no figure because the plan
   sets it, and seeded demo receipts (`seed-*`) do not count as recent payments.
 - **It says what it cannot do.** The prompt forbids implying a message was sent. There
-  is no forwarding to WhatsApp, Telegram, email or SMS, and the model says so instead
+  is no forwarding to Telegram, email or anywhere else, and the model says so instead
   of inventing a receipt-sending feature.
 
 ```sh
@@ -153,7 +151,7 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
 .venv/bin/python -m unittest tests.test_vending   # store, idempotent retry, plans
 .venv/bin/python -m unittest tests.test_live_paths # Flutterwave's wire format, over loopback
 .venv/bin/python -m unittest tests.test_tg        # the Telegram door and its gates
-.venv/bin/python -m unittest tests.test_tts       # the voice path, without torch
+.venv/bin/python -m unittest tests.test_tts       # the voice path, against a fake ElevenLabs
 ```
 
 ## Telegram bot
@@ -217,7 +215,7 @@ number", "when does my DStv renew?" and "how many units are left?" are one model
 each, no tool round trip (measured 1.1–1.5s, 2026-10-24). A hypothetical ("if I pay A
 and top up B, what is left?") is arithmetic on those numbers, answered without paying.
 
-It cannot: send or forward anything (WhatsApp, Telegram, email, SMS), issue a new
+It cannot: send or forward anything (Telegram, email or elsewhere), issue a new
 meter number or token, or see a bill that was never saved.
 
 ## Voice input (Whisper)
@@ -258,83 +256,52 @@ never reaches the agent and never gets a made-up transcript.** Bad base64 is 400
 
 ## Voice output (TTS)
 
-Replies come back **spoken** when the local voice sidecar is up, and as text when it
-is not. Text never waits on the sidecar. `/v1/voice` carries an additive `audio`
-field (a WAV data URL, or `null`); a Telegram voice note gets a voice note back
-(OGG/Opus via `sendVoice`); the dashboard's Talk screen plays it.
+Replies come back **spoken** when ElevenLabs is keyed, and as text when it is not.
+Text never waits on the voice. `/v1/voice` carries an additive `audio` field (a WAV
+data URL, or `null`). A Telegram voice note gets a voice note back (OGG/Opus via
+`sendVoice`). The dashboard's Talk screen plays it.
 
-**Amounts are spoken as words, not symbols.** Neither voice reads `₦`: ElevenLabs
-and Kokoro both said the letter *N* ("Your balance is N sixty-four thousand…"),
-measured 2026-10-24 by synthesising a real reply and transcribing the clip back. So
-`tts.speakable()` rewrites `₦64,200` as `64,200 naira` before anything is synthesised,
-for the WAV, the stream and the Telegram voice note. The reply the user *reads* keeps
-the sign. Only amounts with `₦` change; numbers, decimals and commas without it are
-left alone (`SpeakableCase` in `test_tts.py` covers both).
+**Amounts are spoken as words, not symbols.** The voice does not read `₦`. ElevenLabs
+said the letter *N* ("Your balance is N sixty-four thousand…"), measured 2026-10-24 by
+synthesising a real reply and transcribing the clip back. So `tts.speakable()` rewrites
+`₦64,200` as `64,200 naira` before anything is synthesised, for the WAV, the stream and
+the Telegram voice note. The reply the user *reads* keeps the sign. Only amounts with
+`₦` change. Numbers, decimals and commas without it are left alone (`SpeakableCase` in
+`test_tts.py` covers both).
 
 **Text never waits for voice.** The dashboard sends `{"speak": false}` so the words
-land in one model turn, then fetches the voice from `POST /v1/speak` and plays it a
-beat later. The sidecar keeps its GPU warm with a background ping
-(`STARK_TTS_KEEPALIVE`, default 45s, `0` disables) because Metal re-warms kernels
-after a few idle seconds. Without it the first reply of the minute took ~3s longer.
+land in one model turn. Then it fetches the voice from `POST /v1/speak` and plays it a
+beat later.
 
-**Two voices, ElevenLabs first.** With `ELEVENLABS_API_KEY` set, `tts.py` asks ElevenLabs
-Flash v2.5 for the reply: a Stark-length answer comes back in well under a second
-against ~2s for the local voice, and it reads `₦5,000`, "Ikeja" and dates correctly.
-`tts.py` wraps the raw 24 kHz PCM it returns into a WAV, so nothing downstream
-changes: the dashboard's `data:` URL, `ffmpeg` for Telegram and `/v1/speak` all still
+**ElevenLabs Flash v2.5.** With `ELEVENLABS_API_KEY` set, `tts.py` asks ElevenLabs for
+the reply. A Stark-length answer comes back in well under a second, and it reads
+`₦5,000`, "Ikeja" and dates correctly. `tts.py` wraps the raw 24 kHz PCM it returns
+into a WAV, so the dashboard's `data:` URL, `ffmpeg` for Telegram and `/v1/speak` all
 see a WAV.
 
-The free tier gives **10,000 credits a month** at 0.5–1 credit per character on Flash,
-about 10k–20k characters, ~13–26 minutes of speech, **70–130
+The free tier gives **10,000 credits a month** at 0.5 to 1 credit per character on
+Flash. That is about 10k to 20k characters, 13 to 26 minutes of speech, or **70 to 130
 Stark replies**. It is non-commercial, and **the Voice Library is not available to free
 keys over the API**: asking for Rachel (`21m00Tcm4TlvDq8ikWAM`) returns HTTP 402
 `paid_plan_required`, measured 2026-10-24. So a free key is limited to the account's
 **premade** voices (`ELEVENLABS_VOICE_ID`, default "Daniel, Steady Broadcaster"; `GET
-/v1/voices` lists them) and there is no Nigerian accent among them. A cloned or
-library voice needs Starter ($6/mo, $1 for the first month), which is also where the
+/v1/voices` lists them). There is no Nigerian accent among them. A cloned or library
+voice needs Starter ($6/mo, $1 for the first month), which is also where the
 commercial license lives.
 
-If ElevenLabs is down, the Kokoro sidecar speaks. If both are down, the text is
-already on screen. The key is optional, and the demo works without it.
-
-The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0,
-82M params), served by `tts_server.py` behind the OpenAI speech shape, like `stt.py`
-on the input side. It needs its own interpreter so torch stays out of the
-standard-library API:
-
-```sh
-# once, from the repo root
-uv venv --python 3.12 .venv-tts
-uv pip install --python .venv-tts/bin/python -r apps/backend/tts-requirements.txt
-
-# every time (or: bun tts from the root)
-cd apps/backend && ../../.venv-tts/bin/python tts_server.py
-```
-
-Then set `STARK_TTS_URL=http://127.0.0.1:8010` in Infisical (see `.env.example`).
-Measured 2026-10-23 on an M1 Pro: ~2s for a typical reply on MPS and on CPU
-(RTF ~0.25–0.3, so speech arrives faster than it plays on both). `STARK_TTS_VOICE`
-picks the voice: `af_heart` (US female, default), `bf_emma` (UK female),
-`am_michael` (US male). **Kokoro has no Nigerian English voice**; if the accent
-matters, voice cloning (Chatterbox, MIT) is the option.
-
-**Text is normalised before synthesis** (`normalize_for_speech` in `tts_server.py`):
-`₦30,000` becomes "naira 30,000" (misaki read the glued ₦ as *three-zero-zero-zero-zero*),
-em dashes become pauses (the voice said "dash"), brackets and slashes drop out, and
-amounts the model spelled out as words ("five nine two zero zero") collapse back to
-numerals. Meter tokens stay digit-by-digit. The agent's system prompt was rewritten
-to match: figures for money, single spaced digits for tokens, commas not dashes.
+If ElevenLabs is down or unkeyed, the text is already on screen. The key is optional,
+and the demo works without it.
 
 **Streaming.** `POST /v1/speak` hands over a whole clip, which cannot start playing
 until synthesis finishes (~1.3s). `GET /v1/speak/stream?text=…` sends the MP3 as
-ElevenLabs produces it, and the Talk screen plays that first: measured **first byte
-0.53–0.82s** against **1.25–1.30s** buffered, so speech starts while the clip is still
-being built. The stream falls back to `POST /v1/speak` in the browser, and on the
-server to a whole Kokoro WAV; no voice anywhere is a 503 `no_voice`, not silence.
+ElevenLabs produces it, and the Talk screen plays that first. Measured **first byte
+0.53 to 0.82s** against **1.25 to 1.30s** buffered, so speech starts while the clip is
+still being built. The stream falls back to `POST /v1/speak` in the browser, and on the
+server to a whole ElevenLabs WAV. No voice at all is a 503 `no_voice`, not silence.
 
-It fails closed like `stt.py`. With no key and no URL, both providers down, no
-ffmpeg, or a Telegram refusal, the answer still arrives as text. `bun smoke` runs 68
-checks with voice off (`audio` null) and 70 with a voice up.
+It fails closed like `stt.py`. With no key, ElevenLabs down, no ffmpeg, or a Telegram
+refusal, the answer still arrives as text. `bun smoke` runs its checks with voice off
+(`audio` null) or on.
 
 ## Conversation log (turnlog)
 

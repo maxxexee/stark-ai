@@ -5,6 +5,10 @@ rails).** If you are an agent picking this up, read §0 (newest first) and then 
 before touching anything. Sections 9, 10 and 13 were brought in line with §0 on
 2026-11-11; §11 and §12 still carry VTpass-era notes, and where they disagree, §0 wins.
 
+**2026-11-12:** SMS, WhatsApp, TV control and the Kokoro voice sidecar were removed.
+Telegram and the web voice path are the doors, and ElevenLabs is the only voice. Older
+entries below that mention the removed pieces are history.
+
 ---
 
 ## 0. Resume here — state as of 2026-11-03
@@ -63,8 +67,7 @@ is stored before broadcast so a retry can never pay twice. Off until the key is 
 **To finish, owner-only:** fund and name a real mainnet treasury account and set
 `STARK_TREASURY_NEAR_ACCOUNT` + `STARK_TREASURY_KEY`; put `STARK_FUNDER_*` /
 `STARK_AGENT_KEY` in `.env` (and Brimble) for per-user vaults; complete Bachs KYC for
-live; get VTpass to whitelist products; create Meta (WhatsApp) and Twilio (SMS)
-accounts — their adapters are built and fail closed.
+live; get VTpass to whitelist products.
 
 ---
 
@@ -75,7 +78,7 @@ accounts — their adapters are built and fail closed.
 Eleven real questions through `/v1/voice` against the live model
 (`google/gemini-2.5-flash-lite`, chosen for speed). Right without help: balance, most
 recent subscription, reference/meter digits, renewal date, units left, a typo'd
-"subscripshun", and an honest refusal for WhatsApp/Telegram. One model call each, no
+"subscripshun", and an honest refusal to forward messages. One model call each, no
 tool round trip: **1.1–1.5s**, with occasional 2.6–3.2s provider outliers.
 
 **Two failures were serious and are fixed.** With `pay_bill` the only tool offered,
@@ -631,7 +634,7 @@ Each of these was checked against the live service or primary docs, not assumed.
 | **`request_id` reused on retry** | A fresh id books a second sale (`019`) | No |
 | **Telegram first, PWA second, ESP32 last** | Telegram costs nothing and is the fallback; ESP32 is the highest-risk path in a 2-week build | Yes |
 | **AC is the tracked load, not light bulbs** | 4 bulbs ≈ ₦45–55/evening vs AC ≈ ₦1,900. Warning about bulbs makes the agent look dumb | Yes |
-| **Telegram first, then WhatsApp; Apple via SMS/provider** | One adapter pattern, cheapest path to a demo; there is no public iMessage bot API. See §8A | Yes |
+| **Telegram is the chat door** | One adapter, free, no business approval. There is no public iMessage bot API. See §8A | Yes |
 | **Bills and limits are editable, not just seeded** | The design has Add-bill and Limits screens; seeded-only would leave both dead. Editing re-scopes the agent's allowlist and caps in-process | Yes — persisting is additive |
 | **The client never sends a plan price** | A plan is fixed-price at the vendor. Taking the amount from the UI is a way to underpay it, so the server resolves `plan_price_ngn` from the catalogue | No |
 | **`stark-ai/` left untouched** | Different, older artifact; not the visual reference | — |
@@ -649,7 +652,7 @@ days of runway the original plan did not assume.
 | M1 | Oct 27–31 | Vault contract: monthly cap, per-payment cap, meter allowlist, `pay()`, events, unit tests | **built** — 38/38 tests, clippy clean, 203 KB wasm builds. **Not deployed** — needs a funded testnet account (§0.3) |
 | M2 | Nov 1–3 | Agent server: NEAR AI LLM + tools, signs `pay()` with a function-call key | **built 2026-10-22** — 59 tests, gate enforced in code, signature dry-run. LLM client and RPC path unproven (§10.11–12) |
 | M3 | Nov 4–5 | Real vending wired in, receipt store (tx hash ↔ token) | **built 2026-10-22** — 44 tests, 4 product families, dry-run; live blocked by VTpass `028` provisioning (§10.1) |
-| M4 | Nov 6–7 | Telegram bot + Whisper voice + TTS | **built 2026-10-22, finished 2026-10-24** — Telegram + identity linking + Whisper (now fed real audio from both doors) + TTS (ElevenLabs Flash, Kokoro sidecar fallback, streamed). Fail-closed until secrets; no bot token has ever been set |
+| M4 | Nov 6–7 | Telegram bot + Whisper voice + TTS | **built 2026-10-22, finished 2026-10-24** — Telegram + identity linking + Whisper (now fed real audio from both doors) + TTS (ElevenLabs Flash, streamed). Fail-closed until secrets; no bot token has ever been set |
 | M5 | Nov 8 | NEAR Intents funding, one cross-chain deposit | not started |
 | M6 | Nov 9–10 | AC telemetry + suggestion engine | not started |
 | M7 | Nov 11 | Frontend wired to the live API, **record the token clip** | not started |
@@ -672,32 +675,30 @@ days of runway the original plan did not assume.
 
 ---
 
-## 8A. Multi-channel plan — Telegram, WhatsApp, Apple Messages, and auth
+## 8A. Channels and auth
 
-**Status 2026-10-22: the Telegram half and the identity/auth design are now built**
-(§0 M4). Still design-only: WhatsApp, Apple/iMessage, SMS and iOS. This section is
-the reference so the next agent does not re-litigate the platforms.
+**Status 2026-11-12:** Telegram, identity linking and app auth are built (§0 M4).
+Apple/iMessage and iOS are design-only. This section is the reference so the next
+agent does not re-litigate the platforms.
 
 ### What each channel can actually do
 
-Platform facts checked **2026-10-22**; re-check before building — Apple and Meta both
-move these rules.
+Platform facts checked **2026-10-22**. Re-check before building, because Apple moves
+these rules.
 
 | Channel | Verdict | The real constraint |
 |---|---|---|
-| **Telegram** | **build first** | Bot API + webhook, free, no business approval. Voice notes are OGG/Opus. This is M4. |
-| **WhatsApp** | **build second** | Official **WhatsApp Business Cloud API** (Meta). Free test number for development; production needs a Meta business account and a verified number. Webhook verification, a 24-hour service window, template messages outside it, and per-message pricing. |
-| **Apple Messages (iMessage)** | **do not promise for the demo** | Apple has **no public iMessage bot API**. Three paths: **Apple Messages for Business** through an approved provider (business approval and lead time; Poke became the first third-party AI approved for it in 2026); a **third-party iMessage API provider** (Linq, Sendblue, LoopMessage, Blooio — commercial bridges, not first-party; check ToS, SOC 2, cost, and account-ban risk); or **SMS** via Twilio/Infobip, which lands in Messages as green bubbles. |
+| **Telegram** | **built** | Bot API + webhook, free, no business approval. Voice notes are OGG/Opus. This is M4. |
+| **Apple Messages (iMessage)** | **do not promise for the demo** | Apple has **no public iMessage bot API**. Two paths: **Apple Messages for Business** through an approved provider (business approval and lead time; Poke became the first third-party AI approved for it in 2026), or a **third-party iMessage API provider** (Linq, Sendblue, LoopMessage, Blooio: commercial bridges, not first-party; check ToS, SOC 2, cost, and account-ban risk). |
 | **iPhone “Hello Stark”** | **not possible as a custom wake word** | iOS reserves OS-level wake phrases for Siri. Apple's WWDC 2026 direction makes **App Intents** the path for Siri to reach an app (SiriKit is deprecated). Use App Intents + Shortcuts + the Action Button; in-app push-to-talk only. True always-listening is the wall Android. |
 
-**Recommendation:** Telegram (M4) → WhatsApp Cloud API → wall-phone PWA → iOS via
-Siri intents → SMS fallback. Do not build a native iOS app or an iMessage bridge for
-the hackathon.
+**Recommendation:** Telegram (M4), then the wall-phone PWA, then iOS via Siri intents.
+Do not build a native iOS app or an iMessage bridge for the hackathon.
 
 ### One brain, many doors
 
 ```
-Telegram / WhatsApp / SMS / Apple Messages / iOS / wall phone
+Telegram / Apple Messages / iOS / wall phone
         ↓  adapter: verify, dedupe, download media, resolve identity
    /v1/voice → wake gate → agent → policy → payment
         ↓
@@ -708,8 +709,8 @@ The adapter contract is deliberately small:
 
 ```
 InboundMessage:
-  channel          telegram | whatsapp | sms | apple | ios | wall
-  channel_user_id  Telegram numeric id / E.164 / provider handle
+  channel          telegram | apple | ios | wall
+  channel_user_id  Telegram numeric id / provider handle
   message_id       idempotency key, unique per channel
   text             str | null
   media_id         str | null   (voice note; the adapter downloads it)
@@ -724,10 +725,9 @@ Rules:
 - The agent must not branch on `channel` except to format the reply. Money logic stays
   in one place; `/v1/voice` remains the single entry point. Adapters are transport, not
   a second brain.
-- Voice: transcode OGG/Opus (Telegram/WhatsApp) and M4A (iOS) to **16 kHz mono WAV** for
+- Voice: transcode OGG/Opus (Telegram) and M4A (iOS) to **16 kHz mono WAV** for
   Whisper. Cap duration and size; delete temp files.
-- Replies: OGG/Opus voice note for Telegram/WhatsApp, MP3/M4A for iOS, text for SMS
-  (MMS voice is unreliable).
+- Replies: OGG/Opus voice note for Telegram, MP3/M4A for iOS.
 
 ### Identity linking (the part that protects the wallet)
 
@@ -747,7 +747,7 @@ processed_messages(channel, message_id, processed_at,
 
 Flow:
 
-1. In the Stark app/PWA the user taps **Connect Telegram / WhatsApp / SMS**.
+1. In the Stark app/PWA the user taps **Connect Telegram**.
 2. The server issues a random 6-digit code, TTL 10 minutes, single use, at most 5
    attempts. Store the hash, show the code once.
 3. The user sends `link 482913` from that channel.
@@ -760,8 +760,7 @@ Rules that are not optional:
 - **An unknown sender never creates a wallet and never pays.** The reply is link
   instructions only.
 - One identity maps to exactly one Stark user; one user may have many identities.
-- Phone channels normalise to **E.164**; Telegram uses the numeric user id. Never key
-  on a display name.
+- Telegram uses the numeric user id. Never key on a display name.
 - Linking is the **only** way a channel can claim an account. A `user_id` in message text
   or a webhook body is never trusted.
 - Rate-limit link attempts; invalidate the code on success or after N failures.
@@ -777,8 +776,6 @@ webhooks publicly until their checks exist.
 | Channel | Check |
 |---|---|
 | Telegram | `X-Telegram-Bot-Api-Secret-Token` equals the secret set with `setWebhook` |
-| WhatsApp | `X-Hub-Signature-256` = HMAC-SHA256 of the **raw body** with the Meta app secret |
-| Twilio SMS | `X-Twilio-Signature` |
 | Apple Messages for Business | the provider's signed request/JWT (provider-specific) |
 
 A failed check returns 401, logs the channel and source IP, and processes nothing.
@@ -801,8 +798,8 @@ Also:
   download.
 - **Logging:** no full message bodies, tokens or meter numbers; redact phone numbers;
   record `channel` + `user_id` on every payment for audit.
-- **Secrets:** env vars only — bot token, webhook secret, Meta app secret, Twilio auth
-  token, provider keys. Never in the repo.
+- **Secrets:** env vars only: bot token, webhook secret, provider keys. Never in the
+  repo.
 - **Fail closed:** bad signature, unknown sender, expired code or missing token all mean
   “no payment”.
 
@@ -812,14 +809,11 @@ Also:
 |---|---|---|
 | M4a | Telegram adapter + webhook auth + link/auth tables | BotFather token; this section |
 | M4b | Whisper transcription + TTS reply | NEAR AI key; TTS choice |
-| M4c | WhatsApp Cloud API adapter | Meta app + test number |
 | M4d | Wall-phone PWA | HTTPS tunnel, spare Android |
 | M4e | iOS App Intents / Shortcuts | Apple Developer account |
-| M4f | SMS fallback | Twilio/Infobip account, sender ID |
 
-Each channel is roughly **1–2 days of code** once auth and media are real. WhatsApp
-business verification and Apple Messages for Business approval are **calendar time, not
-code time**. M4 ships Telegram text first, then voice; do not let the multi-channel
+Each channel is roughly **1 to 2 days of code** once auth and media are real. Apple
+Messages for Business approval is **calendar time, not code time**. M4 ships Telegram text first, then voice; do not let the multi-channel
 refactor delay the one working demo.
 
 ### Wall-phone wiring (the always-listening demo)
@@ -841,15 +835,13 @@ refactor delay the one working demo.
   cannot own the wake phrase.
 - “The whole conversation is private” — channel providers and TTS sit in the path. The
   TEE claim covers Whisper only, and even that tier is unconfirmed (§10.3).
-- “WhatsApp is live” — until the business/number is verified and the webhook is signed.
 
 ### Open decisions
 
-- **TTS provider** — not chosen. Pick one that returns OGG/Opus (Telegram/WhatsApp) and
-  MP3/M4A (iOS), and check its data-retention terms before writing privacy copy.
+- **TTS provider**: decided, ElevenLabs Flash. Check its data-retention terms before
+  writing privacy copy.
 - **iMessage path** — skip for the hackathon; evaluate Apple Messages for Business or a
   provider afterwards.
-- **WhatsApp business entity and number** — the human must own these.
 - **Apple Developer account** — needed before any App Intents work.
 - **Where auth lives** — decided: sessions are issued and verified by Neon Auth
   (JWKS, no server-side session store), and `accounts` maps the provider's user id to
@@ -875,8 +867,7 @@ Rewritten 2026-11-11 to match §0 (2026-11-03). Do not assume any of this exists
   not hold tokens: crypto deposits land as USDC in Stark's treasury and the funder
   credits the vault. Say so plainly; the onchain guarantee is the **caps**, not custody.
 - **Auth** — Neon Auth sessions on every `/v1` route (401 `unauthorized` without one);
-  the Telegram webhook authenticates with its own secret. Still missing: the
-  channel-signature scheme for WhatsApp/SMS in §8A.
+  the Telegram webhook authenticates with its own secret.
 - **Persistence** — accounts, receipts, wallets, channel identities, bills
   (`POST /v1/bills`), limits (`PATCH /v1/limits`) and telemetry readings are in Neon
   Postgres and survive restarts, scoped per account. `units_left` is derived from
@@ -895,9 +886,8 @@ Rewritten 2026-11-11 to match §0 (2026-11-03). Do not assume any of this exists
 - **Bill edits do not rewrite history.** Renaming a bill leaves old receipts with the
   `bill_label` captured at payment time; deleting a bill keeps its activity rows.
   That is intended, but a UI that joins on `bill_id` must handle a missing bill.
-- **WhatsApp, SMS and Apple Messages.** The Telegram bot is live (`@hellostarkai_bot`,
-  §0). The WhatsApp (Meta) and SMS (Twilio) adapters are built and fail closed, because
-  neither account exists. Apple Messages is design-only (§8A).
+- **Apple Messages.** The Telegram bot is live (`@hellostarkai_bot`, §0). Apple
+  Messages is design-only (§8A).
 - **Telemetry → suggestions** — `/v1/telemetry` readings now feed `load_imbalance`,
   but the sensor only exists in demo data: no real meter has ever posted. The line
   needs two devices, which is why it is quiet in a fresh install.
@@ -1022,7 +1012,7 @@ Decisions taken, and why:
     |---|---|---|
     | text for a read question | 2.3–2.8s, was 7.1s median at model level | **1.1–1.6s** (median 1.35, `actions: []`) |
     | text for a payment | 4.3s (two model rounds) | ~2.5s |
-    | voice, first byte | 1.9s (Kokoro), 1.3s (buffered ElevenLabs) | **0.53–0.82s** streamed |
+    | voice, first byte | 1.3s (buffered ElevenLabs) | **0.53–0.82s** streamed |
     | **first sound after asking** | 9–10s | **~1.9s** (a payment ~3.0s) |
 
     **The privacy note above is now stale, and that is deliberate:** this is a demo
@@ -1057,30 +1047,16 @@ Decisions taken, and why:
     That matches the design ("DStv · Nov 3" is next month), but it means the earlier
     "pay DStv ₦7,900 end to end" demo needs a lower `spent_ngn` or a fresh month. The
     plan path itself is still covered by `test_vending.py`.
-20. **The TTS sidecar has never spoken to a real Telegram chat.** Kokoro-82M is
-    live-verified locally (2026-10-23): the Talk screen shows text first (`speak:
-    false`) and plays the voice fetched from `POST /v1/speak` a beat later; warm
-    synthesis runs ~0.5–1.5s (MPS, RTF ~0.1), ~3s if the GPU re-warmed from idle
-    (the sidecar's keepalive ping exists to prevent that); the OGG/Opus encode for
-    `sendVoice` is proven with ffmpeg; and `bun smoke` passes **60/60 with a
-    voice up, 58/58 with voice off** — against a *live* model (Qwen when written,
-    `google/gemini-2.5-flash-lite` since 2026-10-24), which is why two smoke
-    assertions were rewritten to stop pinning deterministic phrasing. The bot is
-    live now (§0), but no voice note to a real chat has been recorded here. Two honest gaps on
-    top: **Kokoro has no Nigerian English voice** (default `af_heart` is US female;
-    Chatterbox cloning is the accent path), and the sidecar venv needs spaCy's
-    `en_core_web_sm` installed explicitly (`tts-requirements.txt`) — misaki's
-    auto-download dies inside a uv venv.
-
-    **2026-10-24 — ElevenLabs Flash is now the first voice, live-verified the same
-    day.** `tts.py` asks ElevenLabs (`ELEVENLABS_API_KEY`, set in `.env`) for every
-    reply, wraps its 24 kHz PCM into a WAV, and falls through to Kokoro on any
-    refusal, so the chain is ElevenLabs → sidecar → text. Four new tests in
-    `test_tts.py` pin that chain against local fakes.
+20. **The voice has never spoken to a real Telegram chat.** ElevenLabs Flash is
+    live-verified locally (2026-10-24, `ELEVENLABS_API_KEY`). The Talk screen shows
+    text first (`speak: false`) and plays the voice fetched from `POST /v1/speak` a
+    beat later. `tts.py` wraps the 24 kHz PCM ElevenLabs returns into a WAV, and with
+    no key or a refusal the reply is text. The OGG/Opus encode for `sendVoice` is
+    proven with ffmpeg. The bot is live now (§0), but no voice note to a real chat has
+    been recorded here.
 
     Measured against the real API with a free key: **1.0–1.1s** for a Stark-length
-    reply on `eleven_flash_v2_5`, against **1.4–1.9s** for Kokoro — the accuracy is
-    the real win, the speed is the bonus. Two facts the docs did not hand us:
+    reply on `eleven_flash_v2_5`. Two facts the docs did not hand us:
     **library voices are HTTP 402 `paid_plan_required` on a free key** (Rachel's id
     is rejected; only the account's **premade** voices work — default is now
     `onwK4e9ZLuTAKqWW03F9`, Daniel, and `GET /v1/voices` lists what a key owns), and
@@ -1183,8 +1159,8 @@ Rules that keep this from drifting again:
   ```
 - **The public repo is required by 2026-11-14.** The app auto-deploys to hellostark.xyz on
   push to `main`, so a push is a deploy — do not push broken code.
-- `.gitignore` covers `__pycache__/`, `*.pyc`, `.venv/`, `.venv-tts/` (the Kokoro
-  sidecar's venv), `.DS_Store`, `.env`, and now `target/` + `**/target/` (a near-sdk
+- `.gitignore` covers `__pycache__/`, `*.pyc`, `.venv/`, `.venv-tts/` (an old voice
+  venv, still ignored so a local copy stays out of git), `.DS_Store`, `.env`, and now `target/` + `**/target/` (a near-sdk
   build is ~1 GB; `Cargo.lock` **is** committed).
 - No secrets anywhere in the tree. VTpass credentials are read from env vars only.
 - `index.html` (the old landing page) and `Desktop/export/` must not be modified — they are
@@ -1219,9 +1195,7 @@ then the first live runs.
 4. **Crypto withdrawals (owner).** Fund and name a real mainnet treasury account and set
    `STARK_TREASURY_NEAR_ACCOUNT` and `STARK_TREASURY_KEY`. Until then 1Click refuses the
    quote's `refundTo` and the feature stays off.
-5. **WhatsApp and SMS (owner).** Create the Meta (WhatsApp) and Twilio (SMS) accounts;
-   the adapters are built and fail closed until their secrets are set.
-6. **Make the in-memory state durable.** Bills from `POST /v1/bills`, limits from
+5. **Make the in-memory state durable.** Bills from `POST /v1/bills`, limits from
    `PATCH /v1/limits` and `units_left` still reset on restart (§9, §10.13). This is the
    next code item that needs no one else.
 

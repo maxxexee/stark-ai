@@ -799,15 +799,15 @@ a `transcript_hint` request keeps the exact old shape.
 agent ran, which is useful for debugging a bad answer; `tx_hash` is set only when a
 payment was signed onchain. Neither is user-facing copy — do not render them.
 
-`audio` is **additive** (2026-10-23): the same reply, spoken by the configured voice
-(ElevenLabs when keyed, else the local Kokoro sidecar), as a WAV data URL — or `null`
-whenever voice is off (no provider configured, provider down, synthesis failed, or
+`audio` is **additive** (2026-10-23): the same reply, spoken by ElevenLabs when it is
+keyed, as a WAV data URL — or `null`
+whenever voice is off (no key configured, ElevenLabs down, synthesis failed, or
 `ignored: true`). Play it when present; when it is `null`, render `reply` as text.
 `reply` stays the source of either way.
 
-**The voice does not read `₦`.** Neither provider has it in a pronunciation
-dictionary — both say the letter N (measured 2026-10-24 by synthesising and
-transcribing the clip back) — so amounts are handed to the voice as `64,200 naira`.
+**The voice does not read `₦`.** It is not in the voice's pronunciation
+dictionary. It says the letter N (measured 2026-10-24 by synthesising and
+transcribing the clip back), so amounts are handed to the voice as `64,200 naira`.
 `reply` keeps the sign for display; do not treat the two as byte-identical, and do not
 send your own text to a voice expecting `₦` to be read.
 
@@ -872,9 +872,7 @@ of an answered `/v1/voice`.
 ```
 
 `audio` is a WAV data URL, or `null` when voice is off — **200 either way** (voice is
-an enhancement, never an error). Missing/empty `text` is **400 `bad_text`**. Keep the
-text within ~2000 characters: beyond that the synthesiser refuses and the field
-comes back `null`.
+an enhancement, never an error). Missing/empty `text` is **400 `bad_text`**.
 
 ### `GET /v1/speak/stream`
 
@@ -886,7 +884,7 @@ GET /v1/speak/stream?text=Your%20light%20bill%20is%205%2C000%20naira.
 ```
 
 - **200**, `Content-Type: audio/mpeg` when streaming (no `Content-Length` — the body
-  is deliberately not buffered), `audio/wav` when a whole local clip is substituted.
+  is deliberately not buffered), `audio/wav` when a whole buffered clip is substituted.
 - **400 `bad_text`** with no text, **503 `no_voice`** (JSON) when no provider is
   configured at all, so a client expecting audio can tell "quiet" from "refused".
 - Measured 2026-10-24: first byte **~0.5s**, whole clip ~1.0s, against **~1.3s** for

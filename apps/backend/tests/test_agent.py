@@ -455,9 +455,7 @@ class AgentTests(unittest.TestCase):
         # because a wrong number is worse than a slow one.
         offered = [t["function"]["name"]
                    for t in agent_mod.Agent._tools_for(True, "stark pay my dstv")]
-        # Acting, not reading. `switch_appliance` is the other tool that changes
-        # the world (a socket, not money), so it belongs in the same list.
-        self.assertEqual(offered, ["pay_bill", "switch_appliance"])
+        self.assertEqual(offered, ["pay_bill"])
         without = [t["function"]["name"] for t in agent_mod.Agent._tools_for(False)]
         self.assertEqual(without, [t["function"]["name"] for t in agent_mod.TOOLS])
 
@@ -470,7 +468,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(
             [t["function"]["name"]
              for t in agent_mod.Agent._tools_for(True, "stark can you pay my dstv")],
-            ["pay_bill", "switch_appliance"],
+            ["pay_bill"],
         )
 
     def test_a_priced_top_up_defaults_to_the_meter_and_returns_the_token(self):

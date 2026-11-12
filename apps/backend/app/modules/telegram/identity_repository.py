@@ -12,8 +12,7 @@ The rules this file exists to enforce (HANDOFF §8A):
 - **Link attempts are rate-limited** and codes expire, are single-use, and are
   stored hashed.
 
-Phone channels normalise to E.164 before calling into this module; Telegram keys
-on the numeric chat/user id. Nothing here keys on a display name.
+Telegram keys on the numeric chat/user id. Nothing here keys on a display name.
 
 The tables live in the same database as the receipts, next to `neon_auth.*`. A
 `user_id` here is the **app account id** (`accounts.id`), not the auth provider's —
