@@ -40,7 +40,7 @@ class Redactor:
         # Telegram bot tokens, alone or inside an API URL.
         (re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}"), "[bot-token]"),
         # `?token=…`, `&key=…` in a URL (uvicorn's access line logs the query string).
-        (re.compile(rf"(?i)([?&](?:{_KEYS}|code)=)[^&\s\"']+"), r"\1[redacted]"),
+        (re.compile(rf"(?i)([?&](?:{_KEYS}|code|ticket)=)[^&\s\"']+"), r"\1[redacted]"),
         # `"secret": "…"`, `password=…`, `X-Stark-Admin-Key: …`.
         (re.compile(rf"(?i)(\"?(?:{_KEYS}|x-stark-admin-key)\"?\s*[:=]\s*\"?)[^\"\s,;}}&]+"),
          r"\1[redacted]"),

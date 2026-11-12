@@ -118,6 +118,12 @@ export type SpeakReply = {
   audio: string | null;
 };
 
+/** `url` is relative to the API's base URL and works for `expires_in_seconds`. */
+export type SpeakTicket = {
+  url: string;
+  expires_in_seconds: number;
+};
+
 export type NewBill = {
   kind: BillKind;
   provider: string;

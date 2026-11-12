@@ -1,14 +1,14 @@
 """Every `/v1` route is somebody's data, so it needs a live Neon Auth session.
 
-The token comes from `Authorization: Bearer`, or from `?token=` for the one route an
-`<audio>` element plays (it cannot set a header); a query string is a last resort
-that ends up in access logs. An unauthenticated request never falls through to
-anyone's account.
+The token comes from `Authorization: Bearer` and nowhere else. A token in a query
+string lands in access logs and browser history, so the one route an `<audio>`
+element plays takes a short-lived ticket instead (`POST /v1/speak/ticket`). An
+unauthenticated request never falls through to anyone's account.
 """
 
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.common.api_error import ApiError
@@ -27,13 +27,10 @@ class AuthGuard:
 
     def __call__(
         self,
-        request: Request,
         module: Module,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ) -> Account:
-        token = (credentials.credentials if credentials else None) or (
-            request.query_params.get("token") or ""
-        ).strip()
+        token = credentials.credentials.strip() if credentials else ""
         # One query, not three: session, account and opening travel together.
         row = module.auth.session_account(token, now=Clock.now_iso()) if token else None
         if row is None:

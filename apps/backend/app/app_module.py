@@ -7,6 +7,7 @@ database it likes and hand it to `create_app`.
 
 from __future__ import annotations
 
+from app.common.rate_limiter import RateLimiter
 from app.database import neon
 from app.modules.admin.admin_service import AdminService
 from app.modules.account.account_repository import AccountRepository
@@ -43,6 +44,7 @@ from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.modules.vault.vault_service import VaultService
 from app.modules.vending.catalog import CATALOG
 from app.modules.vending.vending import VendingGateway
+from app.modules.voice.speak_ticket import SpeakTickets
 from app.modules.voice.voice_service import VoiceService
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.wallet_service import WalletService
@@ -150,6 +152,9 @@ class AppModule:
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )
         self.voice = VoiceService(self.accounts)
+        self.speak_tickets = SpeakTickets()
+        self.speak_limit = RateLimiter(config.speak_per_minute)
+        self.telemetry_limit = RateLimiter(config.telemetry_per_minute)
         self.reminders = ReminderService(self.accounts, self.telegram)
         self.stub = StubService(
             config,

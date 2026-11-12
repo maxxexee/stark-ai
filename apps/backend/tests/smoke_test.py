@@ -365,10 +365,20 @@ check("POST /v1/speak without text -> 400 bad_text",
 
 # --- streamed voice ---------------------------------------------------------
 # Raw, not JSON: the whole point is that the body arrives before it is finished.
-# `<audio>` sends no headers, so this one route takes the session in the query.
-req = urllib.request.Request(BASE + "/v1/speak/stream?text="
-                             + urllib.parse.quote("Your light bill is 5,000 naira.")
-                             + "&token=" + urllib.parse.quote(TOKEN))
+# `<audio>` sends no headers, so this one route takes a short-lived ticket, and the
+# session token itself is refused there.
+status, ticket, _ = call("POST", "/v1/speak/ticket",
+                         {"text": "Your light bill is 5,000 naira."})
+check("POST /v1/speak/ticket -> a stream URL", status == 200
+      and str(ticket.get("url", "")).startswith("/v1/speak/stream?ticket="), f"status={status}")
+try:
+    urllib.request.urlopen(BASE + "/v1/speak/stream?token=" + urllib.parse.quote(TOKEN),
+                           timeout=30)
+    t_status = 200
+except urllib.error.HTTPError as err:
+    t_status = err.code
+check("the session token in a query string is refused", t_status == 401, f"status={t_status}")
+req = urllib.request.Request(BASE + str(ticket.get("url", "")))
 try:
     with urllib.request.urlopen(req, timeout=60) as resp:
         s_status, s_type, s_len, s_body = resp.status, resp.headers.get("Content-Type", ""), resp.headers.get("Content-Length"), resp.read()
