@@ -70,6 +70,13 @@ Every non-2xx response has this body:
 > then the balance. An amount that breaches all three returns `over_per_payment_cap`.
 > Ordering matters when the caps differ: a ₦20,000 payment with a ₦10,000
 > per-payment limit returns `over_per_payment_cap`, not `over_cap`.
+>
+> The monthly cap is per calendar month, UTC (2026-11-12): it counts this month's
+> delivered payments plus any purchase still `pending`, and resets at midnight UTC on
+> the 1st, the same month the vault contract caps. In `over_cap`'s `detail`,
+> `spent_ngn` is delivered spend only and `remaining_ngn` also subtracts what pending
+> purchases hold. Payments to one account from the app, the agent and approvals are
+> checked one at a time, so two at once cannot both fit under the same room.
 
 ---
 
@@ -322,7 +329,12 @@ that purchase instead of buying a second time. Its amount is held (2026-11-11): 
 leaves `balance_ngn` when the purchase is recorded, so it cannot be spent twice, and it
 moves to `spent_ngn` on delivery or back to `balance_ngn` on failure. The server
 re-reads pending purchases in the background, so a receipt can turn `delivered` or
-`failed` without a retry; poll `/v1/activity` to see it change.
+`failed` without a retry; poll `/v1/activity` to see it change. A purchase whose
+order call got no answer at all is looked up at Flutterwave by its `request_id`
+(2026-11-12): if it went through it turns `delivered` and is charged, and it turns
+`failed` only once Flutterwave has no record of it 30 minutes after it was made. While
+Flutterwave cannot be reached it stays `pending`. A retry of a `pending` purchase is
+not checked against the caps or the balance again: its money is already held.
 
 Errors: `over_per_payment_cap` (409), `over_cap` (409), `insufficient_balance` (409),
 `unknown_bill` (404), `bad_amount` (400), and `vendor_failed` (502) when the bill
@@ -375,7 +387,9 @@ never charged. `bill_id` is `"wallet"` for a `deposit` and a `withdrawal`.
 
 `remaining_cap_ngn` never goes negative. `spent_ngn` counts **delivered bill
 payments only** — deposits, withdrawals, autotop-ups and declined entries do not
-consume the cap.
+consume the cap. It is **this calendar month's** (UTC), and reads 0 again from
+midnight UTC on the 1st (2026-11-12); `GET /v1/wallet`, `GET /v1/state` and the
+agent report the same figure.
 
 ### `PATCH /v1/limits`
 
@@ -511,7 +525,9 @@ as real USDC.
 
 Returns **201** with `{ "wallet": { /* GET /v1/wallet */ }, "entry": { /* Receipt */ } }`.
 `entry.type` is `deposit`, `entry.status` is `received`, `entry.bill_id` is `"wallet"`.
-Repeating `request_id` returns **200** with the original entry and credits nothing.
+Repeating `request_id` returns **200** with the original entry and credits nothing,
+also when the two requests arrive at the same moment (2026-11-12: the second used to
+get a 500).
 Top-ups never count towards the monthly cap.
 
 ### `POST /v1/wallet/deposits` → `Deposit`
@@ -1056,7 +1072,10 @@ into it, but it does contain what people said: treat it as user data.
 
 **Stub only — not part of the product contract, and off by default.** It exists
 only when the server runs with `STARK_STUB_RESET=1`; otherwise it answers **404**
-`no_route` like any unknown route. When on, it replaces the caller's data with the
+`no_route` like any unknown route. It also answers 404 whenever a real rail is
+configured (Flutterwave, the crypto treasury or the vault chain), whatever the flag
+says (2026-11-12): the seeded balance has no deposit behind it. When on, it replaces
+the caller's data, and unlinks the caller's Telegram chats (no one else's), with the
 artboard seed so smoke runs are repeatable: the three seed bills, limits
 `₦30,000` / `₦10,000`, balance `₦64,200`, spent `₦23,000`, the six seed activity rows
 (their 110 delivered units become `units_left`), and no readings. New accounts are
@@ -1109,3 +1128,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-11 | `GET /v1/wallet/rates`: the live naira/USDC deposit and withdrawal rates. Crypto rates now follow Paycrest instead of a fixed `STARK_USDC_NGN_RATE`. Additive only. |
 | 2026-11-11 | `POST /v1/wallet/deposits/preview`: a dry crypto deposit quote from either side. New code `below_minimum` (400), also on `POST /v1/wallet/deposits`, in place of `provider_failed` when 1Click's swap floor is the reason. |
 | 2026-11-11 | `GET /v1/admin/overview` behind `X-Stark-Admin-Key` (`STARK_ADMIN_KEY`): both pots, coverage, and deposits and withdrawals by status. New code `admin_disabled` (403). Additive only. |
+| 2026-11-12 | Payment fixes. The monthly cap and `spent_ngn` (`/v1/wallet`, `/v1/state`, `/v1/limits`, `over_cap`) are this calendar month's (UTC) and reset on the 1st; the cap also counts purchases still `pending`, and an account's payments are checked one at a time. A purchase whose order call timed out is looked up at Flutterwave by `request_id` before it is failed. A racing repeat of a top-up `request_id` answers 200 instead of 500. `POST /v1/_stub/reset` is off while any real rail is configured and unlinks only the caller's chats. No shape changed. |

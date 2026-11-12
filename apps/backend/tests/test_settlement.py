@@ -15,12 +15,18 @@ from tests import support as test_support
 from tests.support import FakeBills
 
 
-class SettlementTest(unittest.TestCase):
+class PendingCase(unittest.TestCase):
+    """A ₦20,000 account, one electricity bill, and a fake Flutterwave."""
+
     def setUp(self):
         self.account = test_support.TempAccount(balance_ngn=20_000)
         self.addCleanup(self.account.close)
         self.api = test_support.ApiHarness(self.account)
         self.addCleanup(self.api.restart)
+        # Settlement is about the vendor's answer, not the vault: with a vault chain
+        # in the environment (dev secrets name a testnet one), every payment would
+        # first need a live, funded testnet vault and fail with 502 without one.
+        self.api.module.bill_payments.payments.vaults = None
         self.client = self.api.client
         self.vendor = FakeBills("pending")
         self.api.sell_with(self.vendor)
@@ -47,6 +53,8 @@ class SettlementTest(unittest.TestCase):
     def wallet(self) -> dict:
         return self.account.store.wallet()
 
+
+class SettlementTest(PendingCase):
     def test_a_delivery_settles_without_a_retry(self):
         receipt = self.pay()
         self.assertEqual(self.wallet(), {"balance_ngn": 15_000, "spent_ngn": 0})
@@ -89,6 +97,44 @@ class SettlementTest(unittest.TestCase):
                                  json={"bill_id": self.bill["id"], "amount_ngn": 5_000})
         self.assertNotEqual(again.json()["id"], receipt["id"])  # a new, separate purchase
         self.assertEqual(self.wallet(), {"balance_ngn": 10_000, "spent_ngn": 10_000})
+
+
+class LostAnswerTest(PendingCase):
+    """The order call timed out, so the receipt has no `tx_ref` to re-read.
+
+    It may still have been placed. Before anything is given back, Flutterwave is
+    asked by our own reference; only a purchase it has no record of is written off.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.vendor.outcome = "successful"
+        self.vendor.lose_answer = True
+
+    def test_a_purchase_that_went_through_is_delivered_not_refunded(self):
+        receipt = self.pay()
+        self.settle(receipt, minutes_old=45)  # well past the write-off window
+        settled = self.account.store.get(receipt["id"])
+        self.assertEqual(settled["status"], "delivered")
+        self.assertEqual(settled["vendor_ref"], receipt["request_id"])
+        self.assertEqual(self.wallet(), {"balance_ngn": 15_000, "spent_ngn": 5_000})
+        self.assertIn(receipt["request_id"], self.vendor.read)
+
+    def test_one_flutterwave_never_got_is_written_off_after_the_window(self):
+        self.vendor.refuse = self.vendor.error(0, "Could not reach Flutterwave: timed out")
+        receipt = self.pay()
+        self.settle(receipt, minutes_old=5)
+        self.assertEqual(self.account.store.get(receipt["id"])["status"], "pending")
+        self.settle(receipt, minutes_old=45)
+        self.assertEqual(self.account.store.get(receipt["id"])["status"], "failed")
+        self.assertEqual(self.wallet(), {"balance_ngn": 20_000, "spent_ngn": 0})
+
+    def test_flutterwave_unreachable_is_not_a_reason_to_refund(self):
+        receipt = self.pay()
+        self.vendor.refuse_reads = self.vendor.error(503, "Service unavailable")
+        self.settle(receipt, minutes_old=45)
+        self.assertEqual(self.account.store.get(receipt["id"])["status"], "pending")
+        self.assertEqual(self.wallet(), {"balance_ngn": 15_000, "spent_ngn": 0})
 
 
 if __name__ == "__main__":

@@ -18,8 +18,10 @@ Two rules every purchase keeps:
    status"), so a status read follows it. Pending is not success, and the caller
    must not charge for it.
 2. **A retry never buys again.** It re-reads the purchase by Flutterwave's `tx_ref`,
-   saved on the receipt, the only id `GET /bills/{id}` accepts. A purchase that has
-   no `tx_ref` got no answer at all; `PaymentService` gives it up after a while.
+   saved on the receipt. A purchase that has no `tx_ref` got no answer at all (the
+   order call timed out), yet may have been placed, so it is looked up by our own
+   `reference` (`find`); `PaymentService` gives it up only when Flutterwave has no
+   record of it after a while.
 
 Without Flutterwave configured nothing is sold: the gateway refuses every purchase
 with `not_available`, and nothing is charged.
@@ -152,6 +154,27 @@ class VendingGateway:
         """Ask Flutterwave about a purchase that came back pending."""
         return self._read(vendor_ref, amount_ngn, token_required)
 
+    def find(self, request_id: str, amount_ngn: int, *,
+             token_required: bool) -> VendingOutcome | None:
+        """Look up, by our own `reference`, a purchase whose order call got no answer.
+
+        None means Flutterwave has no record of it: a 400 or 404 for the reference,
+        or no Flutterwave to ask. Anything else it cannot answer (unreachable, rate
+        limited, refused) is pending, because a purchase that may have been placed
+        must not be refunded on a guess. A record found is read like any other, and
+        the reference becomes the receipt's `vendor_ref` for the next check.
+        """
+        if self.client is None:
+            return None
+        try:
+            bill = self.client.bill_status(request_id)
+        except FlutterwaveError as err:
+            if err.status in (400, 404):
+                return None
+            return VendingOutcome(status=PENDING, code=str(err.status), message=err.message,
+                                  token_required=token_required)
+        return self._outcome(bill, request_id, amount_ngn, token_required)
+
     def _read(self, vendor_ref: str, amount_ngn: int, token_required: bool,
               recharge_token: str | None = None) -> VendingOutcome:
         assert self.client is not None
@@ -160,6 +183,11 @@ class VendingGateway:
         except FlutterwaveError as err:
             return VendingOutcome(status=PENDING, code=str(err.status), message=err.message,
                                   token_required=token_required, vendor_ref=vendor_ref)
+        return self._outcome(bill, vendor_ref, amount_ngn, token_required, recharge_token)
+
+    def _outcome(self, bill: dict, vendor_ref: str, amount_ngn: int, token_required: bool,
+                 recharge_token: str | None = None) -> VendingOutcome:
+        """What Flutterwave's status read of one purchase means for the receipt."""
         status = bill["status"].lower()
         if status in ("successful", "success"):
             # Flutterwave's docs name all three places a token can arrive.

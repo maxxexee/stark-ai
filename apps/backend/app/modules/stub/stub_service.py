@@ -1,8 +1,14 @@
 """`POST /v1/_stub/reset`: put the caller's account back to the artboard seed.
 
-Off unless `STARK_STUB_RESET=1`. A deployed API answers it exactly like a route
-that does not exist, so no signed-in user can swap their real data for the
-artboard's.
+Off unless `STARK_STUB_RESET=1`, and off whenever a real rail is configured
+(Flutterwave, the treasury key or the vault chain), whatever the flag says: the
+reset writes a ₦64,200 balance that no deposit and no vault entry stands behind, and
+with a rail that balance could buy real goods or leave as real money. Off, it
+answers exactly like a route that does not exist, so no signed-in user can swap
+their real data for the artboard's.
+
+It only touches the caller's account: their bills, history, wallet, caps and
+readings, and the Telegram chats linked to them. Other accounts' links stay.
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ class StubService:
     def __init__(self, config: ApiConfigService, accounts: AccountService,
                  repository: AccountRepository, receipts: ReceiptRepository,
                  readings: TelemetryRepository, identities: IdentityRepository,
-                 reminders: ReminderService) -> None:
+                 reminders: ReminderService, *, live_rails: bool) -> None:
         self.config = config
         self.accounts = accounts
         self.repository = repository
@@ -30,9 +36,10 @@ class StubService:
         self.readings = readings
         self.identities = identities
         self.reminders = reminders
+        self.live_rails = live_rails
 
     def reset(self, account_id: str) -> dict[str, bool]:
-        if not self.config.stub_reset_enabled:
+        if not self.config.stub_reset_enabled or self.live_rails:
             raise ApiError(404, "no_route", "No route POST /v1/_stub/reset")
         bills = self.accounts.state(account_id).bills
         bills.clear()
@@ -46,6 +53,8 @@ class StubService:
                                      monthly_cap_ngn=AccountService.MONTHLY_CAP_NGN,
                                      per_payment_cap_ngn=AccountService.PER_PAYMENT_CAP_NGN)
         self.readings.clear(account_id)
+        # In memory and keyed by bill, so the seeded bills' reminders can fire again.
         self.reminders.log.clear()
-        self.identities.clear()
+        for identity in self.identities.identities_for(account_id):
+            self.identities.unlink(identity["channel"], identity["channel_user_id"])
         return {"reset": True}

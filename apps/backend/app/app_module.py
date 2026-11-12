@@ -159,6 +159,8 @@ class AppModule:
             self.readings,
             self.identities,
             self.reminders,
+            live_rails=(self.flutterwave is not None or treasury is not None
+                        or self.vaults.enabled),
         )
 
     @classmethod
