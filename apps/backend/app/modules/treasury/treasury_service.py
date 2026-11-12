@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from typing import Any, Callable, Optional, TypeVar
 
@@ -71,23 +72,36 @@ class TreasuryService:
         self.mainnet_rpc = mainnet_rpc
         self.watch = watch
 
-    def report(self) -> dict[str, Any]:
-        owed = int(self.db.value("SELECT COALESCE(SUM(balance_ngn), 0) FROM wallets") or 0)
-        usdc = _read(self._treasury_usdc) if self.treasury_account else None
+    def report(self, *, fresh: bool = True) -> dict[str, Any]:
+        """Each balance is a separate network call, so they are read at the same time.
+
+        `fresh=False` reuses the Flutterwave balance the money loop read in the last
+        minute, which is what the admin page wants: it is a view, not an alarm.
+        """
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            owed = pool.submit(self.db.value,
+                               "SELECT COALESCE(SUM(balance_ngn), 0) FROM wallets")
+            usdc = pool.submit(_read, self._treasury_usdc) if self.treasury_account else None
+            flutterwave = pool.submit(_read, lambda: self.floats.balance(fresh=fresh))
+            reserved = pool.submit(self.floats.reserved)
+            rate = pool.submit(_read, self.usdc_rate.market)
+            stuck = pool.submit(self.db.value,
+                                "SELECT COUNT(*) FROM chain_ops WHERE status <> 'done'")
+        usdc_held = usdc.result() if usdc is not None else None
+        market = rate.result()
         held: dict[str, Optional[int]] = {
-            "flutterwave_ngn": _read(lambda: self.floats.balance(fresh=True)),
-            "pending_purchases_ngn": self.floats.reserved(),
-            "treasury_usdc_as_ngn": None if usdc is None
-            else _read(lambda: int(usdc * self.usdc_rate.market())),
+            "flutterwave_ngn": flutterwave.result(),
+            "pending_purchases_ngn": reserved.result(),
+            "treasury_usdc_as_ngn": None if usdc_held is None or market is None
+            else int(usdc_held * market),
         }
         known = sum(v for k, v in held.items() if v is not None and k != "pending_purchases_ngn")
-        stuck_ops = int(self.db.value(
-            "SELECT COUNT(*) FROM chain_ops WHERE status <> 'done'"
-        ) or 0)
+        owed = int(owed.result() or 0)
+        stuck_ops = int(stuck.result() or 0)
         return {
             "owed_to_users_ngn": owed,
             "held": held,
-            "treasury_usdc": usdc,
+            "treasury_usdc": usdc_held,
             "coverage_ngn": known - held["pending_purchases_ngn"] - owed,
             "unsettled_vault_ops": stuck_ops,
         }
