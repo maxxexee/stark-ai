@@ -21,9 +21,9 @@ From the repo root:
 
 | Command | What it does |
 |---|---|
-| `bun --filter @stark/contracts run contract:test` | 70 unit tests on the host |
+| `bun --filter @stark/contracts run contract:test` | 81 unit tests on the host |
 | `bun --filter @stark/contracts run contract:check` | type-check the wasm target |
-| `bun --filter @stark/contracts run contract:build` | deployable wasm → `vault/target/near/stark_vault.wasm` (176 KB) |
+| `bun --filter @stark/contracts run contract:build` | deployable wasm → `vault/target/near/stark_vault.wasm` (193 KB) |
 
 Or from `vault/`: `cargo test`, `cargo near build non-reproducible-wasm`.
 
@@ -42,7 +42,11 @@ probably redirected; set `RUSTUP_HOME` to the real `~/.rustup`. See
 
 **Holds:** the user's USDC (Circle's NEP-141 token on mainnet, `usdc.fakes.testnet` on
 testnet). Deposits arrive by `ft_transfer_call`; the `msg` is a reference applied once,
-so a repeated deposit is sent back.
+so a repeated deposit is sent back. Only the funder and the treasury may deposit, and a
+`msg` longer than 128 bytes is refused: anyone else's USDC, or an overlong `msg`, is
+returned in full without writing state, so a stranger cannot spend the vault's storage
+on references or put events in its log. Events and transfer memos are serialised as
+JSON, never spliced into a string.
 
 **Enforces:** monthly cap, per-payment cap, meter allowlist, owner-only policy changes,
 pause, and an owner withdraw that still works while paused. Caps are in naira; `pay`
@@ -58,6 +62,25 @@ only.
 **Roles:** the agent's function-call key may only call `pay` on its own vault. The
 funder sets the rate, deposits and debits. The owner changes policy. So a leaked agent
 key cannot move the rate, the caps or where the money goes.
+
+**Hand-over:** ownership moves in two steps. The owner calls `propose_owner(owner)`, and
+nothing changes until that account calls `accept_owner()`; a new proposal replaces the
+last, and `get_pending_owner` shows the one in flight. A mistyped account id can never
+accept, so the vault cannot be handed to an account nobody holds. (`set_owner` is gone.)
+
+**Upgrading existing vaults.** Vaults created from the global contract run whatever code
+is published under the funder's id, so a change reaches them only once it is published
+again (HANDOFF §13.3):
+
+```sh
+cd apps/backend
+STARK_FUNDER_ACCOUNT=... STARK_FUNDER_KEY=... STARK_AGENT_KEY=... STARK_BROADCAST=1 \
+  python -m app.modules.chain.vault_chain publish assets/stark_vault.wasm
+```
+
+Vaults created with `STARK_VAULT_CODE=<path>` carry their own copy and keep the old code
+until each is redeployed. The contract state layout is unchanged (the pending owner sits
+under its own storage key), so existing state reads as before.
 
 ```
 vault/src/policy.rs   pure rules, no near-sdk, unit-tested

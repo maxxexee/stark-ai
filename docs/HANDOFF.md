@@ -1186,9 +1186,10 @@ then the first live runs.
    bank withdrawal end to end, watching the webhook arrive.
 3. **Per-user vaults (owner).** Put `STARK_FUNDER_ACCOUNT`, `STARK_FUNDER_KEY` and
    `STARK_AGENT_KEY` in `apps/backend/.env` and in Brimble. Publish the vault code as a
-   global contract once:
+   global contract, from `apps/backend`, once and again after every contract change
+   (existing vaults run whatever is published, so they keep the old code until then):
    ```sh
-   python -m app.modules.chain.vault_chain publish ../contracts/vault/target/wasm32-unknown-unknown/release/stark_vault.wasm
+   python -m app.modules.chain.vault_chain publish assets/stark_vault.wasm
    ```
    That is also the first round trip of the global-contract actions (§10.21), so check
    the transaction on the explorer before creating a user's vault.

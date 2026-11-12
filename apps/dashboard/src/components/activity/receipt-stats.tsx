@@ -1,6 +1,7 @@
 import type { Receipt } from "@stark/api/types";
 import { Stat, StatGrid } from "@stark/ui/components/stat";
 import { formatNaira } from "@stark/utils/format";
+import { NearExplorer } from "@/lib/receipts/near-explorer";
 
 export function ReceiptStats({ receipt }: { receipt: Receipt }) {
   return (
@@ -14,7 +15,7 @@ export function ReceiptStats({ receipt }: { receipt: Receipt }) {
       {receipt.tx_hash ? (
         <Stat label="Approved by">
           <a
-            href={`https://testnet.nearblocks.io/txns/${receipt.tx_hash}`}
+            href={NearExplorer.transaction(receipt.tx_hash)}
             target="_blank"
             rel="noreferrer"
             className="underline underline-offset-4"

@@ -16,6 +16,13 @@ the vault's `get_policy` is compared with the account's current limits and
 `set_policy` is sent if they differ. Caps only bind at the moment of paying, so
 this is exact where it matters, and settings screens need no chain calls.
 
+Op ids (`chain_ops.id`, one table for every user) are scoped by user:
+`fund:<user>:<reference>`, `debit:<user>:<reference>`, `refund:<user>:<payment_id>`.
+Payment ids restart at 1 in every vault and some references are client-chosen, so an
+unscoped `refund:1` from one user would turn every other user's `refund:1` into a
+silent no-op. Rows written before this (`fund:<reference>`, …) are still sent: an id
+is only a key. On chain a reference is already per vault, so it is left as it was.
+
 A broadcast that fails for a network reason stays `pending` and is retried by the
 money loop. Every op is safe to resend: `fund`/`debit` carry a reference the
 contract applies once, and `refund` applies once per payment. A refusal from the
@@ -61,7 +68,9 @@ class AuthorisationFailed(Exception):
 
 @dataclass(frozen=True)
 class PaymentAuthorisation:
-    tx_hash: str
+    # None when the chain is not broadcasting: a dry signature names no transaction,
+    # so a receipt must not link one.
+    tx_hash: Optional[str]
     # None when the transaction was signed dry and never sent.
     payment_id: Optional[int]
 
@@ -123,7 +132,7 @@ class VaultService:
                 log.error("vault creation failed user=%s vault=%s: %s", user_id, vault_id, err)
                 self._record_vault(user_id, vault_id, "failed", None, str(err))
                 raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
-            self._record_vault(user_id, vault_id, "ready", result.tx_hash, None)
+            self._record_vault(user_id, vault_id, "ready", result.sent_tx_hash, None)
             self._queue_opening_deposit(user_id, vault_id)
             return vault_id
 
@@ -146,7 +155,7 @@ class VaultService:
         self.db.query(
             "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
             " VALUES ($1, $2, 'fund', $3, 'pending', 0, $4) ON CONFLICT (id) DO NOTHING",
-            [f"fund:{reference}", user_id,
+            [f"fund:{user_id}:{reference}", user_id,
              json.dumps({"amount_ngn": str(opening), "reference": reference,
                          "amount_usdc": str(self.usdc_for(opening))}),
              Clock.now_iso()],
@@ -156,17 +165,21 @@ class VaultService:
 
     def credit(self, user_id: str, amount_ngn: int, reference: str) -> None:
         """Send the deposit's worth of USDC into the vault, priced now so a retry
-        sends the same amount."""
+        sends the same amount.
+
+        `reference` becomes the deposit's on-chain `msg`, so a caller passing an id
+        the client chose must prefix it (test top-ups use `topup:`): a bare
+        `refund:1` or `opening:<vault>` would be read as something else."""
         if self.chain is None:
             return
-        self._enqueue(user_id, f"fund:{reference}", "fund",
+        self._enqueue(user_id, f"fund:{user_id}:{reference}", "fund",
                       {"amount_ngn": str(amount_ngn), "reference": reference,
                        "amount_usdc": str(self.usdc_for(amount_ngn))})
 
     def debit(self, user_id: str, amount_ngn: int, reference: str) -> None:
         if self.chain is None:
             return
-        self._enqueue(user_id, f"debit:{reference}", "debit",
+        self._enqueue(user_id, f"debit:{user_id}:{reference}", "debit",
                       {"amount_ngn": str(amount_ngn), "reference": reference,
                        "amount_usdc": str(self.usdc_for(amount_ngn))})
 
@@ -179,7 +192,8 @@ class VaultService:
         return -(-amount_ngn * self.usdc_per_kngn() // 1000)
 
     def refund(self, user_id: str, payment_id: int) -> None:
-        self._enqueue(user_id, f"refund:{payment_id}", "refund", {"payment_id": payment_id})
+        self._enqueue(user_id, f"refund:{user_id}:{payment_id}", "refund",
+                      {"payment_id": payment_id})
 
     def set_paused(self, user_id: str, paused: bool) -> None:
         """Mirror the owner's off switch onchain, so even the agent key stops."""
@@ -275,7 +289,7 @@ class VaultService:
                     [op["id"], str(err)[:300]],
                 )
                 return
-            self._finish(op["id"], "done", result.tx_hash, None)
+            self._finish(op["id"], "done", result.sent_tx_hash, None)
 
     def _send_op(self, vault_id: str, method: str, args: dict) -> ChainResult:
         """Ops written before the vault held USDC carry naira only; they are priced now."""
@@ -342,7 +356,7 @@ class VaultService:
             log.warning("payment not settled user=%s vault=%s tx=%s",
                         user_id, vault_id, result.tx_hash)
             raise AuthorisationFailed(_NOT_SETTLED)
-        return PaymentAuthorisation(result.tx_hash, outcome.get("payment_id"))
+        return PaymentAuthorisation(result.sent_tx_hash, outcome.get("payment_id"))
 
     def _sync_policy(self, vault_id: str, limits: agent_layer.Limits) -> None:
         """Push the account's caps, meters and the naira rate where the vault differs.

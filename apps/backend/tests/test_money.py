@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from unittest import mock
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -99,7 +100,7 @@ class FakeChain:
         self.payment_id += 1
         self.calls.append(("pay", meter, amount))
         return ChainResult("cd" * 32, {"payment_id": self.payment_id,
-                                       "settled": self.settled}, True)
+                                       "settled": self.settled}, self.broadcast)
 
     def pay_approved(self, vault_id, meter, amount):
         self._maybe_fail()
@@ -417,6 +418,21 @@ class VaultChainTests(unittest.TestCase):
         self.assertFalse(chain.broadcast)
         self.assertEqual(chain.code, "global:stark.testnet")
         self.assertEqual(chain.storage_yocto, 2 * 10 ** 23)
+        self.assertIsNone(ChainResult("ab", None, False).sent_tx_hash)
+        self.assertEqual(ChainResult("ab", None, True).sent_tx_hash, "ab")
+
+    def test_a_dry_chain_says_so_at_boot(self):
+        keys = {
+            "STARK_FUNDER_ACCOUNT": "stark.testnet",
+            "STARK_FUNDER_KEY": "ed25519:" + near_tx.b58encode(bytes(range(32))),
+            "STARK_AGENT_KEY": "ed25519:" + near_tx.b58encode(bytes(range(1, 33))),
+        }
+        with self.assertLogs("stark.vault", "WARNING") as logged:
+            vault_chain.chain_from_env(keys)
+        self.assertIn("on-chain enforcement is off", logged.output[0])
+        with mock.patch.object(vault_chain.log, "warning") as warning:
+            vault_chain.chain_from_env({**keys, "STARK_BROADCAST": "1"})
+        warning.assert_not_called()
 
 
 # --- the vault and Postgres stay in step ------------------------------------------
@@ -527,6 +543,47 @@ class VaultServiceTests(MoneyCase):
         self.assertIsNone(self.vaults.vault_account(self.account.id))
         self.assertNotEqual(self.vaults.ensure(self.account.id), old)
 
+    def test_op_ids_are_scoped_to_the_user(self):
+        self.vaults.credit(self.account.id, 5000, "dep_1")
+        self.vaults.debit(self.account.id, 1000, "wd_1")
+        self.vaults.refund(self.account.id, 1)
+        ids = [row["id"] for row in self.db.query(
+            "SELECT id FROM chain_ops WHERE user_id = $1 ORDER BY seq", [self.account.id])]
+        user = self.account.id
+        self.assertEqual(ids, [f"fund:{user}:dep_1", f"debit:{user}:wd_1",
+                               f"refund:{user}:1"])
+
+    def test_two_users_refunds_of_the_same_payment_id_both_go_out(self):
+        # Payment ids restart at 1 in every vault.
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.refund(self.account.id, 1)
+        self.vaults.refund(other.id, 1)
+        self.assertEqual(self.chain.methods().count("refund"), 2)
+
+    def test_a_client_reference_cannot_claim_another_users_opening_deposit(self):
+        self.receipts.set_wallet(self.account.id, 7_500, 0)
+        vault = self.chain.vault_id(self.account.id)
+        other = support.TempAccount(db=self.db)
+        self.addCleanup(other.close)
+        self.vaults.credit(other.id, 100, f"opening:{vault}")
+        self.vaults.ensure(self.account.id)
+        self.vaults.flush(self.account.id)
+        self.assertEqual(self.ops()[-1], {"method": "fund", "status": "done"})
+        self.assertEqual(self.chain.calls[-1], ("fund", {
+            "amount_usdc": 5_000_003, "reference": f"opening:{vault}"}))
+
+    def test_an_op_written_with_an_old_unscoped_id_is_still_sent(self):
+        self.vaults.ensure(self.account.id)
+        self.db.query(
+            "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
+            " VALUES ($1, $2, 'refund', $3, 'pending', 0, $4)",
+            [f"refund:{self.account.id}-legacy", self.account.id,
+             json.dumps({"payment_id": 7}), Clock.now_iso()])
+        self.assertEqual(self.vaults.flush(self.account.id), 0)
+        self.assertEqual(self.chain.calls[-1], ("refund", {"payment_id": 7,
+                                                           "amount_usdc": 666_667}))
+
     def test_no_chain_means_no_writes_and_no_authorisation(self):
         offline = VaultService(self.db, None, FakeAccounts(limits()), RATE_1500.market)
         offline.credit(self.account.id, 5000, "dep_1")
@@ -611,6 +668,13 @@ class PaymentPathTests(MoneyCase):
         receipt = self.service(gateway).pay(self.account.id, ELECTRICITY, 5000)
         self.assertEqual(receipt["tx_hash"], "cd" * 32)
         self.assertEqual(self.wallet()["balance_ngn"], 59_200)
+        self.assertEqual(self.chain.methods()[-1], "pay")
+
+    def test_a_dry_chain_leaves_no_tx_hash_on_the_receipt(self):
+        self.chain.broadcast = False
+        gateway = ScriptedGateway(vending.VendingOutcome(status=vending.DELIVERED, token="1234"))
+        receipt = self.service(gateway).pay(self.account.id, ELECTRICITY, 5000)
+        self.assertIsNone(receipt["tx_hash"], "a dry signature names no real transaction")
         self.assertEqual(self.chain.methods()[-1], "pay")
 
     def test_a_vendor_failure_refunds_the_vault(self):
@@ -1290,6 +1354,19 @@ class WalletRouteTests(unittest.TestCase):
         response = self.api.client.post("/v1/wallet/topup", json={"amount_ngn": 5000})
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json()["code"], "not_available")
+
+    def test_a_top_up_request_id_cannot_pose_as_a_refund_on_chain(self):
+        self.account.store.set_wallet(0, 0)
+        chain = FakeChain()
+        wallet = self.api.module.wallet
+        wallet.test_money = True
+        wallet.vaults = VaultService(self.account.db, chain, FakeAccounts(limits()),
+                                     RATE_1500.market)
+        response = self.api.client.post("/v1/wallet/topup",
+                                        json={"amount_ngn": 1500, "request_id": "refund:1"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(chain.calls[-1], ("fund", {"amount_usdc": 1_000_001,
+                                                    "reference": "topup:refund:1"}))
 
     def test_withdraw_without_flutterwave_is_not_available_and_takes_nothing(self):
         self.api.module.withdrawals.flutterwave = None
