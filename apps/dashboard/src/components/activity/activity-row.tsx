@@ -13,7 +13,7 @@ export function ActivityRow({ receipt, selected }: { receipt: Receipt; selected?
       search={(prev) => ({ ...prev, receipt: receipt.id })}
       className={cn(listRowClass, selected && "bg-surface-selected hover:bg-surface-selected")}
     >
-      <span className="tabular w-12 flex-none text-sm text-muted-foreground">
+      <span className="tabular w-14 flex-none text-sm whitespace-nowrap text-muted-foreground">
         {formatActivityTime(receipt.created_at)}
       </span>
       <RowText

@@ -13,7 +13,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <TooltipProvider>
       <div className="flex min-h-dvh flex-col">
         <AppHeader />
-        <main className="mx-auto flex w-full max-w-190 flex-1 flex-col gap-6 px-4 pt-5 pb-8 sm:px-6 sm:pt-8 sm:pb-28">
+        <main className="mx-auto flex w-full max-w-190 flex-1 flex-col gap-6 px-4 pt-5 pb-36 sm:px-6 sm:pt-8 sm:pb-28">
           <PausedBanner />
           {children}
         </main>

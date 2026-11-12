@@ -28,7 +28,7 @@ export function ReceiptSheet({
       {shown ? (
         <SheetContent
           side={isMobile ? "bottom" : "right"}
-          className="gap-6 p-5 data-[side=bottom]:rounded-t-2xl"
+          className="gap-6 p-5 data-[side=bottom]:rounded-t-2xl data-[side=bottom]:pb-[max(20px,env(safe-area-inset-bottom))]"
         >
           <ReceiptHeader status={Receipts.status(shown)} />
           <ReceiptAmount receipt={shown} />
