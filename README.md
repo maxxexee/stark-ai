@@ -9,14 +9,17 @@ Built for **NEAR HACKATHON** (2026-11-01 → 11-14). Tracks: **`realworld`** (le
 
 ## Why it is safe to let an agent spend
 
-The agent never holds a key that can move money freely. Every payment goes through the
-vault contract, and the contract, not the prompt, decides.
+The agent never holds a key that can move money freely. Each user's USDC sits in their
+own vault contract, every payment goes through it, and the contract, not the prompt,
+decides.
 
 | Rule | Where it is enforced | Check it yourself |
 |---|---|---|
-| Monthly cap and per-payment cap | `pay()` in the vault contract | `get_policy` on [`stark-vault.testnet`](https://testnet.nearblocks.io/address/stark-vault.testnet) |
+| The money is USDC in the user's own vault | NEP-141 deposits into the vault; `pay()` sends the bill's USDC to the treasury, or reverses the payment | `get_state` on [`u-e2e541dbcb1.stark-usdc-fcb734.testnet`](https://testnet.nearblocks.io/address/u-e2e541dbcb1.stark-usdc-fcb734.testnet), and [a settled payment](https://testnet.nearblocks.io/txns/Ho5iZ7HaB7S235FDuqw7Ar5XfCERBKq7XEdxBXeHhcR8) |
+| Monthly cap and per-payment cap, in naira | `pay()` in the vault contract | `get_policy` on the same vault |
 | Only allowlisted meters can be paid | `pay()` in the vault contract | same call, `allowed_meters` |
-| The server's key can call `pay` and nothing else | a NEAR function-call access key on `stark-agent.testnet`, receiver `stark-vault.testnet`, methods `["pay"]` | `view_access_key_list` on `stark-agent.testnet` |
+| The server's key can call `pay` and nothing else | a NEAR function-call access key on each vault, methods `["pay"]` | `view_access_key_list` on the vault |
+| The naira rate can't be moved by that key | `set_rate()` is funder-only | `apps/contracts/vault/src/tests.rs` |
 | A payment over a limit waits for the owner's approval | backend approval queue, then `pay_approved()` | dashboard → Approvals |
 | A question is never a payment | the agent offers no tools on a question, and `pay_bill` refuses one again in code | `apps/backend/tests/test_agent.py` |
 | One switch stops everything | `pause()` in the contract and in the app | dashboard → Settings |
@@ -24,10 +27,10 @@ vault contract, and the contract, not the prompt, decides.
 A leaked server key cannot withdraw, change the policy or pay another contract. NEAR
 rejects a `pause` signed with it with `INVALID_TRANSACTION` before the contract runs.
 
-Read the live policy (no account needed):
+Read a vault's live state (no account needed):
 
 ```sh
-curl -s https://rpc.testnet.near.org -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"stark-vault.testnet","method_name":"get_policy","args_base64":"e30="}}' \
+curl -s https://rpc.testnet.near.org -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"u-e2e541dbcb1.stark-usdc-fcb734.testnet","method_name":"get_state","args_base64":"e30="}}' \
   | python3 -c 'import json,sys; print(bytes(json.load(sys.stdin)["result"]["result"]).decode())'
 ```
 
@@ -57,8 +60,8 @@ Last checked 2026-11-12.
 
 | Piece | State |
 |---|---|
-| Vault contract | **Live on NEAR testnet** at `stark-vault.testnet`. 9 payments recorded on chain under a ₦30,000 monthly / ₦10,000 per-payment cap |
-| Agent signing `pay()` | **Proven on testnet.** The backend signs with the pay-only key above; the 9 recorded payments came through it |
+| Vault contract | **Live on NEAR testnet, holding USDC.** One vault per user under `stark-usdc-fcb734.testnet`. Checked on chain: a deposit, a repeated deposit sent back, a ₦5,000 `pay` that moved 3.205130 USDC to the treasury, and over-cap and unlisted-meter payments refused |
+| Agent signing `pay()` | **Proven on testnet**, with the pay-only key on each vault |
 | Agent model | NEAR AI, **Private TEE end to end**: voice in is Whisper Large v3, chat is `deepseek-ai/DeepSeek-V4.1-Flash-1017`. A question takes about 2–3s to answer. A payment takes 5–15s because it makes several tool calls. `NEAR_AI_MODEL=google/gemini-2.5-flash-lite` is about 3× faster but runs outside a TEE |
 | Web app, API, website | **Deployed**: [dash.hellostark.xyz](https://dash.hellostark.xyz), [geddon.hellostark.xyz/docs](https://geddon.hellostark.xyz/docs), [hellostark.xyz](https://hellostark.xyz) |
 | Sign-in and storage | **Live**: Neon Auth, every account has its own wallet and receipts in Neon Postgres |
@@ -67,9 +70,9 @@ Last checked 2026-11-12.
 | Funding with crypto | **Built, not yet live**: NEAR Intents (1Click) quotes are read live; no deposit has completed |
 | Mainnet | Nothing is on mainnet |
 
-The vault keeps the **ledger and the rules**: balance, caps, allowlist, payment
-records. It does not custody tokens yet; the naira that pays a bill sits with the
-payment provider. Moving the stablecoin itself through the vault is the next step.
+The user's money is USDC in their vault. When a bill is paid, its USDC moves on chain
+to Stark's treasury, which pays the biller in naira through Flutterwave. The naira leg
+is off chain: billers in Nigeria take naira.
 
 ## Run it locally
 
