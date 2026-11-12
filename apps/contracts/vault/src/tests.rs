@@ -215,12 +215,74 @@ fn a_deposit_of_another_token_is_refused() {
     let _ = v.ft_on_transfer(stranger(), U128(1_000_000), "free".to_string());
 }
 
-#[test]
-fn anyone_can_send_usdc_in_without_a_reference() {
-    let mut v = empty_vault();
+/// `ft_on_transfer` as the USDC token calls it, from `sender`. Returns the amount sent back.
+fn transfer_in(vault: &mut Vault, sender: AccountId, amount_usdc: u128, msg: &str) -> U128 {
     act_as(usdc(), OCT_2026);
-    let _ = v.ft_on_transfer(stranger(), U128(2_500), String::new());
-    assert_eq!(v.get_state().balance_usdc, U128(2_500));
+    let PromiseOrValue::Value(unused) =
+        vault.ft_on_transfer(sender, U128(amount_usdc), msg.to_string())
+    else {
+        panic!("a deposit answers at once");
+    };
+    unused
+}
+
+#[test]
+fn the_funder_and_the_treasury_can_send_usdc_in_without_a_reference() {
+    let mut v = empty_vault();
+    assert_eq!(transfer_in(&mut v, funder(), 2_500, ""), U128(0));
+    assert_eq!(transfer_in(&mut v, treasury(), 500, ""), U128(0));
+    assert_eq!(v.get_state().balance_usdc, U128(3_000));
+}
+
+#[test]
+fn usdc_from_a_stranger_is_sent_back_and_stores_nothing() {
+    let mut v = empty_vault();
+    assert_eq!(transfer_in(&mut v, stranger(), 1, "spam_1"), U128(1));
+    assert_eq!(transfer_in(&mut v, stranger(), 2_500, ""), U128(2_500));
+    assert_eq!(v.get_state().balance_usdc, U128(0));
+    assert!(!v.is_applied("spam_1".to_string()), "a stranger's msg must not take storage");
+    assert!(near_sdk::test_utils::get_logs().is_empty(), "nor write an event");
+}
+
+#[test]
+fn a_stranger_cannot_burn_a_reference_the_funder_will_use() {
+    let mut v = empty_vault();
+    transfer_in(&mut v, stranger(), 1, "dep_1");
+    assert_eq!(deposit(&mut v, 5_000, "dep_1"), U128(0));
+    assert_eq!(v.get_state().balance_usdc, U128(5_000));
+}
+
+#[test]
+fn an_overlong_msg_is_sent_back_even_from_the_funder() {
+    let mut v = empty_vault();
+    let long = "x".repeat(MAX_MSG_LEN + 1);
+    assert_eq!(transfer_in(&mut v, funder(), 5_000, &long), U128(5_000));
+    assert!(!v.is_applied(long));
+    let longest = "x".repeat(MAX_MSG_LEN);
+    assert_eq!(transfer_in(&mut v, funder(), 5_000, &longest), U128(0));
+    assert_eq!(v.get_state().balance_usdc, U128(5_000));
+}
+
+#[test]
+fn an_overlong_refund_msg_is_sent_back() {
+    let mut v = funded_vault();
+    let out = v.authorise(METER.to_string(), U128(5_000));
+    let msg = format!("refund:{}{}", out.payment_id, " ".repeat(MAX_MSG_LEN));
+    assert_eq!(transfer_in(&mut v, treasury(), 5_000, &msg), U128(5_000));
+    assert!(!v.get_payment(out.payment_id).unwrap().refunded);
+}
+
+#[test]
+fn a_reference_with_quotes_cannot_forge_event_fields() {
+    let mut v = empty_vault();
+    let forged = r#"x","amount_usdc":"999999999"}]}"#;
+    transfer_in(&mut v, funder(), 5, forged);
+    let logs = near_sdk::test_utils::get_logs();
+    assert_eq!(logs.len(), 1);
+    let event: Value = near_sdk::serde_json::from_str(&logs[0]).expect("the event is valid JSON");
+    assert_eq!(event["event"], "funded");
+    assert_eq!(event["data"][0]["reference"], forged);
+    assert_eq!(event["data"][0]["amount_usdc"], "5");
 }
 
 #[test]
@@ -301,14 +363,87 @@ fn a_withdrawal_that_does_not_arrive_is_put_back() {
     assert_eq!(v.get_state().balance_ngn, U128(64_200));
 }
 
+// --- ownership hand-over: propose, then accept ------------------------------
+
+const NEW_OWNER: &str = "user.testnet";
+
+fn new_owner() -> AccountId {
+    NEW_OWNER.parse().unwrap()
+}
+
 #[test]
 #[should_panic(expected = "Only the owner")]
 fn handing_over_ownership_moves_the_policy_keys() {
     let mut v = funded_vault();
     act_as(owner(), OCT_2026);
-    v.set_owner(stranger());
-    assert_eq!(v.get_state().owner, stranger());
-    v.pause(); // the old owner no longer can
+    v.propose_owner(new_owner());
+    act_as(new_owner(), OCT_2026);
+    v.accept_owner();
+    assert_eq!(v.get_state().owner, new_owner());
+    assert_eq!(v.get_pending_owner(), None);
+    v.pause(); // the new owner can
+    act_as(owner(), OCT_2026);
+    v.unpause(); // the old owner no longer can
+}
+
+#[test]
+fn a_proposal_changes_nothing_until_it_is_accepted() {
+    let mut v = funded_vault();
+    act_as(owner(), OCT_2026);
+    v.propose_owner(new_owner());
+    assert_eq!(v.get_state().owner, owner());
+    assert_eq!(v.get_pending_owner(), Some(new_owner()));
+    v.pause(); // still the owner's to run
+    assert!(v.get_state().paused);
+}
+
+#[test]
+#[should_panic(expected = "has not been offered the vault")]
+fn only_the_proposed_account_can_accept() {
+    let mut v = funded_vault();
+    act_as(owner(), OCT_2026);
+    v.propose_owner(new_owner());
+    act_as(stranger(), OCT_2026);
+    v.accept_owner();
+}
+
+#[test]
+#[should_panic(expected = "has not been offered the vault")]
+fn nobody_can_accept_without_a_proposal() {
+    let mut v = funded_vault();
+    act_as(stranger(), OCT_2026);
+    v.accept_owner();
+}
+
+#[test]
+#[should_panic(expected = "Only the owner")]
+fn a_non_owner_cannot_propose_an_owner() {
+    let mut v = funded_vault();
+    act_as(stranger(), OCT_2026);
+    v.propose_owner(stranger());
+}
+
+#[test]
+#[should_panic(expected = "has not been offered the vault")]
+fn a_new_proposal_replaces_the_last() {
+    let mut v = funded_vault();
+    act_as(owner(), OCT_2026);
+    v.propose_owner(stranger());
+    v.propose_owner(new_owner());
+    act_as(stranger(), OCT_2026);
+    v.accept_owner();
+}
+
+#[test]
+#[should_panic(expected = "has not been offered the vault")]
+fn an_accepted_proposal_cannot_be_accepted_again() {
+    let mut v = funded_vault();
+    act_as(owner(), OCT_2026);
+    v.propose_owner(new_owner());
+    act_as(new_owner(), OCT_2026);
+    v.accept_owner();
+    act_as(owner(), OCT_2026);
+    v.accept_owner();
 }
 
 // --- deposits and debits apply exactly once ---------------------------------
