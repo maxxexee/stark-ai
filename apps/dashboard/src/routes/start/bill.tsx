@@ -1,6 +1,6 @@
 import { Button } from "@stark/ui/components/button";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { AsksBeforePayingNote } from "@/components/bills/asks-before-paying-note";
+import { PaysWhenAskedNote } from "@/components/bills/pays-when-asked-note";
 import { BillForm } from "@/components/bills/bill-form";
 import { OnboardingShell } from "@/components/shell/onboarding-shell";
 
@@ -19,7 +19,7 @@ function FirstBill() {
     >
       <BillForm
         onAdded={() => navigate({ to: "/start/money" })}
-        footer={<AsksBeforePayingNote />}
+        footer={<PaysWhenAskedNote />}
       />
       <Button
         variant="ghost"
