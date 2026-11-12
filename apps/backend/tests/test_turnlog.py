@@ -196,6 +196,40 @@ class ServerTurnLogTests(unittest.TestCase):
         self.assertNotIn("tts", entry["ms"])
         self.assertNotIn("audio", entry)
 
+    def test_a_turn_records_whose_it_was(self) -> None:
+        self.client.post("/v1/voice", json={
+            "transcript_hint": "hello stark what's my balance", "speak": False})
+        entry = [e for e in turnlog.lines(self.folder) if e["kind"] == "turn"][0]
+        self.assertEqual(entry["account_id"], self.account.id)
+
+    def test_a_signed_in_user_cannot_read_the_log(self) -> None:
+        # The harness signs every request in as the account; a session is not enough.
+        self.client.post("/v1/voice", json={
+            "transcript_hint": "hello stark what's my balance", "speak": False})
+        response = self.client.get("/v1/turnlog?limit=0")
+        self.assertIn(response.status_code, (401, 403))
+        self.assertNotIn("entries", response.json())
+
+    def test_the_operator_reads_it_with_the_admin_key_and_can_scope_it(self) -> None:
+        from tests import support as test_support
+
+        key = "k" * 32
+        api = test_support.ApiHarness(self.account, admin_key=key)
+        api.state().agent = self.agent
+        api.client.post("/v1/voice", json={
+            "transcript_hint": "hello stark what's my balance", "speak": False})
+        turnlog.record(turnlog.turn(outcome="answered", account_id="acct_someone_else"))
+
+        wrong = api.client.get("/v1/turnlog", headers={"X-Stark-Admin-Key": "x" * 32})
+        self.assertEqual(wrong.status_code, 401)
+
+        everyone = api.client.get("/v1/turnlog?limit=0",
+                                  headers={"X-Stark-Admin-Key": key}).json()
+        self.assertEqual(everyone["count"], 2)
+        mine = api.client.get(f"/v1/turnlog?limit=0&account={self.account.id}",
+                              headers={"X-Stark-Admin-Key": key}).json()
+        self.assertEqual([e["account_id"] for e in mine["entries"]], [self.account.id])
+
     def test_speak_true_records_the_synthesis_time(self) -> None:
         self.client.post("/v1/voice", json={"transcript_hint": "hello stark what's my balance"})
         entry = [e for e in turnlog.lines(self.folder) if e["kind"] == "turn"][0]
@@ -310,21 +344,24 @@ class ConversationTests(unittest.TestCase):
 
 
 class TurnLogEndpointTests(unittest.TestCase):
-    """`GET /v1/turnlog` — the log, readable from outside the box."""
+    """`GET /v1/turnlog` — the log, readable from outside the box by the operator."""
+
+    ADMIN_KEY = "k" * 32
 
     def setUp(self) -> None:
         from tests import support as test_support
 
         self.account = test_support.TempAccount()
         self.addCleanup(self.account.close)
-        self.api = test_support.ApiHarness(self.account)
+        self.api = test_support.ApiHarness(self.account, admin_key=self.ADMIN_KEY)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.folder = Path(self.tmp.name)
 
     def turnlog(self, limit: str | None = None) -> tuple[int, dict]:
         response = self.api.client.get(
-            "/v1/turnlog", params={} if limit is None else {"limit": limit})
+            "/v1/turnlog", params={} if limit is None else {"limit": limit},
+            headers={"X-Stark-Admin-Key": self.ADMIN_KEY})
         return response.status_code, response.json()
 
     def test_off_is_a_404_not_an_empty_log(self) -> None:

@@ -330,6 +330,11 @@ and `ms`: time to first byte on the stream, whole-synthesis time on
 Off by default, `logs/` is gitignored, and a log that cannot be written is
 discarded rather than returned as a 500.
 
+From outside the box, `GET /v1/turnlog` reads it back for the operator only: it
+needs `X-Stark-Admin-Key`, never a user session, because the file holds every
+account's turns. Each turn carries `account_id`; `?account=<id>` keeps one
+account's.
+
 ## Flutterwave
 
 One account does all the naira: deposits (hosted checkout), bills, and withdrawals

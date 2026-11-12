@@ -107,6 +107,9 @@ class TelegramService:
         result = turn.get("result")
         owner = turn.get("account_id") or self.owner_account_id()
         TurnLogger.turn(
+            # The linked chat's account only: an unlinked chat's turn is nobody's,
+            # never the bot owner's, whose agent merely names the model.
+            account_id=turn.get("account_id"),
             agent=self.accounts.state(owner).agent if owner else None,
             outcome=turn.get("outcome") or "answered",
             clip=None, mime=None,
