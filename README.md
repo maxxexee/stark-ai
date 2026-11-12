@@ -20,6 +20,7 @@ decides.
 | Only allowlisted meters can be paid | `pay()` in the vault contract | same call, `allowed_meters` |
 | The server's key can call `pay` and nothing else | a NEAR function-call access key on each vault, methods `["pay"]` | `view_access_key_list` on the vault |
 | The naira rate can't be moved by that key | `set_rate()` is funder-only | `apps/contracts/vault/src/tests.rs` |
+| A vault's code can't be changed after it's deployed, by anyone, Stark included | each vault is created with its code deployed into it and only the agent's pay-only key, no full-access key; the contract has no upgrade method | `view_access_key_list` on the vault: one `FunctionCall` key, `["pay"]` |
 | A payment over a limit waits for the owner's approval | backend approval queue, then `pay_approved()` | dashboard → Approvals |
 | A question is never a payment | the agent offers no tools on a question, and `pay_bill` refuses one again in code | `apps/backend/tests/test_agent.py` |
 | One switch stops everything | `pause()` in the contract and in the app | dashboard → Settings |
