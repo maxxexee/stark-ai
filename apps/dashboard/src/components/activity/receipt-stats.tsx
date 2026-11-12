@@ -9,6 +9,18 @@ export function ReceiptStats({ receipt }: { receipt: Receipt }) {
       <Stat label="Receipt ID">
         <span className="tabular">{receipt.id.toUpperCase()}</span>
       </Stat>
+      {receipt.tx_hash ? (
+        <Stat label="Approved by">
+          <a
+            href={`https://testnet.nearblocks.io/txns/${receipt.tx_hash}`}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-4"
+          >
+            View on NEAR
+          </a>
+        </Stat>
+      ) : null}
     </StatGrid>
   );
 }

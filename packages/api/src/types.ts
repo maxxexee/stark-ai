@@ -66,7 +66,7 @@ export type Receipt = {
   units: number | null;
   /** Electricity only. */
   token: string | null;
-  /** Debugging only. Never render. */
+  /** The vault's `pay` transaction on NEAR testnet; the receipt links to it. */
   tx_hash?: string | null;
   created_at: string;
   status: ReceiptStatus;
