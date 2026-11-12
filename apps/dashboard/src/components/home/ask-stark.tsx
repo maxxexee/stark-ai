@@ -23,7 +23,7 @@ export function AskStark() {
           placeholder="Ask Stark: “buy 2GB for my line”"
           className="h-full px-0 py-0 text-base shadow-none"
         />
-        <InputGroupAddon align="inline-end" className="py-0">
+        <InputGroupAddon align="inline-end" className="py-0 pr-0 has-[>button]:mr-0">
           {text.trim() ? <AskSendButton /> : <AskSpeakButton />}
         </InputGroupAddon>
       </InputGroup>

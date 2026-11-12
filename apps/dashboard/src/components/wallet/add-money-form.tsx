@@ -21,14 +21,12 @@ const MIN_NGN = 100;
 /** What the card was filled with, kept in the URL so going back to it restores it. */
 export type AddMoneyChoice = { amount: number; option: string | undefined };
 
-// Which panel the user typed into; the other one is worked out from it. Naira sides are
-// whole-naira digits, the Send side of a crypto option is a decimal in that asset.
 type Typed = { side: "send" | "receive"; value: string };
 
 /**
- * Send on top, Receive (naira in the Stark balance) below, one button. For crypto either
- * side can be typed: the other fills from a dry quote once typing settles, and the deposit
- * started from it locks its own quote.
+ * For crypto either side can be typed: the other fills from a dry quote once typing settles. Send
+ * is focused on arrival only with a fine pointer, since on a phone it would raise the keyboard
+ * before the page is read.
  */
 export function AddMoneyForm({
   methods,
@@ -56,9 +54,6 @@ export function AddMoneyForm({
   const sendPanel = useRef<HTMLDivElement>(null);
   const sendInput = useRef<HTMLInputElement>(null);
 
-  // Arriving on the page means "how much?": focus Send with its figure selected, so
-  // typing replaces it. Only with a mouse or trackpad; on a phone it would throw the
-  // keyboard up before the user has read the page.
   useEffect(() => {
     if (window.matchMedia("(pointer: fine)").matches) sendInput.current?.select();
   }, []);
@@ -105,7 +100,6 @@ export function AddMoneyForm({
     setTyped({ side: "receive", value: String(parseAmountInput(raw)) });
 
   const handleOptionChange = (next: SendOption) => {
-    // A crypto amount means nothing in another asset; keep the naira it was worth.
     if (typed.side === "send") setTyped({ side: "receive", value: String(receiveNgn) });
     setPickedKey(SendOptions.key(next));
   };
@@ -141,8 +135,6 @@ export function AddMoneyForm({
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-      {/* A grey tray holding two white panels, with the arrow badge sitting on the seam
-          between them. The panels are the same height, so 50% is the seam. */}
       <div className="relative flex flex-col gap-1 rounded-card bg-surface-2 p-1">
         <SwapPanel
           ref={sendPanel}

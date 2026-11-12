@@ -5,8 +5,6 @@ import { AppShell } from "@/components/shell/app-shell";
 import { sessionStore } from "@/lib/auth/session-store";
 
 export const Route = createFileRoute("/_app")({
-  // Every screen under here reads one person's wallet, so a missing session goes
-  // to the sign-in page before a loader runs and the state query 401s.
   beforeLoad: () => {
     if (!sessionStore.token()) throw redirect({ to: "/login" });
   },

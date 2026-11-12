@@ -5,9 +5,11 @@ import { Icons } from "@stark/ui/components/icons";
 import { Notice } from "@stark/ui/components/notice";
 import { useQuery } from "@tanstack/react-query";
 
+/**
+ * Uses a plain query, not suspense: it also renders inside the error screen, where a state that
+ * failed to load must not throw again.
+ */
 export function PausedBanner() {
-  // Not suspense: this also renders inside the app's error screen, where the state
-  // that failed to load must not throw a second time.
   const { data: state } = useQuery(stateQuery());
   const setPaused = useSetPaused();
 

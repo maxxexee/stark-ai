@@ -731,7 +731,7 @@ class FakeModel:
             if units is not None:
                 spoken += f" and about {units:g} units left"
                 if days is not None:
-                    spoken += f" — roughly {days} days at this rate"
+                    spoken += f", roughly {days} days at this rate"
             return ModelTurn(content=spoken + ".")
 
         if name == "list_devices":
@@ -798,12 +798,12 @@ class FakeModel:
             if data.get("token"):
                 return ModelTurn(
                     content=(
-                        f"Done — ₦{amount:,} paid to {label}. "
+                        f"Done. ₦{amount:,} paid to {label}. "
                         f"Your token is {data['token']}. "
                         "I've put it in your activity too."
                     )
                 )
-            return ModelTurn(content=f"Done — ₦{amount:,} paid to {label}.")
+            return ModelTurn(content=f"Done. ₦{amount:,} paid to {label}.")
 
         if name == "switch_appliance":
             if not result.get("ok"):

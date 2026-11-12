@@ -16,7 +16,7 @@ class BillDto(BaseModel):
     label: str = Field(examples=["Home"])
     reference: str = Field(
         description="Meter, phone or smartcard number. Never a wallet address.",
-        examples=["04512345678"],
+        examples=["0101170026583"],
     )
     last_amount_ngn: Optional[int] = Field(examples=[5000])
     last_units: Optional[float] = Field(examples=[23.9])

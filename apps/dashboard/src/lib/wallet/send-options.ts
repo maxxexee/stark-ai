@@ -1,7 +1,6 @@
 import type { CryptoAsset, FundingMethods } from "@stark/api/types";
 import { Networks } from "@/lib/wallet/networks";
 
-/** What the Add money card's Send side can be: naira through a rail, or a crypto asset. */
 export type SendOption =
   | { kind: "bank" }
   | { kind: "test" }

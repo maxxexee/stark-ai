@@ -1,6 +1,3 @@
-// Shapes from docs/API.md (contract v1, frozen). Additive changes only: add fields here,
-// never rename or retype them. Money is integer naira; times are ISO 8601 UTC strings.
-
 export type BillKind = "electricity" | "airtime" | "data" | "tv" | "internet" | "water";
 
 export type Bill = {
@@ -16,12 +13,13 @@ export type Bill = {
   /** Data and TV only: the vendor plan code and its fixed price. */
   plan?: string;
   plan_price_ngn?: number;
-  /** Additive: when this bill is supposed to be paid, YYYY-MM-DD. Absent for
-   *  meters and lines that do not renew on a schedule. */
+  /**
+   * When this bill is supposed to be paid, YYYY-MM-DD. Absent for meters and lines that do not
+   * renew on a schedule.
+   */
   renews_on?: string;
 };
 
-/** A bill with a renewal inside the reminder window — the shape of `State.due_soon`. */
 export type DueBill = {
   id: string;
   kind: BillKind;
@@ -49,7 +47,7 @@ export type State = {
   /** An estimate from purchase history, not a precise number. */
   days_left: number | null;
   bills: Bill[];
-  /** Additive: bills due inside the reminder window, soonest first. */
+  /** Bills due inside the reminder window, soonest first. */
   due_soon: DueBill[];
   as_of: string;
 };
@@ -92,7 +90,6 @@ export type Limits = {
   per_payment_cap_ngn: number;
   spent_ngn: number;
   remaining_cap_ngn: number;
-  /** How long a payment over a limit waits for approval. */
   approval_window_minutes: ApprovalWindow;
 };
 
@@ -128,16 +125,15 @@ export type VoiceReply = {
   reply: string | null;
   token: string | null;
   receipt_id: string | null;
-  /** Additive: the reply spoken by the local voice, as a WAV data URL.
-   *  null when voice is off (no sidecar configured, or it did not answer). */
+  /** The reply as a WAV data URL; null when voice is off. */
   audio?: string | null;
-  /** Additive: set when the transcript came from server-side speech-to-text
-   *  (an uploaded clip). `"ok"`, or why the clip came back unheard — in which
-   *  case `transcript` is empty and `reply` says so. */
+  /**
+   * Set only for an uploaded clip: `"ok"`, or why it came back unheard, in which case `transcript`
+   * is empty.
+   */
   stt?: "ok" | "no_key" | "failed";
 };
 
-/** Reply of `POST /v1/speak` — a fetched voice, WAV data URL or null. */
 export type SpeakReply = {
   audio: string | null;
 };
@@ -148,19 +144,19 @@ export type NewBill = {
   reference: string;
   label?: string;
   plan?: string;
-  /** Additive: when the bill should be paid, YYYY-MM-DD. */
+  /** YYYY-MM-DD. */
   renews_on?: string;
 };
 
 export type BillPatch = {
   label?: string;
   plan?: string;
-  /** Additive: set a date (YYYY-MM-DD) or clear it with "". */
+  /** A date (YYYY-MM-DD), or "" to clear it. */
   renews_on?: string;
 };
 /**
- * A single-use code that binds a chat to this account. Returned once, by
- * `POST /v1/link/code`; the server keeps only a hash of it.
+ * A single-use code that binds a chat to this account. Returned once; the server keeps only a hash
+ * of it.
  */
 export type LinkCode = {
   code: string;
@@ -199,7 +195,6 @@ export type PaymentRequest = {
   created_at: string;
   expires_at: string;
   decided_at: string | null;
-  /** The payment an approval became. */
   receipt_id: string | null;
 };
 
@@ -226,7 +221,6 @@ export type Payee = {
   last_paid_at: string | null;
 };
 
-/** Which ways of adding (and taking out) money the server has switched on. */
 export type FundingMethods = {
   bank: boolean;
   crypto: boolean;
@@ -238,8 +232,7 @@ export type FundingMethods = {
  * withdrawal costs. A quote locks its own rate when it is made. */
 export type UsdcRates = { deposit: string; withdraw: string };
 
-/** Price a crypto deposit from whichever side the user typed. `amount_in` is a decimal
- * string in the asset. */
+/** `amount_in` is a decimal string in the asset. */
 export type DepositPreviewInput =
   | { asset_id: string; amount_ngn: number }
   | { asset_id: string; amount_in: string };

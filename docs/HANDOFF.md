@@ -540,7 +540,7 @@ bun run test                      # every unit test
 ```sh
 cd apps/backend
 .venv/bin/python -m unittest tests.test_vtpass 2>&1 | tail -3
-.venv/bin/python -m app.modules.vending.vtpass buy --meter 04512345678 --amount 5000 --phone 08031234567
+.venv/bin/python -m app.modules.vending.vtpass buy --meter 0101170026583 --amount 5000 --phone 08031234567
 curl -s http://127.0.0.1:8000/v1/state
 ```
 

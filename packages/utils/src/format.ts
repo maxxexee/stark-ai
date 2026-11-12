@@ -38,6 +38,11 @@ export function formatShortDate(iso: string): string {
   return format(iso, "MMM d");
 }
 
+/** `21:41` */
+export function formatTime(iso: string): string {
+  return format(iso, "HH:mm");
+}
+
 /** `Oct 20, 2026` */
 export function formatLongDate(iso: string): string {
   return format(iso, "MMM d, yyyy");

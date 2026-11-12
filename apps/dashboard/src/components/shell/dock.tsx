@@ -2,8 +2,6 @@ import { DockTab } from "@/components/shell/dock-tab";
 import { DockTalkLink } from "@/components/shell/dock-talk-link";
 import { tabs } from "@/components/shell/tabs";
 
-// Tabs are 40px; the bar is 50px with its padding and border, and the Talk button
-// beside it is 50px too, so both share one top, bottom and midline.
 export function Dock() {
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-5 z-10 hidden items-center justify-center gap-2 sm:flex">

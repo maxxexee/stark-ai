@@ -15,7 +15,6 @@ import type {
   WithdrawInput,
 } from "./types";
 
-// Money moved or a bill changed: balance, caps, units and history can all shift together.
 export function invalidateMoney(qc: QueryClient) {
   return Promise.all([
     qc.invalidateQueries({ queryKey: queryKeys.state }),
@@ -110,9 +109,6 @@ export function useWithdrawCrypto() {
 export function useVoice() {
   const qc = useQueryClient();
   return useMutation({
-    // speak: false — text first, always. The Talk screen fetches the voice
-    // from api.speak once the words are on screen, so synthesis never delays
-    // the reply you are waiting to read.
     mutationFn: (transcript: string) => api.voice(transcript, { speak: false }),
     onSuccess: (reply) => {
       if (reply.receipt_id) return invalidateMoney(qc);
@@ -158,7 +154,6 @@ export function useDecideRequest() {
   });
 }
 
-/** Pause and resume both change what State reports, so State is refetched. */
 export function useSetPaused() {
   const qc = useQueryClient();
   return useMutation({

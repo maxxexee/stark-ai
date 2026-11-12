@@ -2,10 +2,6 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cn } from "@stark/ui/utils/cn";
 import { cva, type VariantProps } from "class-variance-authority";
 
-// shadcn's button, styled the Stark way: burnt orange for the main action.
-// The shape comes from --radius-control: the dashboard sets an 8px rectangle, the
-// website leaves it unset and keeps its pills. `light`, `ink` and `paper` are the
-// website's additions.
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-control,9999px)] border border-transparent bg-clip-padding font-medium whitespace-nowrap no-underline transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {

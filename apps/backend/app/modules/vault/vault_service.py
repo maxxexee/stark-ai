@@ -37,14 +37,15 @@ import json
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Callable, Optional
 
 from app.common.clock import Clock
 from app.database import neon
 from app.modules.account.account_service import AccountService
 from app.modules.agent import agent as agent_layer
 from app.modules.chain import near_tx
-from app.modules.chain.vault_chain import VaultChain
+from app.modules.chain.vault_chain import ChainResult, VaultChain
 
 
 class AuthorisationFailed(Exception):
@@ -63,14 +64,16 @@ class PaymentAuthorisation:
 
 
 _COULD_NOT_AUTHORISE = "I couldn't authorise that payment just now. Nothing was charged."
+_NOT_SETTLED = "I couldn't move the money for that just now. Nothing was charged."
 
 
 class VaultService:
     def __init__(self, db: neon.Database, chain: Optional[VaultChain],
-                 accounts: AccountService) -> None:
+                 accounts: AccountService, ngn_per_usdc: Callable[[], Decimal]) -> None:
         self.db = db
         self.chain = chain
         self.accounts = accounts
+        self.ngn_per_usdc = ngn_per_usdc
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -81,8 +84,14 @@ class VaultService:
     # --- the vault itself -----------------------------------------------------
 
     def vault_account(self, user_id: str) -> Optional[str]:
+        """The user's vault under the current funder. A vault made under another funder
+        (another network, or code before USDC) is not reused: a new one is created."""
+        if self.chain is None:
+            return None
         row = self.db.one(
-            "SELECT account_id FROM vaults WHERE user_id = $1 AND status = 'ready'", [user_id]
+            "SELECT account_id FROM vaults WHERE user_id = $1 AND status = 'ready'"
+            " AND account_id LIKE $2",
+            [user_id, f"%.{self.chain.funder_id}"],
         )
         return row["account_id"] if row else None
 
@@ -102,6 +111,7 @@ class VaultService:
             try:
                 result = self.chain.create(
                     vault_id,
+                    usdc_per_kngn=self.usdc_per_kngn(),
                     monthly_cap_ngn=limits.monthly_cap_ngn,
                     per_payment_cap_ngn=limits.per_payment_cap_ngn,
                     meters=sorted(limits.allowed_meters),
@@ -110,17 +120,59 @@ class VaultService:
                 self._record_vault(user_id, vault_id, "failed", None, str(err))
                 raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
             self._record_vault(user_id, vault_id, "ready", result.tx_hash, None)
+            self._queue_opening_deposit(user_id, vault_id)
             return vault_id
+
+    def _queue_opening_deposit(self, user_id: str, vault_id: str) -> None:
+        """Back a new vault with the balance the wallet already holds, so an existing
+        account can spend from day one. Queued deposits and withdrawals are left out:
+        they reach the vault on their own."""
+        wallet = self.db.one("SELECT balance_ngn FROM wallets WHERE user_id = $1", [user_id])
+        opening = int(wallet["balance_ngn"]) if wallet else 0
+        for op in self.db.query(
+            "SELECT method, args FROM chain_ops WHERE user_id = $1 AND status = 'pending'"
+            " AND method IN ('fund', 'debit')",
+            [user_id],
+        ):
+            amount = int(json.loads(op["args"])["amount_ngn"])
+            opening += -amount if op["method"] == "fund" else amount
+        if opening <= 0:
+            return
+        reference = f"opening:{vault_id}"
+        self.db.query(
+            "INSERT INTO chain_ops (id, user_id, method, args, status, attempts, created_at)"
+            " VALUES ($1, $2, 'fund', $3, 'pending', 0, $4) ON CONFLICT (id) DO NOTHING",
+            [f"fund:{reference}", user_id,
+             json.dumps({"amount_ngn": str(opening), "reference": reference,
+                         "amount_usdc": str(self.usdc_for(opening))}),
+             Clock.now_iso()],
+        )
 
     # --- outbox ---------------------------------------------------------------
 
     def credit(self, user_id: str, amount_ngn: int, reference: str) -> None:
+        """Send the deposit's worth of USDC into the vault, priced now so a retry
+        sends the same amount."""
+        if self.chain is None:
+            return
         self._enqueue(user_id, f"fund:{reference}", "fund",
-                      {"amount_ngn": str(amount_ngn), "reference": reference})
+                      {"amount_ngn": str(amount_ngn), "reference": reference,
+                       "amount_usdc": str(self.usdc_for(amount_ngn))})
 
     def debit(self, user_id: str, amount_ngn: int, reference: str) -> None:
+        if self.chain is None:
+            return
         self._enqueue(user_id, f"debit:{reference}", "debit",
-                      {"amount_ngn": str(amount_ngn), "reference": reference})
+                      {"amount_ngn": str(amount_ngn), "reference": reference,
+                       "amount_usdc": str(self.usdc_for(amount_ngn))})
+
+    def usdc_per_kngn(self) -> int:
+        """USDC base units per ₦1,000 at the market rate: what the vault converts at."""
+        units = Decimal(1000 * 10 ** 6) / self.ngn_per_usdc()
+        return int(units.to_integral_value(rounding=ROUND_HALF_UP))
+
+    def usdc_for(self, amount_ngn: int) -> int:
+        return -(-amount_ngn * self.usdc_per_kngn() // 1000)
 
     def refund(self, user_id: str, payment_id: int) -> None:
         self._enqueue(user_id, f"refund:{payment_id}", "refund", {"payment_id": payment_id})
@@ -163,7 +215,8 @@ class VaultService:
         """Send pending ops in order. Returns how many are still pending.
 
         A user's queue stops at its first transient failure, because order matters:
-        a debit sent ahead of the deposit it depends on would be refused.
+        deposits go first, since a debit sent ahead of the deposit it depends on
+        would be refused, and a deposit never fails for want of balance.
         A user's first money movement creates their vault here; if that fails, the
         ops wait for the next pass.
         """
@@ -188,12 +241,13 @@ class VaultService:
         assert self.chain is not None
         ops = self.db.query(
             "SELECT id, method, args FROM chain_ops"
-            " WHERE user_id = $1 AND status = 'pending' ORDER BY seq",
+            " WHERE user_id = $1 AND status = 'pending'"
+            " ORDER BY CASE WHEN method = 'fund' THEN 0 ELSE 1 END, seq",
             [user_id],
         )
         for op in ops:
             try:
-                result = self.chain.call(vault_id, op["method"], json.loads(op["args"]))
+                result = self._send_op(vault_id, op["method"], json.loads(op["args"]))
             except near_tx.ContractRefused as err:
                 self._finish(op["id"], "failed", None, err.message)
                 continue
@@ -205,6 +259,21 @@ class VaultService:
                 )
                 return
             self._finish(op["id"], "done", result.tx_hash, None)
+
+    def _send_op(self, vault_id: str, method: str, args: dict) -> ChainResult:
+        """Ops written before the vault held USDC carry naira only; they are priced now."""
+        assert self.chain is not None
+        if method in ("fund", "debit"):
+            amount_usdc = int(args.get("amount_usdc") or self.usdc_for(int(args["amount_ngn"])))
+            if method == "fund":
+                return self.chain.deposit(vault_id, amount_usdc, args["reference"])
+            return self.chain.call(vault_id, "debit", {"amount_usdc": str(amount_usdc),
+                                                       "reference": args["reference"]})
+        if method == "refund":
+            payment_id = int(args["payment_id"])
+            amount_usdc = int(self.chain.payment(vault_id, payment_id)["amount_usdc"])
+            return self.chain.deposit(vault_id, amount_usdc, f"refund:{payment_id}")
+        return self.chain.call(vault_id, method, args)
 
     def _finish(self, op_id: str, status: str, tx_hash: Optional[str],
                 error: Optional[str]) -> None:
@@ -240,11 +309,13 @@ class VaultService:
             raise AuthorisationFailed(f"{err.message} Nothing was charged.") from err
         except near_tx.NearRpcError as err:
             raise AuthorisationFailed(_COULD_NOT_AUTHORISE) from err
-        payment_id = result.value.get("payment_id") if isinstance(result.value, dict) else None
-        return PaymentAuthorisation(result.tx_hash, payment_id)
+        outcome = result.value if isinstance(result.value, dict) else {}
+        if result.broadcast and not outcome.get("settled"):
+            raise AuthorisationFailed(_NOT_SETTLED)
+        return PaymentAuthorisation(result.tx_hash, outcome.get("payment_id"))
 
     def _sync_policy(self, vault_id: str, limits: agent_layer.Limits) -> None:
-        """Push the account's caps and meters if the vault holds different ones.
+        """Push the account's caps, meters and the naira rate where the vault differs.
 
         Skipped on a dry chain, which has nothing to read.
         """
@@ -264,6 +335,9 @@ class VaultService:
         }
         if held != wanted:
             self.chain.call(vault_id, "set_policy", wanted)
+        rate = self.usdc_per_kngn()
+        if int(self.chain.state(vault_id)["usdc_per_kngn"]) != rate:
+            self.chain.call(vault_id, "set_rate", {"usdc_per_kngn": str(rate)})
 
     # --- reconciliation -------------------------------------------------------
 
@@ -280,7 +354,9 @@ class VaultService:
                                   "unsettled_ops": stuck}
         if self.chain is None or vault_id is None or not self.chain.broadcast:
             return report
-        balance = int(self.chain.state(vault_id)["balance_ngn"])
+        state = self.chain.state(vault_id)
+        balance = int(state["balance_ngn"])
+        report["vault_balance_usdc"] = int(state["balance_usdc"])
         report["vault_balance_ngn"] = balance
         report["drift_ngn"] = balance - wallet_balance_ngn
         return report

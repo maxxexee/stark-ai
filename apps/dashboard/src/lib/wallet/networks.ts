@@ -1,6 +1,5 @@
 import type { CryptoAsset } from "@stark/api/types";
 
-// 1Click names chains by short code. A network it adds later shows its code until named here.
 const NAMES: Partial<Record<string, string>> = {
   abs: "Abstract",
   aleo: "Aleo",

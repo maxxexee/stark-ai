@@ -410,6 +410,11 @@ class SignedTransaction:
     def hash_hex(self) -> str:
         return self.tx_hash.hex()
 
+    @property
+    def hash_b58(self) -> str:
+        """The hash as RPC, wallets and explorers spell it."""
+        return b58encode(self.tx_hash)
+
     def summary(self) -> dict:
         return {"tx_hash": self.hash_hex, "encoded_len": len(self.tx_bytes) + 65}
 

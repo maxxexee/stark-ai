@@ -14,7 +14,7 @@ class PayeeDto(BaseModel):
     label: str = Field(examples=["Home"])
     kind: BillKind
     provider: str = Field(examples=["Ikeja Electric"])
-    reference: str = Field(examples=["04512345678"])
+    reference: str = Field(examples=["0101170026583"])
     paid_this_month_ngn: int = Field(description="Delivered payments since the 1st, UTC.",
                                      examples=[15000])
     paid_total_ngn: int = Field(description="Every delivered payment.", examples=[23000])

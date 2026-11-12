@@ -1,16 +1,18 @@
 # @stark/contracts
 
 NEAR smart contracts, in Rust. Today there is one: [`vault/`](vault), which holds a
-user's spending policy and is the account the agent's `pay()` calls are signed against.
+user's USDC and spending rules, and is the account the agent's `pay()` calls are signed
+against.
 
 ## Setup
 
-Not needed for the web app, the dashboard or the backend; skip this unless you are
-changing the contract.
+Only needed to change the contract. The web app, the dashboard and the backend run
+without it.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # once
 rustup target add wasm32-unknown-unknown
+cargo install cargo-near                                          # for the deployable wasm
 ```
 
 ## Commands
@@ -19,14 +21,18 @@ From the repo root:
 
 | Command | What it does |
 |---|---|
-| `bun --filter @stark/contracts run contract:test` | 38 unit tests on the host |
+| `bun --filter @stark/contracts run contract:test` | 70 unit tests on the host |
 | `bun --filter @stark/contracts run contract:check` | type-check the wasm target |
-| `bun --filter @stark/contracts run contract:build` | release wasm → `vault/target/wasm32-unknown-unknown/release/stark_vault.wasm` |
+| `bun --filter @stark/contracts run contract:build` | deployable wasm → `vault/target/near/stark_vault.wasm` (176 KB) |
 
-Or with cargo directly from `vault/`: `cargo test`, `cargo build --target wasm32-unknown-unknown --release`.
+Or from `vault/`: `cargo test`, `cargo near build non-reproducible-wasm`.
 
-These are deliberately not turbo tasks, so `bun run test` and `bun run build` work without a
-Rust toolchain.
+The backend ships a copy of the build at `apps/backend/assets/stark_vault.wasm`, which
+new vaults are deployed from (`STARK_VAULT_CODE=assets/stark_vault.wasm`). After changing
+the contract, rebuild and copy it there.
+
+These are not turbo tasks, so `bun run test` and `bun run build` work without a Rust
+toolchain.
 
 If cargo reports no toolchain although rustup is installed, your shell's `$HOME` is
 probably redirected; set `RUSTUP_HOME` to the real `~/.rustup`. See
@@ -34,37 +40,43 @@ probably redirected; set `RUSTUP_HOME` to the real `~/.rustup`. See
 
 ## The vault
 
-**Enforces:** monthly cap, per-payment cap, meter allowlist, owner-only policy
-changes, pause, and an owner-withdraw that still works while paused. The spend
-counter resets on the first of each calendar month.
+**Holds:** the user's USDC (Circle's NEP-141 token on mainnet, `usdc.fakes.testnet` on
+testnet). Deposits arrive by `ft_transfer_call`; the `msg` is a reference applied once,
+so a repeated deposit is sent back.
 
-**Does not move tokens yet.** `balance_ngn` is an internal ledger. The real
-version credits on an NEP-141 `ft_on_transfer` and settles USDC to the treasury.
-If anyone implies money moves onchain today, they are wrong.
+**Enforces:** monthly cap, per-payment cap, meter allowlist, owner-only policy changes,
+pause, and an owner withdraw that still works while paused. Caps are in naira; `pay`
+converts at `usdc_per_kngn`, which only the funder sets. The spend counter resets on the
+first of each calendar month.
+
+**Settles:** `pay` sends the bill's USDC to the treasury, which pays the biller in naira.
+If that transfer fails, the payment is reversed before `pay` returns (`settled: false`).
+A bank withdrawal's USDC goes back to the treasury (`debit`), and a failed bill's USDC
+comes back from the treasury with `msg = "refund:<payment_id>"`, for that exact amount
+only.
+
+**Roles:** the agent's function-call key may only call `pay` on its own vault. The
+funder sets the rate, deposits and debits. The owner changes policy. So a leaked agent
+key cannot move the rate, the caps or where the money goes.
 
 ```
 vault/src/policy.rs   pure rules, no near-sdk, unit-tested
-vault/src/lib.rs      contract wrapper, env-based tests
+vault/src/lib.rs      contract, token movements and callbacks
+vault/src/tests.rs    unit tests, including callbacks with faked transfer results
 ```
 
-**`policy.rs` has a Python twin.** [`apps/backend/policy.py`](../backend/policy.py)
+**`policy.rs` has a Python twin.** [`apps/backend/app/modules/agent/policy.py`](../backend/app/modules/agent/policy.py)
 mirrors its error codes and sentences, and a backend test reads this Rust source and
-fails if they drift. Change both together; `bun run test` will tell you if you didn't.
-
-The wasm comes from plain `cargo build` (214 KB, 2026-10-26). `cargo-near` is only
-needed for the ABI JSON and deploy convenience; neither it nor `near-cli` is required.
+fails if they drift. Change both together.
 
 ## Deployed
 
-**`stark-vault.testnet`**, deployed 2026-10-26 against `near-sdk` 5.29.1. That account's
-key is deliberately not in this repo.
+**Testnet, USDC vaults (2026-11-12).** Parent and treasury `stark-usdc-fcb734.testnet`;
+each user's vault is `u-<id>.stark-usdc-fcb734.testnet`, with the code deployed into it.
+Checked end to end on chain: a 20 USDC deposit (the same reference again was sent back),
+a ₦5,000 `pay` through the agent key that moved 3.205130 USDC to the treasury, and a
+`pay` over the per-payment cap and one to an unlisted meter, both refused by the contract.
 
-`new` was called with `owner` and `treasury` both `stark-vault.testnet`, caps of ₦30,000
-monthly / ₦10,000 per payment, and `04512345678` as the only allowlisted meter. On chain
-that has been exercised end to end: `fund`, a `pay` inside the caps (accepted,
-`payment_id` incremented), a `pay` above the per-payment cap (rejected) and a `pay` to a
-meter not on the allowlist (rejected).
-
-`pay` signed through `apps/backend/near_tx.py` has been broadcast against this account,
-which is how the two encoder bugs below were found: `TransactionV0` has no version tag,
-and `Signature` carries a leading key-type byte.
+**`stark-vault.testnet`**, deployed 2026-10-26, is the earlier ledger-only vault. Its caps
+were ₦30,000 monthly / ₦10,000 per payment with `04512345678` as the only allowed meter;
+`fund`, a `pay` inside the caps and two refused `pay`s ran on it. It holds no tokens.

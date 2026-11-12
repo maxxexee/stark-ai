@@ -1,8 +1,7 @@
 import { InputGroup, InputGroupAddon } from "@stark/ui/components/input-group";
 import { CopyIconButton } from "@/components/wallet/copy-icon-button";
 
-/** A value on one line, never truncated (a long one scrolls sideways on a narrow screen),
- * with a copy button inside the field. */
+/** Never truncated: a long value scrolls sideways on a narrow screen. */
 export function CopyableField({ value, label }: { value: string; label: string }) {
   return (
     <InputGroup className="pl-3">

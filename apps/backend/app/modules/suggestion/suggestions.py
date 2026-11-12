@@ -76,12 +76,12 @@ def _units_item(units_left: float | None, days_left: float | None,
         return None
     if rate:
         runway = units_left / rate
-        text = (f"You're using about {rate:.1f} units a day — "
+        text = (f"You're using about {rate:.1f} units a day, so "
                 f"{units_left:g} left is about {runway:.0f} days.")
         reason = "units_low"
     elif days_left is not None:
         runway = float(days_left)
-        text = f"About {units_left:g} units left — roughly {days_left:g} days."
+        text = f"About {units_left:g} units left, roughly {days_left:g} days."
         reason = "units_low_estimate"
     else:
         return None
@@ -101,7 +101,7 @@ def _cap_item(spent_ngn: int | None, cap_ngn: int | None) -> dict | None:
     level = "alert" if spent_ngn >= cap_ngn * CAP_ALERT else "warn"
     return {
         "id": "sug_cap",
-        "text": f"You've used {pct}% of your ₦{cap_ngn:,} limit — ₦{left:,} left this month.",
+        "text": f"You've used {pct}% of your ₦{cap_ngn:,} limit. ₦{left:,} is left this month.",
         "severity": level,
         "reason": "cap_near",
     }
@@ -157,7 +157,7 @@ def _load_item(telemetry: Iterable[dict],
     name = top.replace("_", " ")
     return {
         "id": "sug_load",
-        "text": (f"{name} is {share:.0%} of measured usage — "
+        "text": (f"{name} is {share:.0%} of measured usage, "
                  f"about ₦{per_day_ngn:,.0f} a day at your tariff."),
         "severity": "info",
         "reason": "load_imbalance",

@@ -3,7 +3,6 @@ import { formatNaira } from "@stark/utils/format";
 
 export class PaymentLimits {
   static presets(limits: Limits): number[] {
-    // The largest preset is the most one payment can be right now, so every preset is payable.
     return [2000, 5000, Math.min(limits.remaining_cap_ngn, limits.per_payment_cap_ngn)]
       .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
       .sort((a, b) => a - b);

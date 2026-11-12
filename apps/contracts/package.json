@@ -6,6 +6,6 @@
   "scripts": {
     "contract:test": "cargo test --manifest-path vault/Cargo.toml",
     "contract:check": "cargo check --manifest-path vault/Cargo.toml --target wasm32-unknown-unknown",
-    "contract:build": "cargo build --manifest-path vault/Cargo.toml --target wasm32-unknown-unknown --release"
+    "contract:build": "cd vault && cargo near build non-reproducible-wasm"
   }
 }

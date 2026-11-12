@@ -7,7 +7,6 @@ type TooltipPayload = {
   side: TooltipPrimitive.Positioner.Props["side"];
 };
 
-// One tooltip serves every trigger, so moving between triggers slides it instead of reopening.
 const tooltipHandle = TooltipPrimitive.createHandle<TooltipPayload>();
 
 function TooltipProvider({ delay = 50, children, ...props }: TooltipPrimitive.Provider.Props) {

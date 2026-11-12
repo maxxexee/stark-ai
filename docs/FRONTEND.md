@@ -153,7 +153,7 @@ Poll this, or refetch after any payment. There is no websocket.
   "kind": "electricity",
   "provider": "Ikeja Electric",
   "label": "Home",
-  "reference": "04512345678",
+  "reference": "0101170026583",
   "last_amount_ngn": 5000,
   "last_units": 23.9,
   "last_paid_at": "2026-10-14T19:33:13Z"

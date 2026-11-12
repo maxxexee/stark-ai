@@ -78,7 +78,8 @@ class AppModule:
         self.flutterwave = flutterwave.client_from_env()
         if self.flutterwave is not None:
             CATALOG.use(self.flutterwave.bill_categories)
-        self.vaults = VaultService(db, vault_chain.chain_from_env(), self.accounts)
+        self.vaults = VaultService(db, vault_chain.chain_from_env(), self.accounts,
+                                    self.usdc_rate.market)
         gateway = VendingGateway(self.flutterwave)
         self.floats = FloatService(db, self.flutterwave, money.float_settings)
         one_click_client = one_click.client_from_env()

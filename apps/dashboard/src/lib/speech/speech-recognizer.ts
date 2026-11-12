@@ -13,7 +13,6 @@ export type Recognition = {
 };
 
 export class SpeechRecognizer {
-  /** The browser's recognizer, or null where there is none (or no window). */
   static create(): Recognition | null {
     if (typeof window === "undefined") return null;
     const w = window as unknown as {

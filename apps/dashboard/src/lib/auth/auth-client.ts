@@ -2,12 +2,11 @@ import { type SessionStore, sessionStore } from "@/lib/auth/session-store";
 import type { AuthUser, Session } from "@/lib/auth/types";
 
 /**
- * Accounts, straight from the browser to Neon Auth (Better Auth under the hood,
- * served at `VITE_NEON_AUTH_URL`). Every successful sign-in is saved to the
- * session store, along with the method it came through.
+ * Talks from the browser straight to Neon Auth (Better Auth at `VITE_NEON_AUTH_URL`) and saves each
+ * sign-in with its method. Requests send credentials because Neon keeps the OAuth state in a cookie
+ * on its own origin.
  */
 export class AuthClient {
-  /** The query parameter Neon appends on the way back from an OAuth provider. */
   private static readonly VERIFIER_PARAM = "neon_auth_session_verifier";
   private static readonly CALLBACK_PATH = "/auth/callback";
 
@@ -35,8 +34,8 @@ export class AuthClient {
   }
 
   /**
-   * Hand the browser to Google. It navigates away and comes back at
-   * `/auth/callback`, so it only settles here if the request itself failed.
+   * Navigates away to Google and comes back at `/auth/callback`, so it only settles here if the
+   * request itself failed.
    */
   async signInWithGoogle(): Promise<void> {
     const callbackURL = `${window.location.origin}${AuthClient.CALLBACK_PATH}`;
@@ -86,7 +85,6 @@ export class AuthClient {
   private async post<T>(path: string, body: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      // Neon keeps the OAuth round-trip's state in a cookie on its own origin.
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -95,7 +93,6 @@ export class AuthClient {
     const data = (await res.json().catch(() => null)) as (T & { message?: string }) | null;
 
     if (!res.ok) {
-      // The provider's messages are already user-facing, so they are shown as-is.
       throw new Error(data?.message ?? `Could not reach the sign-in service (${res.status}).`);
     }
     if (!data) throw new Error("The sign-in service returned nothing.");

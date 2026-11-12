@@ -1,7 +1,6 @@
 # Contributing to Stark
 
-Thanks for helping. This file covers how to get set up, how work flows, and what a pull
-request needs. Product context and the app map are in the [README](README.md).
+Product context and the app map are in the [README](README.md).
 
 ## Setup
 
@@ -15,16 +14,16 @@ Python 3.9+. Rust only if you touch [`apps/contracts`](apps/contracts/README.md)
 
 Configuration lives in [Infisical](https://infisical.com), project `stark`, one folder
 per app (`/backend`, `/dashboard`, `/website`) in each environment. Install the CLI
-(`brew install infisical/get-cli/infisical`) and run `infisical login` once;
+(`brew install infisical/get-cli/infisical`) and run `infisical login` once.
 `.infisical.yaml` already links the repo to the project, and every `dev` script runs
-through `infisical secrets-manager run`. To see or change a value:
+through `infisical secrets-manager run`. To see or change a value, run
 `infisical secrets-manager secrets --env dev --path /backend`.
 [`apps/backend/.env.example`](apps/backend/.env.example) documents each key. Never commit a `.env`.
 
 ## Making a change
 
 1. Branch from `main`: `feat/bill-reminders`, `fix/dashboard-cap-rounding`.
-2. Read the README of the app you are changing. The rules there are not optional.
+2. Read the README of the app you are changing and follow its rules.
 3. Keep a change to one concern. A UI change and an API change are two pull requests
    unless one cannot land without the other.
 4. Before pushing, run:
@@ -55,8 +54,8 @@ Example: `fix(backend): reuse request_id when retrying a pending vend`.
 ## Pull requests
 
 - Say what changed and why, and how you verified it. Screenshots for any visible UI change.
-- Link the issue or milestone (M0–M7 in the README) it moves forward.
-- CI-equivalent is `bun check && bun run build`; a PR that fails either is not ready.
+- Link the issue or milestone (M0–M7 in [`docs/HANDOFF.md`](docs/HANDOFF.md)) it moves forward.
+- A PR is ready when `bun check && bun run build` passes.
 
 ## Rules that apply everywhere
 

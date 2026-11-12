@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 
 export type PillTab<T extends string> = { value: T; label: ReactNode };
 
-/** Section filter (All / Electricity / ...): a segmented control on shadcn Tabs. */
 export function PillTabs<T extends string>({
   tabs,
   value,

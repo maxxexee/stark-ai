@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ActivityEmpty } from "@/components/activity/activity-empty";
 import { ActivityFilters } from "@/components/activity/activity-filters";
 import { ActivitySection } from "@/components/activity/activity-section";
-import { ReceiptCard } from "@/components/activity/receipt-card";
+import { ReceiptSheet } from "@/components/activity/receipt-sheet";
 import { PageTitle } from "@/components/shell/page-title";
 import { Receipts } from "@/lib/receipts/receipts";
 
@@ -30,7 +30,7 @@ function Activity() {
   const rows = data.filter(
     (r) => Receipts.matchesFilter(r, filter) && (!search.bill || r.bill_id === search.bill),
   );
-  const selected = rows.find((r) => r.id === search.receipt) ?? rows[0];
+  const selected = rows.find((r) => r.id === search.receipt);
   const today = rows.filter((r) => isToday(r.created_at));
   const earlier = rows.filter((r) => !isToday(r.created_at));
 
@@ -50,8 +50,6 @@ function Activity() {
         }
       />
 
-      {selected ? <ReceiptCard receipt={selected} /> : null}
-
       {today.length ? (
         <ActivitySection title="Today" receipts={today} selectedId={selected?.id} />
       ) : null}
@@ -59,6 +57,11 @@ function Activity() {
         <ActivitySection title="Earlier" receipts={earlier} selectedId={selected?.id} />
       ) : null}
       {!rows.length ? <ActivityEmpty /> : null}
+
+      <ReceiptSheet
+        receipt={selected}
+        onClose={() => navigate({ search: (prev) => ({ ...prev, receipt: undefined }) })}
+      />
     </>
   );
 }

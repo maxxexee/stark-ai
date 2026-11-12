@@ -1,12 +1,3 @@
-/*
- * Stark design tokens, shared by the dashboard (dark) and the website (light).
- * Import once from each app's stylesheet, after `@import "tailwindcss"`.
- * Inter for body text, Crimson Pro for headings. Brand: black + burnt orange.
- *
- * The shadcn/ui components (Base UI) read the semantic variables below. The light
- * theme is the website's paper and ink; `.dark` (set on <html> by the dashboard) is
- * the app's near-black canvas with burnt-orange actions.
- */
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/crimson-pro";
@@ -122,7 +113,6 @@
   --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
   --font-serif: "Crimson Pro Variable", "Crimson Pro", Georgia, serif;
 
-  /* Brand */
   --color-brand: #c2410c;
   --color-brand-warm: #f08a4b;
   --color-brand-soft: #f7a773;
@@ -132,7 +122,6 @@
   --color-brand-wash: rgb(194 65 12 / 0.12);
   --color-brand-line: rgb(240 138 75 / 0.5);
 
-  /* App (dark) */
   --color-canvas: #111214;
   --color-canvas-deep: #0b0b0c;
   --color-surface: #17181b;
@@ -149,7 +138,6 @@
   --color-line: rgb(255 255 255 / 0.06);
   --color-line-2: rgb(255 255 255 / 0.1);
 
-  /* Website (light) */
   --color-paper: #f4f2ec;
   --color-paper-2: #e9e6dd;
   --color-ink: #0f1115;
@@ -177,16 +165,6 @@
     font-variant-numeric: tabular-nums;
   }
 }
-
-/* ---------------------------------------------------------------------------
-  The helmet's visor glint.
-
-  Opt-in through LogoMark's `glint` prop, so chrome that does not ask for it
-  stays still. The band is a rect clipped to the helmet silhouette inside the
-  SVG, which is why it can sweep without spilling over the transparent corners
-  of the square viewBox. An idle scan every few seconds; hovering the mark
-  speeds the same scan up instead of starting a second animation.
---------------------------------------------------------------------------- */
 
 .glint {
   display: inline-flex;

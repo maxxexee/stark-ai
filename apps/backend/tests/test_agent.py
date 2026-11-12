@@ -25,7 +25,7 @@ ELECTRICITY = {
     "kind": "electricity",
     "provider": "Ikeja Electric",
     "label": "Home meter",
-    "reference": "04512345678",
+    "reference": "0101170026583",
 }
 DSTV = {
     "id": "bill_dstv",
@@ -337,7 +337,7 @@ class BorshTests(unittest.TestCase):
             nonce=7,
             receiver_id=self.RECEIVER,
             block_hash=self.BLOCK_HASH,
-            meter="04512345678",
+            meter="0101170026583",
             amount_ngn=amount_ngn,
         )
 
@@ -379,7 +379,7 @@ class BorshTests(unittest.TestCase):
         args = tx[offset:offset + args_len]
         offset += args_len
         self.assertIn(b'"amount_ngn":"5000"', args)
-        self.assertIn(b'"meter":"04512345678"', args)
+        self.assertIn(b'"meter":"0101170026583"', args)
 
         self.assertEqual(int.from_bytes(tx[offset:offset + 8], "little"),
                          100_000_000_000_000)  # gas, 100 Tgas
@@ -390,7 +390,7 @@ class BorshTests(unittest.TestCase):
 
     def test_amount_is_a_string_over_the_wire(self):
         # near-sdk serialises U128 as a string; a bare number is rejected onchain.
-        args = json.loads(near_tx.pay_args("04512345678", 5_000))
+        args = json.loads(near_tx.pay_args("0101170026583", 5_000))
         self.assertIsInstance(args["amount_ngn"], str)
         self.assertEqual(args["amount_ngn"], "5000")
 
@@ -406,7 +406,7 @@ class BorshTests(unittest.TestCase):
             receiver_id=self.RECEIVER,
             nonce=7,
             block_hash=self.BLOCK_HASH,
-            meter="04512345678",
+            meter="0101170026583",
             amount_ngn=5_000,
         )
         import base64

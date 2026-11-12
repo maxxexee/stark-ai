@@ -23,7 +23,7 @@ ELECTRICITY = {
     "kind": "electricity",
     "provider": "Ikeja Electric",
     "label": "Home meter",
-    "reference": "04512345678",
+    "reference": "0101170026583",
 }
 DSTV = {
     "id": "bill_dstv",
@@ -185,7 +185,7 @@ class GatewayTests(unittest.TestCase):
     def test_the_order_is_the_documented_one(self):
         self.gateway().buy(ELECTRICITY, 5_000, "bill_req1")
         self.assertEqual(self.bills.paid, [{
-            "biller_code": "BIL113", "item_code": "UB159", "customer_id": "04512345678",
+            "biller_code": "BIL113", "item_code": "UB159", "customer_id": "0101170026583",
             "amount_ngn": 5_000, "reference": "bill_req1",
         }])
         # The payment only says it was taken; the status read is what decides.
@@ -467,7 +467,8 @@ class CatalogTests(unittest.TestCase):
     def test_every_disco_is_found_by_its_name_or_abbreviation(self):
         for provider, biller in [("Eko Electric", "BIL112"), ("EKEDC", "BIL112"),
                                  ("IKEDC", "BIL113"), ("Port Harcourt Electric", "BIL116"),
-                                 ("Jos Electricity", "BIL215")]:
+                                 ("Jos Electricity", "BIL215"), ("Benin Electric", "BIL140"),
+                                 ("BEDC", "BIL140")]:
             with self.subTest(provider=provider):
                 self.assertEqual(self.catalog.product("electricity", provider).biller_code,
                                  biller)
@@ -526,7 +527,7 @@ def _receipt(
         "request_id": request_id,
         "bill_id": "bill_home_meter",
         "bill_label": "Home meter",
-        "meter": "04512345678",
+        "meter": "0101170026583",
         "amount_ngn": amount_ngn,
         "units": 23.92,
         "token": "4821 0937 5512 8846 3019",

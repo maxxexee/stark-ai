@@ -26,7 +26,7 @@ class SettlementTest(unittest.TestCase):
         self.api.sell_with(self.vendor)
         self.bill = self.client.post("/v1/bills", json={
             "kind": "electricity", "provider": "Ikeja Electric",
-            "reference": "04512345678", "label": "Home meter",
+            "reference": "0101170026583", "label": "Home meter",
         }).json()
 
     def pay(self) -> dict:

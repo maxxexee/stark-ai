@@ -6,13 +6,12 @@ export function TopUpBar({
   receipt,
   max,
   latest,
-  date,
+  label,
 }: {
   receipt: Receipt;
   max: number;
   latest: boolean;
-  /** Shown only where the day changes, so one day's top-ups share one label. */
-  date: string | undefined;
+  label: string;
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
@@ -25,7 +24,7 @@ export function TopUpBar({
           style={{ height: `${Math.max(6, (receipt.amount_ngn / max) * 80)}%` }}
         />
       </div>
-      <span className="tabular h-4 text-xs text-muted-foreground">{date}</span>
+      <span className="tabular text-xs text-muted-foreground">{label}</span>
     </div>
   );
 }

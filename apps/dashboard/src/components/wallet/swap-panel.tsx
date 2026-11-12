@@ -1,10 +1,11 @@
+import { Spinner } from "@stark/ui/components/spinner";
 import { cn } from "@stark/ui/utils/cn";
 import { type ReactNode, type Ref, type RefObject, useId, useLayoutEffect, useRef } from "react";
 
 /**
- * One side of Add money: a white panel with a label, a big amount and what it is in.
- * The label and the figure are one <label>, so a click anywhere left of the currency
- * chip lands in the amount; the panel shows a ring while its amount has focus.
+ * The label and the figure are one <label>, so a click anywhere left of the currency chip lands in
+ * the amount. Reformatting adds or drops commas, so the caret is restored after the same number of
+ * digits.
  */
 export function SwapPanel({
   label,
@@ -28,9 +29,6 @@ export function SwapPanel({
   const id = useId();
   const ownInput = useRef<HTMLInputElement>(null);
   const input = inputRef ?? ownInput;
-  // Digits (and the decimal point) before the caret at the last keystroke. Reformatting
-  // adds or drops commas, so the caret goes back after the same number of digits rather
-  // than jumping to the end.
   const caretDigits = useRef<number | null>(null);
 
   useLayoutEffect(() => {
@@ -52,7 +50,10 @@ export function SwapPanel({
       className="flex items-end gap-3 rounded-lg bg-card pr-4 transition-shadow has-[input:focus]:ring-2 has-[input:focus]:ring-ring/30"
     >
       <label htmlFor={id} className="flex min-w-0 flex-1 cursor-text flex-col gap-3 py-3.5 pl-4">
-        <span className="text-sm text-muted-foreground">{label}</span>
+        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          {label}
+          {pending ? <Spinner className="size-3.5" aria-label="Updating" /> : null}
+        </span>
         <input
           ref={input}
           id={id}
@@ -70,11 +71,10 @@ export function SwapPanel({
           }}
           className={cn(
             "tabular h-10 w-full min-w-0 bg-transparent p-0 text-3xl font-normal tracking-tight outline-none placeholder:text-muted-foreground",
-            pending && "opacity-50",
+            pending && "opacity-50 motion-safe:animate-pulse",
           )}
         />
       </label>
-      {/* Centred on the figure: 14px panel padding + (40px figure − 36px chip) / 2. */}
       <div className="mb-4 flex-none">{currency}</div>
     </div>
   );

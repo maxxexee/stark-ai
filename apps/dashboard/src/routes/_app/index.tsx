@@ -31,14 +31,10 @@ function Home() {
   const waiting = Approvals.waiting(requests ?? []);
   const meter = Bills.meter(state);
   const low = meter && state.days_left !== null && state.days_left <= Bills.LOW_DAYS;
-  // Reminders the server already judged due (state.due_soon): the soonest one gets
-  // its own action strip, the rest stay in "Stark noticed" as finished sentences.
   const due = Renewals.next(state.due_soon);
-  // The meter Notice and the renewal Notice own their warnings; suggestions say the rest.
   const noticed = (suggestions ?? []).filter(
     (sug) => !(low && sug.reason.startsWith("units_low")) && sug.id !== `sug_due_${due?.id}`,
   );
-  // An empty wallet needs them too: Stark can't pay anything from ₦0.
   const needing =
     Number(Boolean(low)) + Number(Boolean(due)) + Number(state.balance_ngn <= 0) + waiting.length;
 
