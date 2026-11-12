@@ -12,7 +12,6 @@ type LogoMarkProps = {
   glint?: boolean;
 };
 
-/** Stark's helmet mark (an original design). */
 export function LogoMark({
   size = 26,
   cutout = "#111214",

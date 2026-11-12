@@ -1,4 +1,3 @@
-/** Onboarding progress: three short bars. */
 export function Steps({ current, total = 3 }: { current: number; total?: number }) {
   return (
     <div

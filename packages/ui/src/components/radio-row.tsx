@@ -2,7 +2,6 @@ import { RadioGroup, RadioGroupItem } from "@stark/ui/components/radio-group";
 import { cn } from "@stark/ui/utils/cn";
 import type { ReactNode } from "react";
 
-/** A list of choices shown as full-width rows. Built on the shadcn radio group. */
 export function RadioList<T extends string>({
   label,
   value,
@@ -26,7 +25,6 @@ export function RadioList<T extends string>({
   );
 }
 
-/** One option in a RadioList, with the round indicator on the right. */
 export function RadioRow({
   value,
   title,
