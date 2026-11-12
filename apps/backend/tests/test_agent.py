@@ -16,6 +16,7 @@ from app.modules.agent import agent as agent_mod
 from app.modules.agent import memory as memory_mod
 from app.modules.chain import near_tx
 from app.modules.agent import policy as policy_rules
+from tests.regex_model import RegexModel
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 POLICY_RS = ROOT.parent / "contracts" / "vault" / "src" / "policy.rs"
@@ -55,6 +56,7 @@ class FakeToolbox:
         self.receipts: list[dict] = []
         self.requests: list[tuple[str, int, str]] = []
         self.refusals: list[tuple[str, int, str]] = []
+        self.deposits: list[tuple[str, int, str, str]] = []
 
     def get_state(self):
         return {
@@ -70,6 +72,30 @@ class FakeToolbox:
 
     def recent_activity(self):
         return list(self.receipts)
+
+    def funding(self):
+        return {"bank": True, "crypto": True, "recent_deposits": []}
+
+    def add_bill(self, dto):
+        bill = {"id": f"bill_{len(self.bills) + 1}", "kind": dto.kind,
+                "provider": dto.provider, "label": dto.label or dto.provider,
+                "reference": dto.reference}
+        self.bills.append(bill)
+        return bill
+
+    def find_plans(self, kind, provider):
+        return [{"kind": kind, "provider": provider, "plan": "mtn-1gb", "label": "1GB",
+                 "price_ngn": 1_000}]
+
+    def add_money(self, method, amount_ngn, asset, chain):
+        self.deposits.append((method, amount_ngn, asset, chain))
+        pay = ({"checkout_url": "https://checkout.example/dep_1"} if method == "bank"
+               else {"asset": asset, "chain": chain or "tron", "amount": "13.1",
+                     "address": "TXyz" * 8, "memo": None})
+        return {"id": "dep_1", "method": method, "amount_ngn": amount_ngn,
+                "credited_ngn": None, "status": "open", "note": None, "pay": pay,
+                "expires_at": "2026-11-12T13:00:00Z", "created_at": "2026-11-12T12:00:00Z",
+                "credited_at": None}
 
     def request_approval(self, bill_id, amount_ngn, reason):
         self.requests.append((bill_id, amount_ngn, reason))
@@ -133,7 +159,7 @@ class ScriptedModel:
 
 def make_agent(toolbox=None, limits=None, model=None, threads=None):
     return agent_mod.Agent(
-        model=model or agent_mod.FakeModel(),
+        model=model or RegexModel(),
         toolbox=toolbox or FakeToolbox(),
         limits=limits
         or agent_mod.Limits(
@@ -455,21 +481,18 @@ class AgentTests(unittest.TestCase):
         # because a wrong number is worse than a slow one.
         offered = [t["function"]["name"]
                    for t in agent_mod.Agent._tools_for(True, "stark pay my dstv")]
-        self.assertEqual(offered, ["pay_bill"])
+        self.assertEqual(offered, ["pay_bill", "find_plans", "add_bill", "add_money"])
         without = [t["function"]["name"] for t in agent_mod.Agent._tools_for(False)]
         self.assertEqual(without, [t["function"]["name"] for t in agent_mod.TOOLS])
 
-        # A question is offered nothing at all. Measured: with `pay_bill` on the
-        # table, gemini-flash-lite paid the airtime on a hypothetical.
-        self.assertEqual(agent_mod.Agent._tools_for(True, "stark what's my balance"), [])
+        # A question may look plans up and nothing else. Measured: with `pay_bill`
+        # on the table, gemini-flash-lite paid the airtime on a hypothetical.
+        def names(said):
+            return [t["function"]["name"] for t in agent_mod.Agent._tools_for(True, said)]
+        self.assertEqual(names("stark what's my balance"), ["find_plans"])
         self.assertEqual(
-            agent_mod.Agent._tools_for(
-                True, "stark if i pay dstv and top up 5 thousand what is left"), [])
-        self.assertEqual(
-            [t["function"]["name"]
-             for t in agent_mod.Agent._tools_for(True, "stark can you pay my dstv")],
-            ["pay_bill"],
-        )
+            names("stark if i pay dstv and top up 5 thousand what is left"), ["find_plans"])
+        self.assertIn("pay_bill", names("stark can you pay my dstv"))
 
     def test_a_priced_top_up_defaults_to_the_meter_and_returns_the_token(self):
         toolbox = FakeToolbox()
@@ -813,10 +836,58 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(payload["ignored"])
         self.assertEqual(payload["transcript"], "said")
 
-    def test_build_agent_falls_back_to_the_fake_model(self):
+    def test_build_agent_always_uses_near_ai(self):
         limits = agent_mod.Limits(MONTHLY, PER_PAYMENT, ALLOWED)
         agent_ = agent_mod.build_agent(FakeToolbox(), limits)
-        self.assertEqual(agent_.model.name, "fake")
+        self.assertEqual(agent_.model.name, "near-ai")
+
+
+class SetupToolTests(unittest.TestCase):
+    """Adding money and saving a bill from a chat: the link or address rides on the
+    reply, straight from the deposit, and the model only ever sees what to say."""
+
+    def test_funding_by_bank_returns_the_checkout_on_the_reply(self):
+        toolbox = FakeToolbox()
+        reply = make_agent(toolbox).respond("fund my wallet with 20k")
+        self.assertEqual(toolbox.deposits, [("bank", 20_000, "", "")])
+        self.assertEqual(reply.deposit["pay"]["checkout_url"],
+                         "https://checkout.example/dep_1")
+        self.assertIn("₦20,000", reply.reply)
+        self.assertNotIn("checkout.example", reply.reply)
+        self.assertEqual(reply.as_voice_payload("x")["deposit"]["id"], "dep_1")
+
+    def test_funding_with_crypto_keeps_the_address_out_of_the_model(self):
+        toolbox = FakeToolbox()
+        model = RecordingModel()
+        agent_ = make_agent(toolbox, model=model)
+        effect: dict = {}
+        result = agent_._run_tool(agent_mod.ToolCall("add_money", {
+            "method": "crypto", "amount_ngn": 20_000, "asset": "USDT"}), effect)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("TXyz", json.dumps(result))
+        self.assertEqual(result["data"]["asset"], "USDT")
+        self.assertEqual(effect["deposit"]["pay"]["address"], "TXyz" * 8)
+
+    def test_a_refused_setup_is_said_not_raised(self):
+        class Refusing(FakeToolbox):
+            def add_money(self, *args):
+                raise agent_mod.ToolRefusal("pick_chain", "USDT can be sent on eth, tron.")
+        agent_ = make_agent(Refusing())
+        result = agent_._run_tool(agent_mod.ToolCall("add_money", {
+            "method": "crypto", "amount_ngn": 5_000, "asset": "USDT"}), {})
+        self.assertEqual(result["error"]["code"], "pick_chain")
+
+    def test_add_bill_saves_through_the_toolbox(self):
+        toolbox = FakeToolbox()
+        result = make_agent(toolbox)._run_tool(agent_mod.ToolCall("add_bill", {
+            "kind": "tv", "provider": "DStv", "reference": "7023 456 789"}), {})
+        self.assertTrue(result["ok"])
+        self.assertEqual(toolbox.bills[-1]["provider"], "DStv")
+
+    def test_the_snapshot_carries_funding(self):
+        model = RecordingModel()
+        make_agent(model=model).respond("hello")
+        self.assertIn('"funding"', model.seen[0][0]["content"])
 
 
 class AmountParsingTests(unittest.TestCase):

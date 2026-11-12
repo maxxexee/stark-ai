@@ -1,15 +1,13 @@
 """Over a limit, Stark asks instead of only refusing — and only the app can say yes.
 
 Drives the real app on the real database (`support.ApiHarness`), so it needs
-`DATABASE_URL` like the other store tests. The agent runs on the deterministic
-model: NEAR_AI_API_KEY is blanked so a key in the shell cannot make it a live call.
+`DATABASE_URL` like the other store tests. The harness runs the agent on the
+scripted test model, so a key in the shell cannot make it a live call.
 """
 
 from __future__ import annotations
 
-import os
 import unittest
-from unittest import mock
 
 from app.modules.agent import policy
 from tests import support as test_support
@@ -17,9 +15,6 @@ from tests import support as test_support
 
 class ApprovalsTest(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(os.environ, {"NEAR_AI_API_KEY": ""}, clear=False)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.account = test_support.TempAccount(balance_ngn=50_000)
         self.addCleanup(self.account.close)
         self.api = test_support.ApiHarness(self.account)

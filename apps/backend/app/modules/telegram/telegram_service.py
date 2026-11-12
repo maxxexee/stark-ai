@@ -38,9 +38,10 @@ class TelegramService:
             bot_token=config.telegram_bot_token,
             secret=config.telegram_webhook_secret,
             owner_user_id=self.owner_account_id,
-            # Voice notes go through the same Whisper the web door uses; OGG is
-            # Telegram's own format.
-            transcribe=lambda clip: stt.transcribe(clip, mime="audio/ogg"),
+            # The adapter transcodes Telegram's OGG to WAV before this is called, so the
+            # clip is sent as the WAV it is. Labelling it audio/ogg made Whisper reject
+            # every voice note ("I cannot hear voice notes right now").
+            transcribe=stt.transcribe,
             on_turn=self.log_turn,
             log=lambda line: print(f"  [tg] {line}"),
         )

@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.modules.wallet.dtos.deposit_dto import DepositDto
+
 
 class VoiceReplyDto(BaseModel):
     """On `ignored: true` the client stays silent. `stt` is present only when the
@@ -17,6 +19,8 @@ class VoiceReplyDto(BaseModel):
     receipt_id: Optional[str] = Field(examples=[None])
     actions: Optional[list[str]] = Field(default=None, examples=[["get_state"]])
     tx_hash: Optional[str] = Field(default=None, examples=[None])
+    deposit: Optional[DepositDto] = Field(
+        default=None, description="A deposit the agent started: show `pay` under the reply.")
     audio: Optional[str] = Field(description="The reply as a WAV data URL, or null.",
                                  examples=[None])
     stt: Optional[str] = Field(default=None, description="ok | failed | no_key",
