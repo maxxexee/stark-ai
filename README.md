@@ -60,7 +60,7 @@ Measured, not assumed. Last checked 2026-11-12.
 |---|---|
 | Vault contract | **Live on NEAR testnet** at `stark-vault.testnet`. 9 payments recorded on chain under a ₦30,000 monthly / ₦10,000 per-payment cap |
 | Agent signing `pay()` | **Proven on testnet.** The backend signs with the pay-only key above; the 9 recorded payments came through it |
-| Agent model | NEAR AI. Voice in: **Whisper Large v3, Private TEE**. Chat: `google/gemini-2.5-flash-lite`, picked for speed (about 1.4s a turn) — it runs in NEAR AI's *Incognito* tier, **not** in a TEE. One env var (`NEAR_AI_MODEL`) moves chat to a Private TEE model at about 2.7s a turn |
+| Agent model | NEAR AI, **Private TEE end to end**: voice in is Whisper Large v3, chat is `deepseek-ai/DeepSeek-V4.1-Flash-1017`. A question answers in about 2–3s; a payment takes 5–15s, because it makes several tool calls. `NEAR_AI_MODEL=google/gemini-2.5-flash-lite` is about 3× faster but runs outside a TEE |
 | Web app, API, website | **Deployed**: [dash.hellostark.xyz](https://dash.hellostark.xyz), [geddon.hellostark.xyz/docs](https://geddon.hellostark.xyz/docs), [hellostark.xyz](https://hellostark.xyz) |
 | Sign-in and storage | **Live**: Neon Auth, every account has its own wallet and receipts in Neon Postgres |
 | Telegram | **Live**: `@hellostarkai_bot`, text and voice notes, same agent and limits as the app |
