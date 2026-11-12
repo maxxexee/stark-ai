@@ -135,7 +135,7 @@ or `failed` payment changes none of them.
   "kind": "electricity",
   "provider": "Ikeja Electric",
   "label": "Home",
-  "reference": "04512345678",
+  "reference": "0101170026583",
   "last_amount_ngn": 5000,
   "last_units": 23.9,
   "last_paid_at": "2026-10-14T19:33:13Z",
@@ -444,7 +444,7 @@ saved bill, in the order they were added; Stark can pay nowhere else.
 
 ```json
 [{ "bill_id": "bill_home_meter", "label": "Home", "kind": "electricity",
-   "provider": "Ikeja Electric", "reference": "04512345678",
+   "provider": "Ikeja Electric", "reference": "0101170026583",
    "paid_this_month_ngn": 15000, "paid_total_ngn": 23000, "payments": 3,
    "last_paid_at": "2026-11-02T19:33:13Z" }]
 ```

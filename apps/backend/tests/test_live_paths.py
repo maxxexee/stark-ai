@@ -221,12 +221,12 @@ class TestFlutterwaveLiveTransport(ServerTest):
 
     def test_a_bill_posts_to_its_biller_and_item(self):
         placed = self.client().pay_bill(biller_code="BIL113", item_code="UB159",
-                                        customer_id="04512345678", amount_ngn=5_000,
+                                        customer_id="0101170026583", amount_ngn=5_000,
                                         reference="bill_1")
         self.assertEqual(placed["tx_ref"], "CF-FLYAPI-1")
         req = self.server.requests[0]
         self.assertEqual(req.path, "/billers/BIL113/items/UB159/payment")
-        self.assertEqual(req.json, {"country": "NG", "customer_id": "04512345678",
+        self.assertEqual(req.json, {"country": "NG", "customer_id": "0101170026583",
                                     "amount": 5_000, "reference": "bill_1"})
 
     def test_bill_status_is_verbose(self):
@@ -523,7 +523,7 @@ class Reader:
 
 # What `pay` returns, base64 of the contract's JSON, as `broadcast_tx_commit` reports it.
 PAY_OUTCOME = base64.b64encode(
-    b'{"payment_id":7,"meter":"04512345678","amount_ngn":"5000","remaining_cap_ngn":"25000"}'
+    b'{"payment_id":7,"meter":"0101170026583","amount_ngn":"5000","remaining_cap_ngn":"25000"}'
 ).decode()
 
 
@@ -595,7 +595,7 @@ class TestNearRpcLive(ServerTest):
         )
 
     def test_broadcast_sends_base64_of_signed_transaction(self):
-        result = chain(self.rpc(), broadcast=True).pay(VAULT, "04512345678", 5000)
+        result = chain(self.rpc(), broadcast=True).pay(VAULT, "0101170026583", 5000)
 
         self.assertTrue(result.broadcast)
         self.assertEqual(len(result.tx_hash), 64)
@@ -629,13 +629,13 @@ class TestNearRpcLive(ServerTest):
         self.assertEqual(r.u8(), 2, "Action::FunctionCall variant")
         self.assertEqual(r.string(), "pay")
         args = json.loads(r.byte_vec())
-        self.assertEqual(args, {"meter": "04512345678", "amount_ngn": "5000"})
+        self.assertEqual(args, {"meter": "0101170026583", "amount_ngn": "5000"})
         self.assertEqual(r.u64(), 100_000_000_000_000, "100 Tgas")
         self.assertEqual(r.u128(), 0, "no attached deposit")
         self.assertEqual(r.i, len(tx_bytes), "no trailing bytes before the signature")
 
     def test_dry_chain_never_touches_the_network(self):
-        result = chain(self.rpc(), broadcast=False).pay(VAULT, "04512345678", 5000)
+        result = chain(self.rpc(), broadcast=False).pay(VAULT, "0101170026583", 5000)
 
         self.assertFalse(result.broadcast)
         self.assertIsNone(result.value)

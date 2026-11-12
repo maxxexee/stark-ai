@@ -32,9 +32,9 @@ class StubSeed:
             {
                 "id": "bill_home_meter",
                 "kind": "electricity",
-                "provider": "Ikeja Electric",
+                "provider": "Eko Electric",
                 "label": "Home",
-                "reference": "04512345678",
+                "reference": "0101170026583",
                 "last_amount_ngn": 5_000,
                 "last_units": 23.9,
                 "last_paid_at": Clock.ago(0),

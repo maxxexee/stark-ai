@@ -297,7 +297,7 @@ class ConversationTests(unittest.TestCase):
             model=agent_mod.FakeModel(), toolbox=toolbox,
             limits=agent_mod.Limits(monthly_cap_ngn=30_000,
                                     per_payment_cap_ngn=5_000,
-                                    allowed_meters=frozenset({"04512345678"})),
+                                    allowed_meters=frozenset({"0101170026583"})),
         ).respond("hello stark whats my balance")
 
         roles = [m["role"] for m in reply.conversation]

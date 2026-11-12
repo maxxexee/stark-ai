@@ -60,7 +60,7 @@ needed for the ABI JSON and deploy convenience; neither it nor `near-cli` is req
 key is deliberately not in this repo.
 
 `new` was called with `owner` and `treasury` both `stark-vault.testnet`, caps of ₦30,000
-monthly / ₦10,000 per payment, and `04512345678` as the only allowlisted meter. On chain
+monthly / ₦10,000 per payment, and `0101170026583` as the only allowlisted meter. On chain
 that has been exercised end to end: `fund`, a `pay` inside the caps (accepted,
 `payment_id` incremented), a `pay` above the per-payment cap (rejected) and a `pay` to a
 meter not on the allowlist (rejected).

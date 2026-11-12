@@ -57,7 +57,7 @@ class DownRate(UsdcRate):
     def _fetch(self):
         raise RateUnavailable("Paycrest down")
 AGENT = near_tx.KeyPair.from_secret(bytes(range(1, 33)))
-METER = "04512345678"
+METER = "0101170026583"
 ELECTRICITY = {"id": "bill_home", "label": "Home meter", "kind": "electricity",
                "reference": METER, "provider": "ikeja-electric", "meter_type": "prepaid"}
 
