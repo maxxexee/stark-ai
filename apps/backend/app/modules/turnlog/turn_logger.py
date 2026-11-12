@@ -39,7 +39,8 @@ class TurnLogger:
         return getattr(model, "model", None) or getattr(model, "name", None)
 
     @staticmethod
-    def turn(*, agent: Any, outcome: str, clip: Optional[bytes], mime: Optional[str],
+    def turn(*, account_id: Optional[str], agent: Any, outcome: str,
+             clip: Optional[bytes], mime: Optional[str],
              heard: str = "", said: Optional[str] = None, stt: Optional[str] = None,
              payload: Optional[dict] = None, speak: Optional[bool] = True,
              ms: Optional[dict[str, int]] = None,
@@ -50,5 +51,5 @@ class TurnLogger:
             reply=result.get("reply"), actions=result.get("actions"),
             code=result.get("code"), receipt_id=result.get("receipt_id"),
             token=result.get("token"), speak=speak, model=TurnLogger.model_name(agent),
-            ms=ms, conversation=conversation, channel=channel,
+            ms=ms, conversation=conversation, channel=channel, account_id=account_id,
         ), clip=clip, mime=mime)

@@ -49,7 +49,8 @@ class VoiceService:
             ms_stt = TurnLogger.ms(since)
             if transcript is None:
                 unheard = VOICE_UNHEARD.get(stt_reason, VOICE_UNHEARD[stt.FAILED])
-                TurnLogger.turn(agent=agent, outcome="unheard", clip=clip, mime=mime,
+                TurnLogger.turn(account_id=account_id, agent=agent, outcome="unheard",
+                                clip=clip, mime=mime,
                                 stt=stt_reason, payload={"reply": unheard},
                                 speak=wants_speak,
                                 ms=TurnLogger.timings(started, has_clip=True, stt_ms=ms_stt))
@@ -63,7 +64,8 @@ class VoiceService:
         # for a spoken "stark" is still an address.
         said = wake.wake_attempt(transcript)
         if said is None:
-            TurnLogger.turn(agent=agent, outcome="asleep", clip=clip, mime=mime,
+            TurnLogger.turn(account_id=account_id, agent=agent, outcome="asleep",
+                            clip=clip, mime=mime,
                             heard=transcript, stt=stt_reason, speak=wants_speak,
                             ms=TurnLogger.timings(started, has_clip=clip is not None,
                                                   stt_ms=ms_stt))
@@ -88,7 +90,8 @@ class VoiceService:
         timings["agent"] = ms_agent
         if wants_speak:
             timings["tts"] = ms_tts
-        TurnLogger.turn(agent=agent, outcome="answered", clip=clip, mime=mime,
+        TurnLogger.turn(account_id=account_id, agent=agent, outcome="answered",
+                        clip=clip, mime=mime,
                         heard=transcript, said=said, stt=stt_reason, payload=payload,
                         speak=wants_speak, ms=timings, conversation=reply.conversation)
         return payload

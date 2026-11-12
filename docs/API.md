@@ -988,6 +988,11 @@ matters.
 conversation log, readable from outside the box — because "why did it say
 that" is unanswerable from the reply alone.
 
+**Operator only** (2026-11-12): send `X-Stark-Admin-Key`, like the admin routes;
+a user session is refused (401, or 403 `admin_disabled` with no key configured).
+The log is one file for every account, and until this change any signed-in
+user could read everyone's turns.
+
 ```json
 {
   "enabled": true,
@@ -1023,6 +1028,10 @@ text and timings instead.
 (**additive, 2026-10-25**). Telegram turns were not logged at all before that:
 the first real conversation on the bot read back as `count: 0`, and the only way
 to see what it heard was to replay it locally.
+
+`account_id` says whose turn it was (**additive, 2026-11-12**; absent on older
+entries and on `kind: "speak"` lines). `?account=<id>` keeps only that
+account's turns.
 
 `?limit=N` keeps the newest N entries (default **100**); `?limit=0` returns the
 whole file. A value that is not a number falls back to the default.
@@ -1073,6 +1082,7 @@ Shapes will not change as these land. Only the values become real.
 | 2026-10-24 | Reminders, real suggestions, real audio in. `Bill` gains `renews_on`; `/v1/state` gains `due_soon`; `PATCH /v1/bills` accepts and clears `renews_on`; `/v1/suggestions` computed from state instead of seeded copy; `/v1/voice` accepts base64/multipart `audio` and returns `stt`. New codes `bad_renews_on`, `bad_audio`, `audio_too_large`. `GET /v1/speak/stream` added. No existing shape changed. |
 | 2026-10-24 | Debug route added: `GET /v1/turnlog` reads the conversation log back (404 `turnlog_off` when the log is off), and a logged turn gains `conversation` — the full message exchange with the model. No existing shape changed. |
 | 2026-10-25 | `POST /v1/link/code` added: a single-use, 10-minute code plus the bot's `t.me` deep link, so a chat can be linked from the app. `/start <code>` now redeems it too. No existing shape changed. |
+| 2026-11-12 | `GET /v1/turnlog` needs `X-Stark-Admin-Key` and no longer accepts a user session. Turns gain `account_id`, and `?account=` filters on it. |
 | 2026-10-25 | Telegram chats keep their last six exchanges (ten-minute idle expiry) and Telegram turns are written to `/v1/turnlog` with `channel: "telegram"`. `/v1/voice` is unchanged: one turn per request. Additive only. |
 | 2026-10-26 | **Auth enforced + storage moved.** Every `/v1` route except the Telegram webhook needs `Authorization: Bearer <token>` from Neon Auth, else **401 `unauthorized`** (`GET /v1/speak/stream` also takes `?token=`); `POST /v1/auth/logout` added. Receipts, wallets, accounts and channel identities now live in Neon Postgres instead of SQLite, scoped per account — two sign-ins no longer share a wallet. New code `unauthorized`. No response shape changed. |
 | 2026-10-27 | No mock data for real accounts. New accounts open empty (no bills, ₦0, no activity). Bills, limits and readings are stored per account. `units_left`/`days_left` computed from top-ups and readings; `/v1/telemetry` ignores a client `ts`. Top-ups are labelled test money; `POST /v1/wallet/withdraw` answers 501 `not_available`. `POST /v1/_stub/reset` is off unless `STARK_STUB_RESET=1`. No shape changed. |
