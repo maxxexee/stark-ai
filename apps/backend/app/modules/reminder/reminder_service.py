@@ -11,7 +11,6 @@ import threading
 
 from app.modules.account.account_service import AccountService
 from app.modules.reminder import reminders
-from app.modules.telegram import telegram
 from app.modules.telegram.telegram_service import TelegramService
 
 
@@ -40,14 +39,7 @@ class ReminderService:
         sent: list[str] = []
         for item in reminders.due_for_push(bills, log=self.log):
             text = reminders.push_text(item)
-            for ident in adapter.identities.identities_for(account_id):
-                if ident["channel"] != telegram.CHANNEL:
-                    continue
-                try:
-                    chat_id = int(ident["channel_user_id"])
-                except ValueError:
-                    continue
-                telegram.send_message(chat_id, text, bot_token=adapter.bot_token)
+            self.telegram.tell(account_id, text)
             adapter.log(f"reminder: {text}")
             sent.append(text)
         return sent

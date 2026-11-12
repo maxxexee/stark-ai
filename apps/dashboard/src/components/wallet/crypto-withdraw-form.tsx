@@ -1,6 +1,6 @@
 import { errorCopy } from "@stark/api/errors";
 import { useWithdrawCrypto } from "@stark/api/mutations";
-import { cryptoAssetsQuery } from "@stark/api/queries";
+import { cryptoAssetsQuery, usdcRatesQuery } from "@stark/api/queries";
 import type { Withdrawal } from "@stark/api/types";
 import { AmountField } from "@stark/ui/components/amount-field";
 import { Button } from "@stark/ui/components/button";
@@ -28,6 +28,7 @@ export function CryptoWithdrawForm({
   onSent: (withdrawal: Withdrawal) => void;
 }) {
   const assets = useQuery(cryptoAssetsQuery());
+  const rates = useQuery(usdcRatesQuery());
   const [assetId, setAssetId] = useState("");
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState(Math.min(20000, balance));
@@ -59,11 +60,15 @@ export function CryptoWithdrawForm({
         hint={asset ? `A ${asset.symbol} address on ${asset.chain}` : "Pick what to receive first"}
       />
       <AmountField label="Amount" value={amount} onChange={setAmount} />
-      {assets.error ? (
-        <FieldError className="text-[13px]">{errorCopy(assets.error)}</FieldError>
+      {rates.data ? (
+        <p className="m-0 text-sm text-fg-2">
+          About {(amount / Number(rates.data.withdraw)).toFixed(2)} USDC at{" "}
+          {formatNaira(Number(rates.data.withdraw))} per USDC, before swap fees.
+        </p>
       ) : null}
+      {assets.error ? <FieldError className="text-sm">{errorCopy(assets.error)}</FieldError> : null}
       {withdraw.error ? (
-        <FieldError className="text-[13px]">{errorCopy(withdraw.error)}</FieldError>
+        <FieldError className="text-sm">{errorCopy(withdraw.error)}</FieldError>
       ) : null}
       <Button
         size="lg"

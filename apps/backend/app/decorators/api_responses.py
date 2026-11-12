@@ -10,6 +10,7 @@ from app.common.dto.error_dto import ErrorDto
 class ApiResponses:
     STATUS = {
         "unauthorized": 401,
+        "admin_disabled": 403,
         "unknown_bill": 404,
         "unknown_device": 404,
         "device_unreachable": 503,

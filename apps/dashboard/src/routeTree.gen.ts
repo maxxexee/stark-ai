@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DemoRouteImport } from './routes/demo'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as TalkRouteImport } from './routes/talk'
@@ -32,6 +33,11 @@ import { Route as AppWalletWithdrawRouteImport } from './routes/_app/wallet/with
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DemoRoute = DemoRouteImport.update({
@@ -132,6 +138,7 @@ const AppWalletWithdrawRoute = AppWalletWithdrawRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/admin': typeof AdminRoute
   '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/talk': typeof TalkRoute
@@ -152,6 +159,7 @@ export interface FileRoutesByFullPath {
   '/wallet/': typeof AppWalletIndexRoute
 }
 export interface FileRoutesByTo {
+  '/admin': typeof AdminRoute
   '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/talk': typeof TalkRoute
@@ -175,6 +183,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
+  '/admin': typeof AdminRoute
   '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/talk': typeof TalkRoute
@@ -199,6 +208,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/demo'
     | '/login'
     | '/talk'
@@ -219,6 +229,7 @@ export interface FileRouteTypes {
     | '/wallet/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/admin'
     | '/demo'
     | '/login'
     | '/talk'
@@ -241,6 +252,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_app'
+    | '/admin'
     | '/demo'
     | '/login'
     | '/talk'
@@ -264,6 +276,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
+  AdminRoute: typeof AdminRoute
   DemoRoute: typeof DemoRoute
   LoginRoute: typeof LoginRoute
   TalkRoute: typeof TalkRoute
@@ -280,6 +293,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/demo': {
@@ -452,6 +472,7 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
+  AdminRoute: AdminRoute,
   DemoRoute: DemoRoute,
   LoginRoute: LoginRoute,
   TalkRoute: TalkRoute,

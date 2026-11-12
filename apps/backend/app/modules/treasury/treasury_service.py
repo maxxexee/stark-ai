@@ -20,7 +20,7 @@ account is configured.
 2. settle bill purchases that came back pending (`BillPaymentService.settle_pending`);
 3. send bank withdrawals not yet taken, and re-read ones in flight;
 4. send held crypto withdrawals and follow their swaps;
-5. read the float, and warn if it is low.
+5. read both balances and alert the operator on Telegram (`TreasuryWatch`).
 
 Open deposits are not here: each has its own due time (`DepositService.check_due`).
 
@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import threading
 from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from app.database import neon
 from app.modules.flutterwave.flutterwave import FlutterwaveError
@@ -41,6 +41,7 @@ from app.modules.intents import one_click
 from app.modules.liquidity.float_service import FloatService
 from app.modules.liquidity.usdc_rate import RateUnavailable, UsdcRate
 from app.modules.payment.bill_payment_service import BillPaymentService
+from app.modules.treasury.treasury_watch import TreasuryWatch
 from app.modules.vault.vault_service import VaultService
 from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.crypto_withdrawal_service import CryptoWithdrawalService
@@ -48,6 +49,7 @@ from app.modules.wallet.withdrawal_service import WithdrawalService
 
 log = logging.getLogger("stark.treasury")
 USDC_CONTRACT = one_click.USDC_NEAR.split(":", 1)[1]
+T = TypeVar("T")
 
 
 class TreasuryService:
@@ -56,7 +58,7 @@ class TreasuryService:
                  withdrawals: WithdrawalService, crypto_withdrawals: CryptoWithdrawalService,
                  floats: FloatService, treasury_account: Optional[str],
                  usdc_rate: UsdcRate,
-                 mainnet_rpc: near_tx.NearRpc) -> None:
+                 mainnet_rpc: near_tx.NearRpc, watch: TreasuryWatch) -> None:
         self.db = db
         self.vaults = vaults
         self.deposits = deposits
@@ -67,13 +69,16 @@ class TreasuryService:
         self.treasury_account = treasury_account
         self.usdc_rate = usdc_rate
         self.mainnet_rpc = mainnet_rpc
+        self.watch = watch
 
     def report(self) -> dict[str, Any]:
         owed = int(self.db.value("SELECT COALESCE(SUM(balance_ngn), 0) FROM wallets") or 0)
+        usdc = _read(self._treasury_usdc) if self.treasury_account else None
         held: dict[str, Optional[int]] = {
             "flutterwave_ngn": _read(lambda: self.floats.balance(fresh=True)),
             "pending_purchases_ngn": self.floats.reserved(),
-            "treasury_usdc_as_ngn": _read(self._treasury_usdc_as_ngn),
+            "treasury_usdc_as_ngn": None if usdc is None
+            else _read(lambda: int(usdc * self.usdc_rate.market())),
         }
         known = sum(v for k, v in held.items() if v is not None and k != "pending_purchases_ngn")
         stuck_ops = int(self.db.value(
@@ -82,28 +87,29 @@ class TreasuryService:
         return {
             "owed_to_users_ngn": owed,
             "held": held,
+            "treasury_usdc": usdc,
             "coverage_ngn": known - held["pending_purchases_ngn"] - owed,
             "unsettled_vault_ops": stuck_ops,
         }
 
-    def _treasury_usdc_as_ngn(self) -> Optional[int]:
-        if not self.treasury_account:
-            return None
+    def _treasury_usdc(self) -> Decimal:
         raw = self.mainnet_rpc.view(USDC_CONTRACT, "ft_balance_of",
                                     {"account_id": self.treasury_account})
-        usdc = Decimal(str(raw)) / 10 ** one_click.USDC_DECIMALS
-        return int(usdc * self.usdc_rate.market())
+        return Decimal(str(raw)) / 10 ** one_click.USDC_DECIMALS
 
     # --- the loop -------------------------------------------------------------
 
     def tick(self) -> None:
         for step in (self.vaults.flush, self.bill_payments.settle_pending,
                      self.withdrawals.advance,
-                     self.crypto_withdrawals.advance, self.floats.check_level):
+                     self.crypto_withdrawals.advance, self.watch_levels):
             try:
                 step()
             except Exception:  # one rail being down must not stop the others
                 log.exception("money loop step %s failed", step.__name__)
+
+    def watch_levels(self) -> None:
+        self.watch.check(self.report())
 
     def start(self, tick_seconds: int) -> threading.Event:
         stop = threading.Event()
@@ -116,7 +122,7 @@ class TreasuryService:
         return stop
 
 
-def _read(read: Callable[[], Optional[int]]) -> Optional[int]:
+def _read(read: Callable[[], T]) -> Optional[T]:
     """A balance that could not be read is unknown, not zero."""
     try:
         return read()

@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.app_module import AppModule
 from app.filters.http_exception_filter import HttpExceptionFilter
+from app.guards.admin_guard import ADMIN_HEADER
+from app.modules.admin import admin_controller
 from app.modules.approval import approval_controller
 from app.modules.auth import auth_controller
 from app.modules.flutterwave import flutterwave_controller
@@ -59,6 +61,7 @@ CONTROLLERS = (
     flutterwave_controller,
     whatsapp_controller,
     sms_controller,
+    admin_controller,
 )
 
 
@@ -98,7 +101,7 @@ def create_app(module: Optional[AppModule] = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=["Content-Type", "Authorization", ADMIN_HEADER],
     )
     HttpExceptionFilter.register(app)
     for controller in CONTROLLERS:

@@ -1,7 +1,10 @@
 import type { Deposit } from "@stark/api/types";
 import { Card } from "@stark/ui/components/card";
-import { CopyButton } from "@stark/ui/components/copy-button";
 import { Eyebrow } from "@stark/ui/components/eyebrow";
+import { AddressQrCode } from "@/components/wallet/address-qr-code";
+import { CopyIconButton } from "@/components/wallet/copy-icon-button";
+import { CopyableField } from "@/components/wallet/copyable-field";
+import { Networks } from "@/lib/wallet/networks";
 
 type CryptoPay = Extract<Deposit, { method: "crypto" }>["pay"];
 
@@ -11,21 +14,25 @@ export function CryptoPayInstructions({ pay }: { pay: CryptoPay }) {
     <Card className="gap-4">
       <div className="flex flex-col gap-1">
         <Eyebrow>Send exactly</Eyebrow>
-        <span className="text-2xl font-medium tabular-nums">
-          {pay.amount} {pay.asset}
+        <div className="flex items-baseline gap-2">
+          <span className="tabular text-2xl font-semibold tracking-tight">
+            {pay.amount} {pay.asset}
+          </span>
+          <CopyIconButton value={pay.amount} label="Copy amount" />
+        </div>
+        <span className="text-sm text-muted-foreground">
+          On the {Networks.name(pay.chain)} network only.
         </span>
-        <span className="text-xs text-muted-foreground">On the {pay.chain} network only.</span>
       </div>
       <div className="flex flex-col gap-2">
         <Eyebrow>To</Eyebrow>
-        <code className="break-all rounded-lg bg-surface px-3 py-2 text-[13px]">{pay.address}</code>
-        <CopyButton value={pay.address} label="Copy address" />
+        <AddressQrCode address={pay.address} />
+        <CopyableField value={pay.address} label="Copy address" />
       </div>
       {pay.memo ? (
         <div className="flex flex-col gap-2">
           <Eyebrow>With this memo</Eyebrow>
-          <code className="break-all rounded-lg bg-surface px-3 py-2 text-[13px]">{pay.memo}</code>
-          <CopyButton value={pay.memo} label="Copy memo" />
+          <CopyableField value={pay.memo} label="Copy memo" />
         </div>
       ) : null}
     </Card>
