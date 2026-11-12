@@ -1,6 +1,6 @@
 """The Telegram door, wired to this server: one bot, speaking for any linked chat.
 
-Like WhatsApp and SMS, a chat speaks for the account whose link code it spent,
+A chat speaks for the account whose link code it spent,
 so every read and payment is scoped to that account. `STARK_TG_OWNER_EMAIL` is
 only a fallback for a code minted without an account (the reminder loop's own
 nudges); it is no longer what decides whose money a chat can move. It refuses

@@ -32,8 +32,6 @@ from app.modules.payment.payment_service import PaymentService
 from app.modules.plan.plan_service import PlanService
 from app.modules.receipt.receipt_repository import ReceiptRepository
 from app.modules.reminder.reminder_service import ReminderService
-from app.modules.sms.sms_config import SmsConfig
-from app.modules.sms.sms_service import SmsService
 from app.modules.state.state_service import StateService
 from app.modules.stub.stub_service import StubService
 from app.modules.suggestion.suggestion_service import SuggestionService
@@ -51,8 +49,6 @@ from app.modules.wallet.deposit_service import DepositService
 from app.modules.wallet.wallet_service import WalletService
 from app.modules.wallet.crypto_withdrawal_service import CryptoWithdrawalService
 from app.modules.wallet.withdrawal_service import WithdrawalService
-from app.modules.whatsapp.whatsapp_config import WhatsAppConfig
-from app.modules.whatsapp.whatsapp_service import WhatsAppService
 from app.shared.services.api_config_service import ApiConfigService
 
 
@@ -148,12 +144,6 @@ class AppModule:
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )
         self.voice = VoiceService(self.accounts)
-        self.whatsapp = WhatsAppService(
-            WhatsAppConfig.from_env(), self.identities, self.accounts, self.controls
-        )
-        self.sms = SmsService(
-            SmsConfig.from_env(), self.identities, self.accounts, self.controls
-        )
         self.reminders = ReminderService(self.accounts, self.telegram)
         self.stub = StubService(
             config,

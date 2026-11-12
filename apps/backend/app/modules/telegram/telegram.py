@@ -85,8 +85,8 @@ class TelegramError(Exception):
 
 
 class AgentLike(Protocol):
-    # `user_id` is the account this chat is linked to, never the bot's owner: the
-    # same rule WhatsApp and SMS follow, so one bot can serve every account.
+    # `user_id` is the account this chat is linked to, never the bot's owner, so
+    # one bot can serve every account.
     def respond(self, user_id: str, said: str, thread: str) -> Any: ...
 
 
