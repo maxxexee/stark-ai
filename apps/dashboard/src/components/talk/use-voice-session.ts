@@ -9,6 +9,7 @@ import { SpeechRecognizer } from "@/lib/speech/speech-recognizer";
 import { AudioRecording } from "@/lib/talk/audio-recording";
 import { MicErrors } from "@/lib/talk/mic-errors";
 import { StarkAddress } from "@/lib/talk/stark-address";
+import { turnChime } from "@/lib/talk/turn-chime";
 import type { Stage } from "@/lib/talk/types";
 
 const RESTART_MS = 350;
@@ -85,6 +86,7 @@ export function useVoiceSession(q: string | undefined) {
           return;
         }
         go("thinking");
+        turnChime();
         voiceAudio.mutate(blob, {
           onSuccess: (res) => {
             if (res.ignored) {
@@ -106,7 +108,7 @@ export function useVoiceSession(q: string | undefined) {
             setHeard(res.transcript);
             setReply(res);
             go("done");
-            if (res.reply) speak(res.reply);
+            if (res.reply) speak(res.reply, res.speak_url);
             else scheduleRestart();
           },
           onError: () => {
@@ -135,6 +137,7 @@ export function useVoiceSession(q: string | undefined) {
     setNotice(null);
     setReply(null);
     go("thinking");
+    turnChime();
     const transcript = opts.address || inSession() ? StarkAddress.apply(said) : said;
     voice.mutate(transcript, {
       onSuccess: (res) => {
@@ -146,7 +149,7 @@ export function useVoiceSession(q: string | undefined) {
         }
         setReply(res);
         go("done");
-        if (res.reply) speak(res.reply);
+        if (res.reply) speak(res.reply, res.speak_url);
         else scheduleRestart();
       },
       onError: () => {

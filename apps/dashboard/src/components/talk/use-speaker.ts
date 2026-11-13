@@ -23,8 +23,11 @@ export function useSpeaker(onFinished: () => void) {
   /**
    * Fetches the voice after the words land, so text never waits on synthesis. The stream plays
    * first and the buffered clip is the fallback; a stale fetch never plays over a newer question.
+   *
+   * `url` is the ticket the turn already handed over: playing it skips a round trip, which was
+   * 0.8s of silence between the words appearing and the first sound.
    */
-  const speak = (text: string) => {
+  const speak = (text: string, url?: string | null) => {
     const seq = ++speakSeq.current;
     stopSpeaking();
     speaking.current = true;
@@ -72,6 +75,11 @@ export function useSpeaker(onFinished: () => void) {
           if (seq === speakSeq.current) finishPlayback(a);
         });
     };
+
+    if (url) {
+      play(api.streamUrl(url), bufferedFallback);
+      return;
+    }
 
     // `stopSpeaking` does not bump the sequence, so a ticket that lands after it must not play.
     api.speakStreamUrl(text).then(

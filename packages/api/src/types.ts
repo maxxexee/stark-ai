@@ -111,6 +111,8 @@ export type VoiceReply = {
   receipt_id: string | null;
   deposit?: Deposit | null;
   audio?: string | null;
+  /** Streams this reply as audio. Handed over with the words so playback starts at once. */
+  speak_url?: string | null;
   stt?: "ok" | "no_key" | "failed";
 };
 

@@ -175,6 +175,8 @@ export const api = {
     const { url } = await request<SpeakTicket>("POST", "/v1/speak/ticket", { text });
     return `${baseUrl}${url}`;
   },
+  /** An API-relative path from a reply (`speak_url`), as something `<audio>` can play. */
+  streamUrl: (path: string) => `${baseUrl}${path}`,
   /** Stub only: restores the seeded demo state. Never call it while someone is demoing. */
   resetDemo: () => request<unknown>("POST", "/v1/_stub/reset", {}),
 };
