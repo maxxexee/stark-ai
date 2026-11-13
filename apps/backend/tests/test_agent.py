@@ -6,11 +6,14 @@ Zero dependencies:  python3 -m unittest test_agent -v
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import pathlib
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest import mock
 
 from app.modules.agent import agent as agent_mod
 from app.modules.agent import memory as memory_mod
@@ -1046,36 +1049,56 @@ class NearAiRetryTests(unittest.TestCase):
     def model(self):
         return agent_mod.NearAiModel(api_key="test-key")
 
-    @staticmethod
-    def response(data):
-        class Resp:
-            def read(self_inner):
-                return data
+    def transport(self, answer):
+        """Stand in for the pooled connection, one per attempt.
 
-            def __enter__(self_inner):
-                return self_inner
+        `answer(body)` returns `(status, raw)` or raises, so a test can present
+        anything the wire does: a dead connection, a 401, a body cut in half.
+        """
+        wires = []
 
-            def __exit__(self_inner, *args):
-                return False
+        class Wire:
+            def __init__(wire):
+                wire.sent = []
+                wire.lock = contextlib.nullcontext()
+                wire.conn = wire
+                wire._answer = None
 
-        return Resp()
+            def request(wire, method, path, body, headers):
+                wire.sent.append(json.loads(body))
+                wire.headers = headers
+                wire._answer = answer(wire.sent[-1])
+
+            def getresponse(wire):
+                status, raw = wire._answer
+                return SimpleNamespace(status=status, read=lambda: raw)
+
+            def close(wire):
+                pass
+
+        def acquire(_model):
+            wires.append(Wire())
+            return wires[-1]
+
+        patch = mock.patch.object(agent_mod.NearAiModel, "_acquire", acquire)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return wires
 
     def test_two_network_failures_then_success(self):
-        from unittest import mock
-
         attempts = []
         fail_first = agent_mod.NearAiModel.ATTEMPTS - 1
 
-        def flaky(request, timeout=None):
+        def flaky(body):
             attempts.append(1)
             if len(attempts) <= fail_first:
                 raise agent_mod.urllib.error.URLError(
                     "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred"
                 )
-            return self.response(self.OK)
+            return 200, self.OK
 
-        with mock.patch.object(agent_mod.urllib.request, "urlopen", flaky), \
-                mock.patch.object(agent_mod.time, "sleep"):
+        self.transport(flaky)
+        with mock.patch.object(agent_mod.time, "sleep"):
             turn = self.model().turn([{"role": "user", "content": "hi"}], [])
 
         # Retried, not swallowed: every attempt reached the endpoint.
@@ -1084,33 +1107,26 @@ class NearAiRetryTests(unittest.TestCase):
 
     def test_a_turn_without_tools_leaves_the_field_out(self):
         # DeepSeek on NEAR AI answers `tools: []` with a 400, which broke every question.
-        from unittest import mock
+        wires = self.transport(lambda body: (200, self.OK))
 
-        sent = []
+        model = self.model()
+        model.turn([{"role": "user", "content": "how much is left?"}], [])
+        model.turn([{"role": "user", "content": "pay it"}], agent_mod.TOOLS)
 
-        def capture(request, timeout=None):
-            sent.append(json.loads(request.data))
-            return self.response(self.OK)
-
-        with mock.patch.object(agent_mod.urllib.request, "urlopen", capture):
-            self.model().turn([{"role": "user", "content": "how much is left?"}], [])
-            self.model().turn([{"role": "user", "content": "pay it"}], agent_mod.TOOLS)
-
+        sent = [wire.sent[0] for wire in wires]
         self.assertNotIn("tools", sent[0])
         self.assertNotIn("tool_choice", sent[0])
         self.assertEqual(sent[1]["tools"], agent_mod.TOOLS)
 
     def test_it_gives_up_and_says_why(self):
-        from unittest import mock
-
         attempts = []
 
-        def dead(request, timeout=None):
+        def dead(body):
             attempts.append(1)
             raise agent_mod.urllib.error.URLError("connection reset")
 
-        with mock.patch.object(agent_mod.urllib.request, "urlopen", dead), \
-                mock.patch.object(agent_mod.time, "sleep"):
+        self.transport(dead)
+        with mock.patch.object(agent_mod.time, "sleep"):
             with self.assertRaises(RuntimeError) as raised:
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
@@ -1118,19 +1134,14 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertIn("Could not reach NEAR AI", str(raised.exception))
 
     def test_a_bad_request_is_not_retried(self):
-        from unittest import mock
-        from io import BytesIO
-
         attempts = []
 
-        def rejected(request, timeout=None):
+        def rejected(body):
             attempts.append(1)
-            raise agent_mod.urllib.error.HTTPError(
-                request.full_url, 401, "Unauthorized", {}, BytesIO(b"bad key")
-            )
+            return 401, b"bad key"
 
-        with mock.patch.object(agent_mod.urllib.request, "urlopen", rejected), \
-                mock.patch.object(agent_mod.time, "sleep"):
+        self.transport(rejected)
+        with mock.patch.object(agent_mod.time, "sleep"):
             with self.assertRaises(RuntimeError) as raised:
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
@@ -1138,16 +1149,14 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertIn("HTTP 401", str(raised.exception))
 
     def test_a_body_cut_in_half_is_retried(self):
-        from unittest import mock
-
         attempts = []
 
-        def truncated(request, timeout=None):
+        def truncated(body):
             attempts.append(1)
-            return self.response(b'{"choices": [{"message": {"content": "f')
+            return 200, b'{"choices": [{"message": {"content": "f'
 
-        with mock.patch.object(agent_mod.urllib.request, "urlopen", truncated), \
-                mock.patch.object(agent_mod.time, "sleep"):
+        self.transport(truncated)
+        with mock.patch.object(agent_mod.time, "sleep"):
             with self.assertRaises(RuntimeError):
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 

@@ -15,17 +15,20 @@ refusal and no signature.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
 import re
+import ssl
+import threading
 import time
 import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from app.modules.agent import memory
 from app.modules.agent import policy as policy_rules
@@ -593,6 +596,16 @@ def _loads(value: Any) -> dict:
 # --- NEAR AI model -----------------------------------------------------------
 
 
+class _Connection:
+    """One keep-alive HTTPS connection to the model host, and its lock."""
+
+    def __init__(self, host: str, port: int, timeout: float) -> None:
+        self.conn = http.client.HTTPSConnection(
+            host, port, timeout=timeout, context=ssl.create_default_context()
+        )
+        self.lock = threading.Lock()
+
+
 class NearAiModel:
     """NEAR AI's OpenAI-compatible chat endpoint.
 
@@ -600,9 +613,18 @@ class NearAiModel:
     one POST, tool calls only. Without a key it is still built, so an account's
     routes work, and every turn fails before any request — the agent turns that
     into a spoken "lost connection" and pays nothing.
+
+    Connections are kept alive and reused. A TLS handshake to the model costs
+    0.68s from Lagos (measured 2026-11-13) and a call on an open connection 0.40s,
+    so a fresh connection per turn paid that handshake again for every model
+    round — twice on any turn that calls a tool. The pool is the same borrow and
+    return the database layer uses, for the same reason: the server handles each
+    request on a new thread, so a thread-local connection would be a new
+    handshake every time.
     """
 
     name = "near-ai"
+    MAX_IDLE = 8
 
     # The builder's egress drops TLS mid-response: measured 2026-10-24 on
     # geddon.hellostark.xyz, [SSL: UNEXPECTED_EOF_WHILE_READING] arrived on about
@@ -623,6 +645,34 @@ class NearAiModel:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        endpoint = urlsplit(self.base_url)
+        self._host = endpoint.hostname or "cloud-api.near.ai"
+        self._port = endpoint.port or 443
+        self._path = (endpoint.path.rstrip("/") or "") + "/v1/chat/completions"
+        self._idle: list[_Connection] = []
+        self._mutex = threading.Lock()
+
+    # --- connection ----------------------------------------------------------
+
+    def _acquire(self) -> _Connection:
+        with self._mutex:
+            if self._idle:
+                return self._idle.pop()
+        return _Connection(self._host, self._port, self.timeout)
+
+    def _release(self, wire: _Connection) -> None:
+        with self._mutex:
+            if len(self._idle) < self.MAX_IDLE:
+                self._idle.append(wire)
+                return
+        self._close(wire)
+
+    @staticmethod
+    def _close(wire: _Connection) -> None:
+        try:
+            wire.conn.close()
+        except Exception:
+            pass
 
     def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn:
         if not self.api_key:
@@ -659,35 +709,49 @@ class NearAiModel:
         is just a slower failure, so it raises at once. Everything else — a
         dropped TLS handshake, a reset socket, a body cut in half, 429, 5xx —
         gets `ATTEMPTS` goes before it becomes a real error.
+
+        A pooled connection can be reaped while it sits idle; the retry then
+        runs on a fresh one, which is why the borrow happens inside the loop.
         """
+        body = json.dumps(payload).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
         last: RuntimeError | None = None
         for attempt in range(self.ATTEMPTS):
-            request = urllib.request.Request(
-                f"{self.base_url}/v1/chat/completions",
-                data=json.dumps(payload).encode(),
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-            )
+            wire: _Connection | None = None
+            retryable = False
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as resp:
-                    return json.loads(resp.read() or b"{}")
-            except urllib.error.HTTPError as err:
-                try:
-                    detail = err.read().decode("utf-8", "replace")[:300]
-                finally:
-                    err.close()
-                message = f"NEAR AI returned HTTP {err.code}: {detail}"
-                if not (err.code == 429 or err.code >= 500):
-                    raise RuntimeError(message) from err
-                last = RuntimeError(message)
-            except urllib.error.URLError as err:
-                last = RuntimeError(f"Could not reach NEAR AI: {err.reason}")
-            except (OSError, json.JSONDecodeError) as err:
+                wire = self._acquire()
+                with wire.lock:
+                    wire.conn.request("POST", self._path, body, headers)
+                    response = wire.conn.getresponse()
+                    status = response.status
+                    raw = response.read()
+                self._release(wire)
+                wire = None
+            except (http.client.HTTPException, OSError, urllib.error.URLError) as err:
                 # ssl.SSLEOFError, a reset connection, a truncated body.
-                last = RuntimeError(f"Could not reach NEAR AI: {err}")
+                if wire is not None:
+                    self._close(wire)
+                    wire = None
+                last, retryable = RuntimeError(f"Could not reach NEAR AI: {err}"), True
+            else:
+                detail = raw.decode("utf-8", "replace")[:300]
+                if status == 429 or status >= 500:
+                    last, retryable = RuntimeError(
+                        f"NEAR AI returned HTTP {status}: {detail}"), True
+                elif status >= 400:
+                    raise RuntimeError(f"NEAR AI returned HTTP {status}: {detail}")
+                else:
+                    try:
+                        return json.loads(raw or b"{}")
+                    except json.JSONDecodeError as err:
+                        last, retryable = RuntimeError(
+                            f"Could not reach NEAR AI: {err}"), True
+            if not retryable:
+                break
             if attempt < self.ATTEMPTS - 1:
                 time.sleep(self.RETRY_DELAYS[min(attempt, len(self.RETRY_DELAYS) - 1)])
         raise last if last else RuntimeError("NEAR AI failed without a reason")
