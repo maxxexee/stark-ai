@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import re
-import select
 import ssl
 import threading
 import time
@@ -700,46 +699,14 @@ class NearAiModel:
     # --- connection ----------------------------------------------------------
 
     def _acquire(self) -> _Connection:
-        """A pooled connection only after it proves it is still there.
-
-        The model host reaps idle keep-alive sockets before its own advertised
-        timeout, and a POST written into one of those is never answered: the
-        read sat for the whole timeout and the turn cost 12s (measured
-        2026-11-13, `reused: true`, `The read operation timed out`). A closed
-        socket is readable with nothing to read, so `_alive` sees the FIN and
-        the pool drops it instead of lending it out.
-        """
-        while True:
-            with self._mutex:
-                if not self._idle:
-                    break
+        with self._mutex:
+            if self._idle:
                 wire = self._idle.pop()
-            if self._alive(wire):
                 wire.reused = True
                 return wire
-            self._close(wire)
         wire = _Connection(self._host, self._port, self.timeout)
         wire.reused = False
         return wire
-
-    @staticmethod
-    def _alive(wire: _Connection) -> bool:
-        """Whether an idle connection can still carry a request.
-
-        An idle keep-alive socket is readable only when the far end has said
-        something unasked for, which in practice means it closed. So silence is
-        the healthy answer, and it is the only test that works the same on the
-        TLS socket `http.client` holds (a peek would raise there). Zero-timeout,
-        non-destructive, and anything that cannot answer counts as dead.
-        """
-        sock = getattr(getattr(wire, "conn", None), "sock", None)
-        if sock is None:
-            return False
-        try:
-            readable, _, _ = select.select([sock], [], [], 0)
-        except (OSError, ValueError):
-            return False
-        return not readable
 
     def _release(self, wire: _Connection) -> None:
         with self._mutex:
