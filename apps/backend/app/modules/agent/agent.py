@@ -646,7 +646,12 @@ class NearAiModel:
         api_key: str | None = None,
         model: str = NEAR_AI_MODEL,
         base_url: str = NEAR_AI_BASE,
-        timeout: int = 30,
+        # One stalled round used to sit on the 30s socket timeout before the
+        # retry answered, and the turn was 31.9s of silence (measured 2026-11-13,
+        # turn log, `agent: 31890`). A reply that is coming takes 1 to 4s and
+        # the slowest measured round was 7.6s, so 10s is generous and turns a
+        # stall into a retry the user can wait out.
+        timeout: int = 10,
     ):
         self.api_key = api_key or os.environ.get("NEAR_AI_API_KEY")
         self.model = model
