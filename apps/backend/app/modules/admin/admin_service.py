@@ -68,12 +68,12 @@ class AdminService:
             limits = pool.submit(self.limits.all)
         treasury = report.result()
         usdc = treasury["treasury_usdc"]
-        vaults = treasury["vaults"]
-        if vaults is not None and vaults["usdc"] is not None:
-            vaults = {**vaults, "usdc": str(vaults["usdc"])}
+        held = treasury["vaults"]
+        if held is not None and held["usdc"] is not None:
+            held = {**held, "usdc": str(held["usdc"])}
         return {
             "treasury": {**treasury, "treasury_usdc": None if usdc is None else str(usdc),
-                         "vaults": vaults},
+                         "vaults": held},
             "deposits": deposits.result(),
             "withdrawals": withdrawals.result(),
             "withdrawals_in_flight": in_flight.result(),
