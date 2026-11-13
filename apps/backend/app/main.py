@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.app_module import AppModule
+from app.common.cors import ALLOWED_ORIGIN
 from app.filters.http_exception_filter import HttpExceptionFilter
 from app.guards.admin_guard import ADMIN_HEADER
 from app.modules.admin import admin_controller
@@ -91,10 +92,9 @@ def create_app(module: Optional[AppModule] = None) -> FastAPI:
     app = FastAPI(lifespan=lifespan, **SwaggerSetup.options(module.config.version,
                                                           enabled=module.config.docs_enabled))
     app.state.module = module
-    # Wide open, so the dashboard works from any dev port and any deployed domain.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=ALLOWED_ORIGIN.pattern,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", ADMIN_HEADER],
     )
