@@ -6,8 +6,19 @@ export interface TreasuryReport {
     flutterwave_ngn: number | null;
     pending_purchases_ngn: number;
     treasury_usdc_as_ngn: number | null;
+    /** null when the vaults could not be read, or there are none on chain. */
+    vaults_usdc_as_ngn: number | null;
   };
   treasury_usdc: string | null;
+  /** Every user vault's USDC together. null when vaults are off or never broadcast. */
+  vaults: {
+    network: "testnet" | "mainnet";
+    /** null when the read failed: unknown, not zero. */
+    count: number | null;
+    usdc: string | null;
+    /** Testnet vaults hold test tokens, so only mainnet ones count toward coverage. */
+    counted: boolean;
+  } | null;
   coverage_ngn: number;
   unsettled_vault_ops: number;
 }

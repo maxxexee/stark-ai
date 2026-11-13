@@ -1,4 +1,4 @@
-"""Operator alerts and the admin key: no database, no network."""
+"""Operator alerts, vault holdings and the admin key: no database, no network."""
 
 from __future__ import annotations
 
@@ -11,17 +11,20 @@ from fastapi.testclient import TestClient
 
 from app.filters.http_exception_filter import HttpExceptionFilter
 from app.modules.admin import admin_controller
+from app.modules.chain import near_tx
 from app.modules.settings.operator_limits import OperatorLimits
 from app.modules.treasury.treasury_watch import TreasuryWatch
+from app.modules.vault.vault_service import VaultService
 from app.shared.services.api_config_service import _admin_key
 
 
-def report(flutterwave=500_000, usdc=Decimal(1000), coverage=200_000):
+def report(flutterwave=500_000, usdc=Decimal(1000), coverage=200_000, vaults=None):
     return {
         "owed_to_users_ngn": 1_000_000,
         "held": {"flutterwave_ngn": flutterwave, "pending_purchases_ngn": 0,
                  "treasury_usdc_as_ngn": None if usdc is None else int(usdc * 1500)},
         "treasury_usdc": usdc,
+        "vaults": vaults,
         "coverage_ngn": coverage,
         "unsettled_vault_ops": 0,
     }
@@ -92,6 +95,57 @@ class WatchTests(unittest.TestCase):
         self.watch.check(report(flutterwave=None, usdc=None, coverage=-1_000_000))
         # Unknown is neither low nor recovered: the raised alarm stays as it was.
         self.assertEqual(list(self.alerts.active()), ["flutterwave"])
+
+    def test_coverage_waits_for_mainnet_vaults_to_be_read(self):
+        unread = {"network": "mainnet", "count": 2, "usdc": None, "counted": True}
+        self.watch.check(report(coverage=-1_000, vaults=unread))
+        self.assertNotIn("coverage", self.alerts.active())
+
+    def test_testnet_vaults_do_not_hold_coverage_back(self):
+        unread = {"network": "testnet", "count": 2, "usdc": None, "counted": False}
+        self.watch.check(report(coverage=-1_000, vaults=unread))
+        self.assertIn("coverage", self.alerts.active())
+
+
+class FakeVaultDb:
+    def __init__(self, vaults):
+        self.vaults = vaults
+        self.reads = 0
+
+    def query(self, sql, params):
+        self.reads += 1
+        return [{"account_id": v} for v in self.vaults]
+
+
+class FakeRpc:
+    def __init__(self, balances):
+        self.balances = balances
+
+    def view(self, contract, method, args):
+        balance = self.balances[args["account_id"]]
+        if balance is None:
+            raise near_tx.NearRpcError("timeout")
+        return str(balance)
+
+
+def vault_service(balances):
+    chain = SimpleNamespace(rpc=FakeRpc(balances), usdc_id="usdc.fakes.testnet",
+                            funder_id="f.testnet", network="testnet", broadcast=True)
+    return VaultService(FakeVaultDb(list(balances)), chain, None, lambda: Decimal(1500))
+
+
+class VaultHoldingsTests(unittest.TestCase):
+    def test_sums_every_vault_and_reuses_the_read(self):
+        vaults = vault_service({"u-a.f.testnet": 2_500_000, "u-b.f.testnet": 10_360_000})
+        held = vaults.holdings()
+        self.assertEqual((held.count, held.usdc), (2, Decimal("12.86")))
+        vaults.holdings()
+        self.assertEqual(vaults.db.reads, 1)
+
+    def test_an_unreadable_vault_counts_as_zero(self):
+        vaults = vault_service({"u-a.f.testnet": 2_500_000, "u-b.f.testnet": None})
+        held = vaults.holdings()
+        self.assertEqual((held.count, held.usdc), (2, Decimal("2.5")))
 
 
 KEY = "k" * 32

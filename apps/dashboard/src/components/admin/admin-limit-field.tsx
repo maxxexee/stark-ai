@@ -4,7 +4,10 @@ import type { OperatorLimit } from "@/lib/admin/admin-api";
 
 const WHOLE = new Intl.NumberFormat("en-NG");
 
-/** One limit: its value to edit, its default while overridden, and a way back to it. */
+/**
+ * One limit: its value to edit, shown with commas (`text` itself stays plain digits, so the
+ * parent's parsing never sees them), its default while overridden, and a way back to it.
+ */
 export function AdminLimitField({
   limit,
   text,
@@ -35,8 +38,8 @@ export function AdminLimitField({
         hint={hint}
         inputMode="numeric"
         aria-invalid={invalid}
-        value={text}
-        onChange={(event) => onChange(event.target.value.trim())}
+        value={/^\d+$/.test(text) ? WHOLE.format(Number(text)) : text}
+        onChange={(event) => onChange(event.target.value.replace(/[,\s]/g, ""))}
       />
       {limit.overridden ? (
         <Button variant="ghost" size="sm" onClick={onReset} disabled={disabled}>

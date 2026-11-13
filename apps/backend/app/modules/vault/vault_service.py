@@ -43,7 +43,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Optional
@@ -75,6 +77,19 @@ class PaymentAuthorisation:
     payment_id: Optional[int]
 
 
+@dataclass(frozen=True)
+class VaultHoldings:
+    """The USDC every vault holds, read from the token itself."""
+
+    network: str
+    count: int
+    usdc: Decimal
+
+
+# One token read per vault, so the money loop's 30s tick reuses the last one.
+HOLDINGS_CACHE_SECONDS = 60
+HOLDINGS_READERS = 8
+
 _COULD_NOT_AUTHORISE = "I couldn't authorise that payment just now. Nothing was charged."
 _NOT_SETTLED = "I couldn't move the money for that just now. Nothing was charged."
 
@@ -88,6 +103,7 @@ class VaultService:
         self.ngn_per_usdc = ngn_per_usdc
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        self._holdings: Optional[tuple[float, VaultHoldings]] = None
 
     @property
     def enabled(self) -> bool:
@@ -404,6 +420,38 @@ class VaultService:
         report["vault_balance_ngn"] = balance
         report["drift_ngn"] = balance - wallet_balance_ngn
         return report
+
+    @property
+    def holds_usdc(self) -> bool:
+        """Vaults hold real tokens only on a chain that broadcasts."""
+        return self.chain is not None and self.chain.broadcast
+
+    def holdings(self) -> VaultHoldings:
+        """USDC across every ready vault under the current funder. A vault that cannot
+        be read counts as 0, so one slow RPC answer never hides the rest."""
+        assert self.chain is not None
+        chain = self.chain
+        if self._holdings is not None \
+                and time.monotonic() - self._holdings[0] < HOLDINGS_CACHE_SECONDS:
+            return self._holdings[1]
+        vaults = [row["account_id"] for row in self.db.query(
+            "SELECT account_id FROM vaults WHERE status = 'ready' AND account_id LIKE $1",
+            [f"%.{chain.funder_id}"],
+        )]
+        with ThreadPoolExecutor(max_workers=HOLDINGS_READERS) as pool:
+            units = sum(pool.map(self._vault_usdc_units, vaults))
+        held = VaultHoldings(chain.network, len(vaults), Decimal(units) / 10 ** 6)
+        self._holdings = (time.monotonic(), held)
+        return held
+
+    def _vault_usdc_units(self, vault_id: str) -> int:
+        assert self.chain is not None
+        try:
+            return int(self.chain.rpc.view(self.chain.usdc_id, "ft_balance_of",  # type: ignore[arg-type]
+                                           {"account_id": vault_id}))
+        except near_tx.NearRpcError as err:
+            log.warning("vault %s unreadable, counted as 0: %s", vault_id, err)
+            return 0
 
     # --- plumbing -------------------------------------------------------------
 

@@ -7,6 +7,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { AdminApi, type Fees } from "@/lib/admin/admin-api";
 
+const WHOLE = new Intl.NumberFormat("en-NG");
+
 const KINDS: { kind: keyof Fees; label: string }[] = [
   { kind: "electricity", label: "Electricity" },
   { kind: "tv", label: "TV" },
@@ -45,8 +47,10 @@ export function AdminFees({ adminKey, fees }: { adminKey: string; fees: Fees }) 
             key={kind}
             label={`${label} (₦)`}
             inputMode="numeric"
-            value={draft[kind]}
-            onChange={(event) => setDraft({ ...draft, [kind]: event.target.value.trim() })}
+            value={/^\d+$/.test(draft[kind]) ? WHOLE.format(Number(draft[kind])) : draft[kind]}
+            onChange={(event) =>
+              setDraft({ ...draft, [kind]: event.target.value.replace(/[,\s]/g, "") })
+            }
           />
         ))}
       </div>

@@ -7,7 +7,7 @@ import type { TreasuryReport } from "@/lib/admin/admin-api";
 
 /** Both pots against what users are owed. Coverage below zero means Stark owes more than it holds. */
 export function AdminPots({ report }: { report: TreasuryReport }) {
-  const { held, treasury_usdc: usdc } = report;
+  const { held, treasury_usdc: usdc, vaults } = report;
   const short = report.coverage_ngn < 0;
   return (
     <Card>
@@ -30,19 +30,31 @@ export function AdminPots({ report }: { report: TreasuryReport }) {
           {held.flutterwave_ngn === null ? "Unreadable" : formatNaira(held.flutterwave_ngn)}
         </Stat>
         <Stat label="Pending purchases">{formatNaira(held.pending_purchases_ngn)}</Stat>
-        <Stat label="Treasury">
-          {usdc === null
-            ? "Unreadable"
-            : `${Number(usdc).toLocaleString("en-NG", { maximumFractionDigits: 2 })} USDC`}
-        </Stat>
+        <Stat label="Treasury">{usdc === null ? "Unreadable" : `${usdcText(usdc)} USDC`}</Stat>
         <Stat label="Treasury in naira">
           {held.treasury_usdc_as_ngn === null
             ? "Unreadable"
             : formatNaira(held.treasury_usdc_as_ngn)}
         </Stat>
+        {vaults && (
+          <>
+            <Stat label={vaults.count === null ? "Vaults" : `${vaults.count} vaults`}>
+              {`${usdcText(vaults.usdc ?? "0")} USDC`}
+            </Stat>
+            <Stat
+              label={vaults.counted ? "Vaults in naira" : `Vaults in naira (${vaults.network})`}
+            >
+              {`${formatNaira(held.vaults_usdc_as_ngn ?? 0)}${vaults.counted ? "" : ", not counted"}`}
+            </Stat>
+          </>
+        )}
         <Stat label="Owed to users">{formatNaira(report.owed_to_users_ngn)}</Stat>
         <Stat label="Vault ops not settled">{report.unsettled_vault_ops}</Stat>
       </StatGrid>
     </Card>
   );
+}
+
+function usdcText(usdc: string) {
+  return Number(usdc).toLocaleString("en-NG", { maximumFractionDigits: 2 });
 }
