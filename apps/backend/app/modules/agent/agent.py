@@ -57,8 +57,15 @@ NEAR_AI_BASE = os.environ.get("NEAR_AI_BASE_URL") or "https://cloud-api.near.ai"
 # mixture of experts and took 1.4s. On six probe utterances (a question, a
 # payment, an over-cap payment, a deposit, a greeting) the two made the same
 # tool calls; the 3.6 model also told the user the meter token instead of the
-# reference number. Set NEAR_AI_MODEL to pin another one.
-NEAR_AI_MODEL = os.environ.get("NEAR_AI_MODEL") or "Qwen/Qwen3.6-35B-A3B-FP8"
+# reference number. Set STARK_MODEL to pin another one.
+#
+# STARK_MODEL wins over NEAR_AI_MODEL because the production machine identity
+# reads Infisical and cannot write it, so a deploy is the only way to change the
+# model without someone editing the secret by hand. The secret stays as the
+# fallback for a host that sets neither.
+NEAR_AI_MODEL = (os.environ.get("STARK_MODEL")
+                 or os.environ.get("NEAR_AI_MODEL")
+                 or "Qwen/Qwen3.6-35B-A3B-FP8")
 
 SYSTEM_PROMPT = """You are Stark, a calm assistant that pays household bills.
 
