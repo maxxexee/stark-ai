@@ -15,12 +15,12 @@ hallucinated one would be read back as something the user "said".
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
-import urllib.error
-import urllib.request
 import uuid
 
+from app.common.keep_alive import KeepAlive
 from app.modules.voice import audio
 
 NEAR_AI_BASE = os.environ.get("NEAR_AI_BASE_URL") or "https://cloud-api.near.ai"
@@ -101,22 +101,22 @@ def transcribe(wav: bytes, *, api_key: str | None = None,
     kind = (mime or "audio/wav").split(";")[0].strip().lower() or "audio/wav"
     body = _multipart({"model": NEAR_AI_STT_MODEL}, "file",
                       f"audio.{_EXT.get(kind, 'bin')}", wav, content_type=kind)
-    req = urllib.request.Request(
-        f"{NEAR_AI_BASE}/v1/audio/transcriptions",
-        data=body,
-        method="POST",
-        headers={
+    # The connection is kept: the TLS handshake to this host costs 0.43s from
+    # Lagos, and a voice turn that found a fresh one every time spent most of
+    # its 0.9s of listening on it.
+    pool = KeepAlive.for_base(NEAR_AI_BASE, timeout=timeout)
+    try:
+        status, raw = pool.send("POST", "/v1/audio/transcriptions", body, {
             "Authorization": f"Bearer {key}",
             "Content-Type": f"multipart/form-data; boundary={_BOUNDARY}",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            payload = json.loads(res.read() or b"{}")
-    except urllib.error.HTTPError as err:
-        err.close()
+        })
+    except (http.client.HTTPException, OSError):
         return None, FAILED
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    if status >= 400:
+        return None, FAILED
+    try:
+        payload = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
         return None, FAILED
 
     text = payload.get("text") if isinstance(payload, dict) else None

@@ -139,7 +139,10 @@ class VoiceService:
         if not text:
             raise ApiError(400, "bad_text", "`text` is required.")
         since = time.perf_counter()
-        chunks = tts.stream_elevenlabs(text)
+        # Sentence by sentence, so the first words are spoken while the rest of
+        # the reply is still being synthesised. Same voice and format on every
+        # piece, so one response plays them back to back.
+        chunks = VoiceService._spoken(tts.sentences(text))
         first = next(chunks, None)
         if first is not None:
             turnlog.record(turnlog.speak(text=text, ms=TurnLogger.ms(since), reason=tts.OK,
@@ -151,6 +154,11 @@ class VoiceService:
         if wav:
             return "audio/wav", iter([wav])
         raise ApiError(503, "no_voice", "No voice provider is available.")
+
+    @staticmethod
+    def _spoken(parts: list[str]) -> Iterator[bytes]:
+        for part in parts:
+            yield from tts.stream_elevenlabs(part)
 
     @staticmethod
     def _data_url(wav: Optional[bytes]) -> Optional[str]:

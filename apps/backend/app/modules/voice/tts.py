@@ -20,14 +20,14 @@ the reply goes as text.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 import wave
 
+from app.common.keep_alive import KeepAlive
 from app.modules.voice import audio
 
 ELEVENLABS_API = "https://api.elevenlabs.io/v1"
@@ -94,23 +94,33 @@ def synthesize(text: str, *, timeout: float = 10.0) -> tuple[bytes | None, str]:
         "model_id": model_id,
         "voice_settings": {"stability": 0.45, "similarity_boost": 0.8},
     }).encode()
-    req = urllib.request.Request(
-        f"{base.rstrip('/')}/text-to-speech/{voice_id}?output_format=pcm_24000",
-        data=body, method="POST",
-        headers={"Content-Type": "application/json", "xi-api-key": key},
-    )
+    # A kept connection: the handshake to this host is 0.39s from Lagos, paid on
+    # every spoken reply when it was opened fresh.
+    pool = KeepAlive.for_base(base, timeout=timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            pcm = res.read()
-    except urllib.error.HTTPError as err:
-        err.close()
+        status, pcm = pool.send(
+            "POST", f"/text-to-speech/{voice_id}?output_format=pcm_24000", body,
+            {"Content-Type": "application/json", "xi-api-key": key})
+    except (http.client.HTTPException, TimeoutError, OSError):
         return None, ELEVENLABS_FAILED
-    except (urllib.error.URLError, TimeoutError, OSError):
+    if status >= 400:
         return None, ELEVENLABS_FAILED
 
     if not pcm or len(pcm) < 2:
         return None, ELEVENLABS_FAILED
     return _pcm_to_wav(pcm), OK
+
+
+# Where a spoken reply is cut so the first words need not wait for the last.
+# Whitespace after a full stop, question or exclamation: an amount like `0.5`
+# has no space in it, so a decimal never splits.
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def sentences(text: str) -> list[str]:
+    """The reply in the units the voice is asked for, largest that still starts soon."""
+    return [part.strip() for part in _SENTENCE.split(speakable(text).strip())
+            if part.strip()]
 
 
 def stream_elevenlabs(text: str, *, base: str | None = None,
@@ -135,29 +145,37 @@ def stream_elevenlabs(text: str, *, base: str | None = None,
         "model_id": model_id,
         "voice_settings": {"stability": 0.45, "similarity_boost": 0.8},
     }).encode()
-    req = urllib.request.Request(
-        f"{base.rstrip('/')}/text-to-speech/{voice_id}/stream"
-        "?output_format=mp3_44100_128",
-        data=body, method="POST",
-        headers={"Content-Type": "application/json", "xi-api-key": key},
-    )
+    pool = KeepAlive.for_base(base, timeout=timeout)
     try:
-        res = urllib.request.urlopen(req, timeout=timeout)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+        wire, res = pool.hold(
+            "POST", f"/text-to-speech/{voice_id}/stream?output_format=mp3_44100_128",
+            body, {"Content-Type": "application/json", "xi-api-key": key})
+    except (http.client.HTTPException, TimeoutError, OSError):
         return  # the caller falls back; a refusal here is not an error to 500 on
+
+    finished = False
     try:
-        with res:
-            # read1, not read: `read` fills the whole buffer before returning
-            # and would sit on the socket until the clip was finished — the
-            # one thing this function exists to avoid.
-            reader = getattr(res, "read1", None) or res.read
-            while True:
-                chunk = reader(16384)
-                if not chunk:
-                    break
-                yield chunk
+        if res.status >= 400:
+            return
+        # read1, not read: `read` fills the whole buffer before returning and
+        # would sit on the socket until the clip was finished — the one thing
+        # this function exists to avoid.
+        reader = getattr(res, "read1", None) or res.read
+        while True:
+            chunk = reader(16384)
+            if not chunk:
+                break
+            yield chunk
+        finished = True
     except (TimeoutError, OSError):  # a dropped stream plays what it already said
         return
+    finally:
+        reusable = finished and not res.will_close
+        res.close()
+        if reusable:
+            pool.release(wire)
+        else:
+            pool.drop(wire)
 
 
 def voice_note(text: str, *, timeout: float = 10.0) -> bytes | None:
