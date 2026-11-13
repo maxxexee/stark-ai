@@ -35,6 +35,7 @@ from typing import Any, Iterable
 
 from app.common.clock import Clock
 from app.database import neon
+from app.modules.chain import vault_chain
 
 RECEIPT_COLUMNS = (
     "id", "user_id", "request_id", "bill_id", "bill_label", "meter", "amount_ngn",
@@ -409,6 +410,8 @@ def api_shape(receipt: dict[str, Any]) -> dict[str, Any]:
         "units": receipt["units"],
         "token": receipt["token"],
         "tx_hash": receipt["tx_hash"],
+        # Additive (2026-11-13): the explorer page for `tx_hash` on Stark's network.
+        "tx_url": vault_chain.transaction_url(receipt["tx_hash"]) if receipt["tx_hash"] else None,
         "created_at": receipt["created_at"],
         # Additive (2026-10-22): a pending purchase is not a completed one.
         "status": receipt["status"],

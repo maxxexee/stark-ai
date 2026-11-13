@@ -1,7 +1,6 @@
 import type { Receipt } from "@stark/api/types";
 import { Stat, StatGrid } from "@stark/ui/components/stat";
 import { formatNaira } from "@stark/utils/format";
-import { NearExplorer } from "@/lib/receipts/near-explorer";
 
 export function ReceiptStats({ receipt }: { receipt: Receipt }) {
   return (
@@ -12,10 +11,10 @@ export function ReceiptStats({ receipt }: { receipt: Receipt }) {
       <Stat label="Receipt ID">
         <span className="tabular">{receipt.id.toUpperCase()}</span>
       </Stat>
-      {receipt.tx_hash ? (
+      {receipt.tx_url ? (
         <Stat label="Approved by">
           <a
-            href={NearExplorer.transaction(receipt.tx_hash)}
+            href={receipt.tx_url}
             target="_blank"
             rel="noreferrer"
             className="underline underline-offset-4"
