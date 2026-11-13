@@ -645,9 +645,11 @@ class NearAiModel:
     RETRY_DELAYS = (0.3, 0.9)
     # One call's ceiling, in seconds. Three attempts on a 10s socket timeout could
     # hold a turn for 31.2s (measured 2026-11-13, `agent: 31890` in the turn log).
-    # Each attempt borrows only what is left of the budget, so a socket that never
-    # answers costs one timeout, not three.
-    RETRY_BUDGET_SECONDS = 12.0
+    # Each attempt borrows what is left of the budget, so a socket that never
+    # answers cannot stack three full timeouts. It must leave a whole timeout for
+    # the retry: at 12s, one stall left the retry 2s, which cannot carry a real
+    # answer, and a slow round became "lost connection" instead of a second try.
+    RETRY_BUDGET_SECONDS = 25.0
     # Below this an attempt would time out before the request could finish.
     MIN_ATTEMPT_SECONDS = 1.0
 
