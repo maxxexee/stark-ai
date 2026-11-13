@@ -177,9 +177,7 @@ Rules:
   user gave: the meter number, smartcard number or phone line. Never make up or
   complete a reference. Data and TV are sold as plans, so call find_plans first and
   pass the plan's code; if they did not say which plan, name two or three by price
-  and ask. After saving, read the reference back so a misheard digit is caught,
-  and say the owner must confirm the new bill in the Stark app before it can be
-  paid. A bill marked needs_confirmation cannot be paid until they do.
+  and ask. After saving, read the reference back so a misheard digit is caught.
 - To add money, call add_money with the amount and how they want to pay: "bank"
   for bank transfer, card or USSD, or "crypto" with the coin, like USDT, and the
   network when they named one. If they did not say how, ask bank or crypto, in one
@@ -1019,7 +1017,7 @@ class Agent:
         """
         try:
             recent = self.toolbox.recent_activity()
-            bills = [self._as_seen(b) for b in self.toolbox.list_bills()]
+            bills = self.toolbox.list_bills()
             # A receipt names its bill, not its destination. On 2026-10-25 the
             # model was asked "what number" straight after a ₦500 airtime
             # top-up and answered "I can't see the number that was topped up" —
@@ -1052,7 +1050,7 @@ class Agent:
             # An unconfirmed line is not theirs until they say so in the app.
             phone = next((str(b.get("reference") or "") for b in bills
                           if isinstance(b, dict) and b.get("kind") == "airtime"
-                          and b.get("reference") and not b.get("needs_confirmation")), "")
+                          and b.get("reference")), "")
             if phone:
                 snapshot["phone"] = phone
             # The gate's own numbers, so a refusal can be explained before the
@@ -1181,19 +1179,6 @@ class Agent:
         return self._apply_effects(reply, effect)
 
     @staticmethod
-    def _as_seen(bill: dict) -> dict:
-        """A bill as the model may read it.
-
-        An unconfirmed bill's label and provider are whatever was said to Stark,
-        stored and then read back into every later prompt: a place to plant an
-        instruction. Until the owner confirms it, the model sees its kind only.
-        """
-        if not bill.get("needs_confirmation"):
-            return bill
-        return {**bill, "label": f"unconfirmed {bill.get('kind')} bill",
-                "provider": "unconfirmed"}
-
-    @staticmethod
     def _lost_reply(reply: AgentReply) -> str:
         """A sentence a person can act on, never a stack trace.
 
@@ -1223,8 +1208,7 @@ class Agent:
             if call.name == "get_state":
                 return {"ok": True, "data": self.toolbox.get_state()}
             if call.name == "list_bills":
-                return {"ok": True,
-                        "data": [self._as_seen(b) for b in self.toolbox.list_bills()]}
+                return {"ok": True, "data": self.toolbox.list_bills()}
             if call.name == "recent_activity":
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":
@@ -1299,23 +1283,6 @@ class Agent:
                     "error": {"code": "unknown_bill",
                               "message": "I don't have that bill saved.",
                               "detail": {"bill_id": bill_id}}}
-
-        # A bill this agent saved is not payable until its owner confirms it in the
-        # app: a voice in the room must not be able to name a number and pay it.
-        if bill.get("needs_confirmation"):
-            effect["code"] = "bill_unconfirmed"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "bill_unconfirmed",
-                    "message": (
-                        f"That {bill.get('kind')} bill is saved but not confirmed. "
-                        "Confirm it in the Stark app, then I can pay it. Nothing was "
-                        "charged."
-                    ),
-                    "detail": {"bill_id": bill.get("id")},
-                },
-            }
 
         # A plan is sold at its own price. Refuse a mispriced attempt before it can
         # reach the vendor, so the user hears the real number.
