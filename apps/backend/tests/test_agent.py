@@ -1109,14 +1109,46 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertGreaterEqual(retries[0]["ms"], 0)
         self.assertIn("reused", retries[0])
 
+    def test_a_socket_the_far_end_closed_is_not_lent_out(self):
+        """The pool reaped this one; lending it out is what cost 12s."""
+        import socket as socket_mod
+        import time
+
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        held.close()  # the far end is gone, and the FIN has arrived
+        time.sleep(0.05)
+
+        wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
+        self.assertFalse(agent_mod.NearAiModel._alive(wire))
+
+    def test_a_healthy_idle_socket_is_lent_out(self):
+        import socket as socket_mod
+
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        self.addCleanup(held.close)
+
+        wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
+        self.assertTrue(agent_mod.NearAiModel._alive(wire))
+
     def test_a_pooled_connection_is_marked_as_reused(self):
         """A read timeout on a reused socket is a dead pool entry; on a fresh one
         it is the provider. The note has to say which."""
+        import socket as socket_mod
+
         model = self.model()
         fresh = model._acquire()
         self.assertFalse(fresh.reused)
+        # A pooled connection is one that has spoken to the host at least once;
+        # an unconnected one has no socket and is correctly not kept.
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        self.addCleanup(held.close)
+        fresh.conn.sock = live
         model._release(fresh)
         again = model._acquire()
+        self.assertIs(again, fresh)
         self.assertTrue(again.reused)
         model._close(again)
 
