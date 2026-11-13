@@ -5,7 +5,12 @@ keep. It is covered by money Stark actually holds:
 
     owed     = Σ wallet balances
     held     = Flutterwave NGN balance − pending purchases + treasury USDC × rate
+               + vault USDC × rate   (mainnet vaults only)
     coverage = held − owed           (must never go negative)
+
+A deposit moves the treasury's USDC into the user's vault, so the vaults hold the
+backing for most wallet balances. Vaults on testnet hold test tokens, worth
+nothing: they are shown in `report()` but left out of coverage.
 
 Collections Flutterwave has not settled yet are not in its balance, so right after
 a run of deposits coverage dips until settlement; it must recover by the next day.
@@ -78,31 +83,45 @@ class TreasuryService:
         `fresh=False` reuses the Flutterwave balance the money loop read in the last
         minute, which is what the admin page wants: it is a view, not an alarm.
         """
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=7) as pool:
             owed = pool.submit(self.db.value,
                                "SELECT COALESCE(SUM(balance_ngn), 0) FROM wallets")
             usdc = pool.submit(_read, self._treasury_usdc) if self.treasury_account else None
             flutterwave = pool.submit(_read, lambda: self.floats.balance(fresh=fresh))
             reserved = pool.submit(self.floats.reserved)
+            vault_usdc = pool.submit(_read, self.vaults.holdings) \
+                if self.vaults.holds_usdc else None
             rate = pool.submit(_read, self.usdc_rate.market)
             stuck = pool.submit(self.db.value,
                                 "SELECT COUNT(*) FROM chain_ops WHERE status <> 'done'")
         usdc_held = usdc.result() if usdc is not None else None
+        in_vaults = vault_usdc.result() if vault_usdc is not None else None
         market = rate.result()
         held: dict[str, Optional[int]] = {
             "flutterwave_ngn": flutterwave.result(),
             "pending_purchases_ngn": reserved.result(),
-            "treasury_usdc_as_ngn": None if usdc_held is None or market is None
-            else int(usdc_held * market),
+            "treasury_usdc_as_ngn": _as_ngn(usdc_held, market),
+            "vaults_usdc_as_ngn": _as_ngn(in_vaults.usdc if in_vaults else None, market),
         }
-        known = sum(v for k, v in held.items() if v is not None and k != "pending_purchases_ngn")
+        vaults = None
+        if self.vaults.holds_usdc:
+            network = self.vaults.chain.network  # type: ignore[union-attr]
+            vaults = {"network": network,
+                      "count": in_vaults.count if in_vaults else None,
+                      "usdc": in_vaults.usdc if in_vaults else None,
+                      "counted": network == "mainnet"}
+        counted = [held["flutterwave_ngn"], held["treasury_usdc_as_ngn"]]
+        if vaults is not None and vaults["counted"]:
+            counted.append(held["vaults_usdc_as_ngn"])
         owed = int(owed.result() or 0)
         stuck_ops = int(stuck.result() or 0)
         return {
             "owed_to_users_ngn": owed,
             "held": held,
             "treasury_usdc": usdc_held,
-            "coverage_ngn": known - held["pending_purchases_ngn"] - owed,
+            "vaults": vaults,
+            "coverage_ngn": sum(v for v in counted if v is not None)
+            - held["pending_purchases_ngn"] - owed,
             "unsettled_vault_ops": stuck_ops,
         }
 
@@ -143,6 +162,10 @@ def _read(read: Callable[[], T]) -> Optional[T]:
     except (FlutterwaveError, near_tx.NearRpcError, RateUnavailable) as err:
         log.warning("balance unreadable: %s", err)
         return None
+
+
+def _as_ngn(usdc: Optional[Decimal], market: Optional[Decimal]) -> Optional[int]:
+    return None if usdc is None or market is None else int(usdc * market)
 
 
 def _main() -> None:  # pragma: no cover - operator CLI

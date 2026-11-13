@@ -741,9 +741,10 @@ key configured every request is **403** `admin_disabled`.
   "treasury": {
     "owed_to_users_ngn": 1250000,
     "held": {"flutterwave_ngn": 900000, "pending_purchases_ngn": 5000,
-             "treasury_usdc_as_ngn": 600000},
+             "treasury_usdc_as_ngn": 600000, "vaults_usdc_as_ngn": 420000},
     "treasury_usdc": "400.25",
-    "coverage_ngn": 245000,
+    "vaults": {"network": "mainnet", "count": 14, "usdc": "280.1", "counted": true},
+    "coverage_ngn": 665000,
     "unsettled_vault_ops": 0
   },
   "deposits": [{"method": "bank", "status": "credited", "count": 12, "amount_ngn": 300000}],
@@ -769,6 +770,13 @@ alarm has `cleared_at: null`; one that ended in the last week keeps its
 A balance that could not be read is `null`, not zero, and `coverage_ngn` then counts
 only what was read. `treasury_usdc` is a decimal string. The in-flight lists hold at
 most 50 rows each, oldest first.
+
+`vaults` (**additive, 2026-11-13**) is the USDC every user vault holds together, read
+from the token, with `held.vaults_usdc_as_ngn` its naira value. A deposit moves the
+treasury's USDC into the user's vault, so this is where most wallet balances are
+backed. Only `mainnet` vaults count toward `coverage_ngn` (`counted: true`): testnet
+vaults hold test tokens. `vaults` is `null` when vaults are off or never broadcast. A
+vault that cannot be read counts as 0. Read at most once a minute.
 
 `limits` (**additive, 2026-11-12**) is every operator limit, in the order the admin page
 shows them. The owner changes them with `PATCH /v1/admin/limits`; each one's environment
@@ -1291,3 +1299,4 @@ Shapes will not change as these land. Only the values become real.
 | 2026-11-12 | Money-rail hardening. Bank and crypto withdrawals answer `paused` (423) while the owner has paused Stark, and new `funds_on_hold` (409) for money a card added in the last `STARK_CARD_HOLD_HOURS` (it still pays bills). Bank withdrawals gain a per-account daily cap (`daily_limit`, 409); crypto gains a per-account daily cap and a per-withdrawal USDC cap (`over_limit`) beside the existing ones. `POST /v1/wallet/bank-accounts/resolve` is limited per account per day (new `too_many_lookups`, 429). `transfer.completed` is re-read from Flutterwave instead of trusting its body, and a `paid` withdrawal is never returned. `GET /v1/wallet/deposits/{id}` asks its rail at most every 15 seconds. Paycrest rates outside the allowed range or move are refused (`provider_failed`). No shape changed. |
 | 2026-11-12 | No bot owner. Operator alerts (float, treasury, coverage) are stored and returned as `alerts` on `GET /v1/admin/overview` instead of sent to a Telegram chat, and the daily summary is gone. Renewal reminders go to every linked account's chats. `STARK_TG_OWNER_EMAIL`, `STARK_TG_OWNER_ACCOUNT_ID` and `STARK_SUMMARY_HOUR` are no longer read, and `POST /v1/link/code` no longer answers `not_configured`. |
 | 2026-11-12 | **Operator limits on the admin page.** `GET /v1/admin/overview` gains `limits` (each withdrawal cap, the card hold, the USDC rate bounds, spread and pin, the alert thresholds and the speak and telemetry rate limits, with its value and default), and `PATCH /v1/admin/limits` sets them (`null` resets one); a change applies within 15 seconds with no deploy. Their environment variables are now only the defaults; `STARK_USDC_RATE_MAX_MOVE` is a percentage (a fraction under 1 still reads as one) and `STARK_USDC_NGN_RATE` / `STARK_USDC_NGN_SPREAD` are whole naira. New codes `unknown_limit`, `bad_limit` (400). Additive only. |
+| 2026-11-13 | `GET /v1/admin/overview`: `treasury` gains `vaults` (every user vault's USDC, its network and count) and `held.vaults_usdc_as_ngn`. Mainnet vaults now count toward `coverage_ngn`, which before left out the USDC deposits had moved from the treasury into vaults. Additive only. |

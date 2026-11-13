@@ -56,8 +56,10 @@ class TreasuryWatch:
                 "vault funding are paid from it.",
                 f"Treasury is back to {usdc:,.2f} USDC.",
             )
-        # Coverage only means something when both sides were read.
-        if flutterwave is not None and usdc is not None:
+        # Coverage only means something when every pot it counts was read.
+        vaults = report["vaults"]
+        vaults_read = vaults is None or not vaults["counted"] or vaults["usdc"] is not None
+        if flutterwave is not None and usdc is not None and vaults_read:
             self._alarm(
                 "coverage", coverage < 0,
                 f"Coverage is -₦{-coverage:,}: Stark holds less than it owes users "
