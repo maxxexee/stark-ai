@@ -611,6 +611,8 @@ class _Connection:
             host, port, timeout=timeout, context=ssl.create_default_context()
         )
         self.lock = threading.Lock()
+        # Set by `NearAiModel._acquire`; carried into the retry note.
+        self.reused = False
 
 
 class NearAiModel:
@@ -675,15 +677,22 @@ class NearAiModel:
         """Attempts that failed and went to a retry, in the order they happened."""
         return list(getattr(self._local, "events", []))
 
-    def _note_retry(self, attempt: int, started: float, error: BaseException) -> None:
+    def _note_retry(self, attempt: int, started: float, error: BaseException,
+                    reused: bool | None) -> None:
         """Keep the reason, not just the count: a stall and a reset look the same
-        in the timing and completely different in the sentence."""
+        in the timing and completely different in the sentence.
+
+        `reused` is the deciding datum for a read timeout: a pooled connection
+        that the far end has already forgotten looks exactly like a provider
+        that took too long, and only the pool state tells them apart.
+        """
         events = getattr(self._local, "events", None)
         if events is None:
             self._local.events = events = []
         events.append({
             "attempt": attempt + 1,
             "ms": int((time.perf_counter() - started) * 1000),
+            "reused": reused,
             "why": str(error)[:120],
         })
 
@@ -692,8 +701,12 @@ class NearAiModel:
     def _acquire(self) -> _Connection:
         with self._mutex:
             if self._idle:
-                return self._idle.pop()
-        return _Connection(self._host, self._port, self.timeout)
+                wire = self._idle.pop()
+                wire.reused = True
+                return wire
+        wire = _Connection(self._host, self._port, self.timeout)
+        wire.reused = False
+        return wire
 
     def _release(self, wire: _Connection) -> None:
         with self._mutex:
@@ -758,8 +771,10 @@ class NearAiModel:
             started = time.perf_counter()
             wire: _Connection | None = None
             retryable = False
+            reused: bool | None = None
             try:
                 wire = self._acquire()
+                reused = getattr(wire, "reused", None)
                 with wire.lock:
                     wire.conn.request("POST", self._path, body, headers)
                     response = wire.conn.getresponse()
@@ -789,7 +804,7 @@ class NearAiModel:
             if not retryable:
                 break
             if last is not None:
-                self._note_retry(attempt, started, last)
+                self._note_retry(attempt, started, last, reused)
             if attempt < self.ATTEMPTS - 1:
                 time.sleep(self.RETRY_DELAYS[min(attempt, len(self.RETRY_DELAYS) - 1)])
         raise last if last else RuntimeError("NEAR AI failed without a reason")

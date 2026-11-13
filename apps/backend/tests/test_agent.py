@@ -1107,6 +1107,18 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertEqual(retries[0]["attempt"], 1)
         self.assertIn("timed out", retries[0]["why"])
         self.assertGreaterEqual(retries[0]["ms"], 0)
+        self.assertIn("reused", retries[0])
+
+    def test_a_pooled_connection_is_marked_as_reused(self):
+        """A read timeout on a reused socket is a dead pool entry; on a fresh one
+        it is the provider. The note has to say which."""
+        model = self.model()
+        fresh = model._acquire()
+        self.assertFalse(fresh.reused)
+        model._release(fresh)
+        again = model._acquire()
+        self.assertTrue(again.reused)
+        model._close(again)
 
     def test_a_turn_that_needed_no_retry_records_nothing(self):
         self.transport(lambda body: (200, self.OK))
