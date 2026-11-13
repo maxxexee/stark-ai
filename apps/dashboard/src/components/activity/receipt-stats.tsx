@@ -7,7 +7,9 @@ export function ReceiptStats({ receipt }: { receipt: Receipt }) {
     <StatGrid>
       {receipt.source ? <Stat label="Asked via">{receipt.source}</Stat> : null}
       {receipt.units ? <Stat label="Units">{receipt.units} kWh</Stat> : null}
-      {receipt.fee_ngn ? <Stat label="Service fee">{formatNaira(receipt.fee_ngn)}</Stat> : null}
+      {receipt.fee_ngn ? (
+        <Stat label="Service fee">{formatNaira(receipt.fee_ngn)}</Stat>
+      ) : null}
       <Stat label="Receipt ID">
         <span className="tabular">{receipt.id.toUpperCase()}</span>
       </Stat>
