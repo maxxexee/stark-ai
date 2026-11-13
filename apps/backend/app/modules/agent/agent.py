@@ -45,9 +45,17 @@ DUPLICATE_WINDOW_SECONDS = 300
 OVER_A_LIMIT = frozenset({policy_rules.OVER_PER_PAYMENT_CAP, policy_rules.OVER_CAP})
 
 NEAR_AI_BASE = os.environ.get("NEAR_AI_BASE_URL") or "https://cloud-api.near.ai"
-# On NEAR's own fleet (Private TEE) and tool-capable. `openai/gpt-5-nano` is
-# Incognito (no end-to-end TEE) and was `is_ready: false` when checked 2026-10-22.
-NEAR_AI_MODEL = os.environ.get("NEAR_AI_MODEL") or "Qwen/Qwen3.8-27B"
+# Tool-capable and on NEAR's own fleet. `openai/gpt-5-nano` is Incognito (no
+# end-to-end TEE) and was `is_ready: false` when checked 2026-10-22.
+#
+# Measured 2026-11-13 on the real agent loop, three turns each, same prompt:
+# Qwen/Qwen3.8-27B took 17.9s a turn and single turns reached 81s, which is the
+# wait the wall phone was showing. Qwen/Qwen3.6-35B-A3B-FP8 is a 3B-active
+# mixture of experts and took 1.4s. On six probe utterances (a question, a
+# payment, an over-cap payment, a deposit, a greeting) the two made the same
+# tool calls; the 3.6 model also told the user the meter token instead of the
+# reference number. Set NEAR_AI_MODEL to pin another one.
+NEAR_AI_MODEL = os.environ.get("NEAR_AI_MODEL") or "Qwen/Qwen3.6-35B-A3B-FP8"
 
 SYSTEM_PROMPT = """You are Stark, a calm assistant that pays household bills.
 
