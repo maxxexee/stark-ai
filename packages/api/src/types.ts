@@ -54,6 +54,7 @@ export type Receipt = {
   units: number | null;
   token: string | null;
   tx_hash?: string | null;
+  tx_url: string | null;
   created_at: string;
   status: ReceiptStatus;
   request_id?: string;

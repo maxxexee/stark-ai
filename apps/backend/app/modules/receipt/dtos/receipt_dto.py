@@ -18,6 +18,10 @@ class ReceiptDto(BaseModel):
     token: Optional[str] = Field(description="Electricity only.",
                                  examples=["4821 0937 5512 8846 3019"])
     tx_hash: Optional[str] = Field(examples=[None])
+    tx_url: Optional[str] = Field(
+        description="The NEAR explorer page for `tx_hash`, on the network Stark runs on.",
+        examples=["https://nearblocks.io/txns/6ZQGL474kqJCxhjEfGSK3EGg76RUpCfvGsFZS7XxYiNv"],
+    )
     created_at: str = Field(examples=["2026-10-20T19:33:13Z"])
     status: str = Field(
         description="delivered | pending | failed | declined | received | sent",

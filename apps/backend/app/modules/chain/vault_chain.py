@@ -64,6 +64,23 @@ ONE_YOCTO = 1
 AGENT_ALLOWANCE_YOCTO = YOCTO_PER_NEAR
 
 
+EXPLORERS = {"testnet": "https://testnet.nearblocks.io", "mainnet": "https://nearblocks.io"}
+
+
+def network_from_env(env: Optional[Mapping[str, str]] = None) -> str:
+    """`STARK_NETWORK`: `testnet` (default) or `mainnet`."""
+    source = os.environ if env is None else env
+    network = (source.get("STARK_NETWORK") or "testnet").strip().lower()
+    if network not in EXPLORERS:
+        raise ValueError("STARK_NETWORK must be testnet or mainnet")
+    return network
+
+
+def transaction_url(tx_hash: str) -> str:
+    """The explorer page for a transaction on the network Stark runs on."""
+    return f"{EXPLORERS[network_from_env()]}/txns/{tx_hash}"
+
+
 # Mintable test USDC on testnet (Circle's testnet faucet needs a captcha); Circle's USDC on mainnet.
 USDC_TOKENS = {
     "testnet": "usdc.fakes.testnet",
@@ -268,9 +285,7 @@ def chain_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[VaultCha
             "STARK_FUNDER_ACCOUNT, STARK_FUNDER_KEY and STARK_AGENT_KEY go together"
         )
 
-    network = (source.get("STARK_NETWORK") or "testnet").strip().lower()
-    if network not in ("testnet", "mainnet"):
-        raise ValueError("STARK_NETWORK must be testnet or mainnet")
+    network = network_from_env(source)
 
     code = (source.get("STARK_VAULT_CODE") or f"global:{funder_id}").strip()
     default_storage = "0.2" if code.startswith("global:") else "3"
