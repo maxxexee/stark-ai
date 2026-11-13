@@ -12,8 +12,7 @@ export type Bill = {
   plan?: string;
   plan_price_ngn?: number;
   renews_on?: string;
-  fee_ngn?: number;
-  /** Saved by Stark from a chat: it cannot be paid until the owner confirms it. */
+  fee_ngn?: number;   
   needs_confirmation?: true;
 };
 
@@ -112,7 +111,6 @@ export type VoiceReply = {
   receipt_id: string | null;
   deposit?: Deposit | null;
   audio?: string | null;
-  /** Streams this reply as audio. Handed over with the words so playback starts at once. */
   speak_url?: string | null;
   stt?: "ok" | "no_key" | "failed";
 };
@@ -121,7 +119,6 @@ export type SpeakReply = {
   audio: string | null;
 };
 
-/** `url` is relative to the API's base URL and works for `expires_in_seconds`. */
 export type SpeakTicket = {
   url: string;
   expires_in_seconds: number;
@@ -150,7 +147,6 @@ export type LinkCode = {
   user_id?: string;
 };
 
-/** A chat that speaks for this account. Show `chat_hint`; `channel_user_id` is what Remove names. */
 export type LinkedChat = {
   channel: string;
   channel_user_id: string;
