@@ -163,8 +163,8 @@ class AppModule:
         self.suggestions = SuggestionService(
             self.accounts, self.wallet, self.telemetry, self.bill_payments
         )
-        self.voice = VoiceService(self.accounts)
         self.speak_tickets = SpeakTickets()
+        self.voice = VoiceService(self.accounts, self.speak_tickets)
         # Per account per minute. Speaking spends voice credits; a reading is a row.
         self.speak_limit = RateLimiter(lambda: self.operator_limits.get("speak_per_minute"))
         self.telemetry_limit = RateLimiter(

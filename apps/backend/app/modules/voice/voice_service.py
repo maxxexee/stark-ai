@@ -16,6 +16,7 @@ from typing import Any, Iterator, Optional
 from app.common.api_error import ApiError
 from app.modules.account.account_service import AccountService
 from app.modules.turnlog import turnlog
+from app.modules.voice.speak_ticket import SpeakTickets
 from app.modules.turnlog.turn_logger import TurnLogger
 from app.modules.voice import stt, tts, wake
 from app.modules.voice.voice_request import VoiceRequest
@@ -30,8 +31,19 @@ DEFAULT_HINT = "hello stark what's my light bill"
 
 
 class VoiceService:
-    def __init__(self, accounts: AccountService) -> None:
+    def __init__(self, accounts: AccountService, tickets: SpeakTickets) -> None:
         self.accounts = accounts
+        self.tickets = tickets
+
+    def _speak_url(self, account_id: str, text: Optional[str]) -> Optional[str]:
+        """A ticket for the words as they land, so the client plays without asking.
+
+        Issuing costs nothing and is not rate-limited: the limit is charged when
+        the ticket is redeemed, which is the moment speech is actually made.
+        """
+        if not text:
+            return None
+        return f"/v1/speak/stream?ticket={self.tickets.issue(account_id, text)}"
 
     def respond(self, account_id: str, request: VoiceRequest) -> dict[str, Any]:
         agent = self.accounts.state(account_id).agent
@@ -56,6 +68,7 @@ class VoiceService:
                                 ms=TurnLogger.timings(started, has_clip=True, stt_ms=ms_stt))
                 return {"transcript": "", "ignored": False, "reply": unheard,
                         "token": None, "receipt_id": None, "audio": None,
+                        "speak_url": self._speak_url(account_id, unheard),
                         "stt": stt_reason}
         if transcript is None:
             transcript = str(request.fields.get("transcript_hint") or DEFAULT_HINT)
@@ -71,6 +84,7 @@ class VoiceService:
                                                   stt_ms=ms_stt))
             return {"transcript": transcript, "ignored": True, "reply": None,
                     "token": None, "receipt_id": None, "audio": None,
+                    "speak_url": None,
                     **({"stt": stt_reason} if stt_reason else {})}
 
         since = time.perf_counter()
@@ -90,6 +104,7 @@ class VoiceService:
             wav, _why = tts.synthesize(payload["reply"])
             ms_tts = TurnLogger.ms(since_tts)
         payload["audio"] = self._data_url(wav)
+        payload["speak_url"] = self._speak_url(account_id, payload.get("reply"))
         timings = TurnLogger.timings(started, has_clip=clip is not None, stt_ms=ms_stt)
         timings["agent"] = ms_agent
         if wants_speak:

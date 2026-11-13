@@ -23,5 +23,10 @@ class VoiceReplyDto(BaseModel):
         default=None, description="A deposit the agent started: show `pay` under the reply.")
     audio: Optional[str] = Field(description="The reply as a WAV data URL, or null.",
                                  examples=[None])
+    speak_url: Optional[str] = Field(
+        default=None, description=(
+            "A short-lived link that streams this reply as audio, or null. Saves the "
+            "client a ticket round trip after the words land."),
+        examples=["/v1/speak/stream?ticket=..."])
     stt: Optional[str] = Field(default=None, description="ok | failed | no_key",
                                examples=["ok"])

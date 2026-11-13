@@ -198,6 +198,22 @@ class ServerTurnLogTests(unittest.TestCase):
         self.assertNotIn("tts", entry["ms"])
         self.assertNotIn("audio", entry)
 
+    def test_the_reply_carries_a_link_that_speaks_it(self) -> None:
+        # Measured 2026-11-13: the client fetched a ticket after the words landed,
+        # 0.8s of silence before the first sound. The turn now hands it over.
+        response = self.client.post("/v1/voice", json={
+            "transcript_hint": "hello stark what's my balance", "speak": False})
+
+        url = response.json()["speak_url"]
+        self.assertTrue(url.startswith("/v1/speak/stream?ticket="))
+        issued = self.api.module.speak_tickets.redeem(url.split("ticket=", 1)[1])
+        self.assertEqual(issued.text, response.json()["reply"])
+
+    def test_a_wake_gated_turn_has_no_speak_link(self) -> None:
+        response = self.client.post("/v1/voice", json={
+            "transcript_hint": "tell me a joke", "speak": False})
+        self.assertIsNone(response.json()["speak_url"])
+
     def test_a_web_turn_carries_its_conversation_like_a_chat(self) -> None:
         # Measured 2026-11-13 on the dashboard: "fund 1000 naira" then "bank"
         # asked for the amount again, because every turn went in cold.
