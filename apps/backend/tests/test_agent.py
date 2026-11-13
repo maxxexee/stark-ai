@@ -1077,7 +1077,7 @@ class NearAiRetryTests(unittest.TestCase):
             def close(wire):
                 pass
 
-        def acquire(_model):
+        def acquire(_model, timeout=None):
             wires.append(Wire())
             return wires[-1]
 
@@ -1109,16 +1109,70 @@ class NearAiRetryTests(unittest.TestCase):
         self.assertGreaterEqual(retries[0]["ms"], 0)
         self.assertIn("reused", retries[0])
 
+    def test_a_socket_the_far_end_closed_is_not_lent_out(self):
+        """The pool reaped this one; lending it out is what cost 12.5s."""
+        import socket as socket_mod
+        import time
+
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        held.close()  # the far end is gone, and the FIN has arrived
+        time.sleep(0.05)
+
+        wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
+        self.assertFalse(agent_mod.NearAiModel._alive(wire))
+
+    def test_a_healthy_idle_socket_is_lent_out(self):
+        import socket as socket_mod
+
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        self.addCleanup(held.close)
+
+        wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
+        self.assertTrue(agent_mod.NearAiModel._alive(wire))
+
     def test_a_pooled_connection_is_marked_as_reused(self):
         """A read timeout on a reused socket is a dead pool entry; on a fresh one
         it is the provider. The note has to say which."""
+        import socket as socket_mod
+
         model = self.model()
         fresh = model._acquire()
         self.assertFalse(fresh.reused)
+        # Only a connection that reached the host has a socket to keep.
+        live, held = socket_mod.socketpair()
+        self.addCleanup(live.close)
+        self.addCleanup(held.close)
+        fresh.conn.sock = live
         model._release(fresh)
         again = model._acquire()
+        self.assertIs(again, fresh)
         self.assertTrue(again.reused)
         model._close(again)
+
+    def test_a_borrowed_connection_takes_the_attempt_timeout(self):
+        """The budget is only real if the socket is told to honour it."""
+        model = self.model()
+        wire = model._acquire(2.5)
+        self.assertEqual(wire.conn.timeout, 2.5)
+        model._close(wire)
+
+    def test_a_turn_stops_retrying_when_the_budget_is_spent(self):
+        """Three stalls used to cost 31s; no attempt starts with no budget left."""
+        attempts = []
+
+        def always_stalls(body):
+            attempts.append(1)
+            raise TimeoutError("timed out")
+
+        self.transport(always_stalls)
+        model = self.model()
+        with mock.patch.object(agent_mod.NearAiModel, "RETRY_BUDGET_SECONDS", 0.0):
+            with mock.patch.object(agent_mod.time, "sleep"):
+                with self.assertRaises(RuntimeError):
+                    model.turn([{"role": "user", "content": "hi"}], [])
+        self.assertEqual(attempts, [])
 
     def test_a_turn_that_needed_no_retry_records_nothing(self):
         self.transport(lambda body: (200, self.OK))
