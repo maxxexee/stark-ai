@@ -458,7 +458,7 @@ check("telegram webhook with wrong secret -> 401",
       f"status={status} {tg.get('code')}")
 
 status, _, headers = call("GET", "/v1/state")
-check("CORS header present", headers.get("Access-Control-Allow-Origin") == "*",
+check("CORS header present", headers.get("Access-Control-Allow-Origin") == "http://localhost:5174",
       str(headers.get("Access-Control-Allow-Origin")))
 
 # Leave the demo seeded even when the run is used interactively.

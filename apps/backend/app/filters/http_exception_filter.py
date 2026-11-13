@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.common.api_error import ApiError
+from app.common.cors import ALLOWED_ORIGIN
 from app.common.dto.contract_field import CONTRACT
 
 log = logging.getLogger("stark.http")
@@ -72,7 +73,13 @@ class HttpExceptionFilter:
         ref = uuid.uuid4().hex[:12]
         log.error("unhandled error ref=%s %s %s", ref, request.method, request.url.path,
                   exc_info=err)
+        # Starlette answers this from outside CORSMiddleware, so without the header
+        # the browser hides the 500 behind a CORS error.
+        headers = {"Vary": "Origin"}
+        origin = request.headers.get("origin")
+        if origin is not None and ALLOWED_ORIGIN.fullmatch(origin):
+            headers["Access-Control-Allow-Origin"] = origin
         return JSONResponse(
             ApiError(500, "stub_error",
                      f"Something went wrong on our side. Reference {ref}.").body,
-            status_code=500)
+            status_code=500, headers=headers)
