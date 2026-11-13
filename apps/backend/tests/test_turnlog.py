@@ -134,9 +134,11 @@ class _FakeAgent:
 
     def __init__(self) -> None:
         self.seen: list[str] = []
+        self.threads: list[str | None] = []
 
-    def respond(self, said: str) -> AgentReply:
+    def respond(self, said: str, thread: str | None = None) -> AgentReply:
         self.seen.append(said)
+        self.threads.append(thread)
         return AgentReply(
             reply="Your balance is 64,200 naira.",
             # What the model was shown, in order — the entry must keep it.
@@ -195,6 +197,13 @@ class ServerTurnLogTests(unittest.TestCase):
         self.assertNotIn("stt", entry["ms"])
         self.assertNotIn("tts", entry["ms"])
         self.assertNotIn("audio", entry)
+
+    def test_a_web_turn_carries_its_conversation_like_a_chat(self) -> None:
+        # Measured 2026-11-13 on the dashboard: "fund 1000 naira" then "bank"
+        # asked for the amount again, because every turn went in cold.
+        for hint in ("hello stark fund 1000 naira", "hello stark bank"):
+            self.client.post("/v1/voice", json={"transcript_hint": hint, "speak": False})
+        self.assertEqual(self.agent.threads, [f"web:{self.account.id}"] * 2)
 
     def test_a_turn_records_whose_it_was(self) -> None:
         self.client.post("/v1/voice", json={

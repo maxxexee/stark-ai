@@ -74,7 +74,11 @@ class VoiceService:
                     **({"stt": stt_reason} if stt_reason else {})}
 
         since = time.perf_counter()
-        reply = agent.respond(said)
+        # The browser is one conversation, like a Telegram chat. Without a thread
+        # every turn was cold: measured 2026-11-13 on the dashboard, "fund 1000
+        # naira" then "bank" asked for the amount again, because the turn that
+        # carried it had been forgotten. See `memory.py` and `agent.respond`.
+        reply = agent.respond(said, thread=f"web:{account_id}")
         payload = reply.as_voice_payload(transcript)
         ms_agent = TurnLogger.ms(since)
         if stt_reason:
