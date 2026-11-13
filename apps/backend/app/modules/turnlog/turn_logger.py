@@ -44,7 +44,8 @@ class TurnLogger:
              heard: str = "", said: Optional[str] = None, stt: Optional[str] = None,
              payload: Optional[dict] = None, speak: Optional[bool] = True,
              ms: Optional[dict[str, int]] = None,
-             conversation: Optional[list[dict]] = None, channel: str = "voice") -> None:
+             conversation: Optional[list[dict]] = None, channel: str = "voice",
+             retries: Optional[list[dict]] = None) -> None:
         result = payload or {}
         turnlog.record(turnlog.turn(
             outcome=outcome, heard=heard, said=said, stt=stt,
@@ -52,4 +53,5 @@ class TurnLogger:
             code=result.get("code"), receipt_id=result.get("receipt_id"),
             token=result.get("token"), speak=speak, model=TurnLogger.model_name(agent),
             ms=ms, conversation=conversation, channel=channel, account_id=account_id,
+            retries=retries,
         ), clip=clip, mime=mime)

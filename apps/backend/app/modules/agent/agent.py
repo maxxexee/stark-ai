@@ -663,6 +663,29 @@ class NearAiModel:
         self._path = (endpoint.path.rstrip("/") or "") + "/v1/chat/completions"
         self._idle: list[_Connection] = []
         self._mutex = threading.Lock()
+        # The server answers each request on its own thread, so the retry record
+        # for the turn in flight is per thread, like the connection pool is not.
+        self._local = threading.local()
+
+    def begin_turn(self) -> None:
+        """Start a fresh retry record for the turn about to run."""
+        self._local.events = []
+
+    def retries(self) -> list[dict]:
+        """Attempts that failed and went to a retry, in the order they happened."""
+        return list(getattr(self._local, "events", []))
+
+    def _note_retry(self, attempt: int, started: float, error: BaseException) -> None:
+        """Keep the reason, not just the count: a stall and a reset look the same
+        in the timing and completely different in the sentence."""
+        events = getattr(self._local, "events", None)
+        if events is None:
+            self._local.events = events = []
+        events.append({
+            "attempt": attempt + 1,
+            "ms": int((time.perf_counter() - started) * 1000),
+            "why": str(error)[:120],
+        })
 
     # --- connection ----------------------------------------------------------
 
@@ -732,6 +755,7 @@ class NearAiModel:
         }
         last: RuntimeError | None = None
         for attempt in range(self.ATTEMPTS):
+            started = time.perf_counter()
             wire: _Connection | None = None
             retryable = False
             try:
@@ -764,6 +788,8 @@ class NearAiModel:
                             f"Could not reach NEAR AI: {err}"), True
             if not retryable:
                 break
+            if last is not None:
+                self._note_retry(attempt, started, last)
             if attempt < self.ATTEMPTS - 1:
                 time.sleep(self.RETRY_DELAYS[min(attempt, len(self.RETRY_DELAYS) - 1)])
         raise last if last else RuntimeError("NEAR AI failed without a reason")
@@ -839,6 +865,10 @@ class AgentReply:
     # A deposit `add_money` started, link or address included. The door shows it
     # under the reply, so the model never has to copy an address character by character.
     deposit: dict | None = None
+    # Model attempts that failed and were retried during this turn, oldest first
+    # (see `NearAiModel.retries`). Empty on the ordinary turn; non-empty is the
+    # only evidence of *why* a slow turn was slow.
+    retries: list[dict] = field(default_factory=list)
     # What the model was shown and what it said back, in order — the whole
     # exchange, snapshot included, so a strange answer can be judged against
     # the exact words behind it. Read by `turnlog`, never by /v1/voice: that
@@ -986,6 +1016,9 @@ class Agent:
         the 500 was the answer to "how much?". Without one, this is the single
         cold turn it has always been.
         """
+        begin = getattr(self.model, "begin_turn", None)
+        if callable(begin):
+            begin()
         system, has_snapshot = self._system_message()
         messages: list[dict] = [system]
         messages.extend(self.threads.history(thread))
@@ -1013,6 +1046,8 @@ class Agent:
         # Every path returns this same `reply` object, so the exchange the model
         # actually saw — prompt, account, tool results, answers — is attached once.
         applied.conversation = messages
+        seen = getattr(self.model, "retries", None)
+        applied.retries = seen() if callable(seen) else []
         # A turn the model never answered is not context; keeping the apology
         # would make the next reply reason about a failure that is already over.
         if thread and applied.code != "model_unavailable":

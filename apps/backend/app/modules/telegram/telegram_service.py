@@ -135,4 +135,5 @@ class TelegramService:
             speak=None,
             conversation=getattr(result, "conversation", None),
             channel=telegram.CHANNEL,
+            retries=getattr(result, "retries", None),
         )

@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from app.modules.agent import agent as agent_mod
+from app.modules.turnlog import turnlog as turnlog_mod
 from app.modules.agent import memory as memory_mod
 from app.modules.chain import near_tx
 from app.modules.agent import policy as policy_rules
@@ -1085,6 +1086,36 @@ class NearAiRetryTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         return wires
 
+    def test_a_retried_attempt_is_written_down(self):
+        """A turn that cost 12s says which attempt took the time and why."""
+        attempts = []
+
+        def stalled_once(body):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise TimeoutError("timed out")
+            return 200, self.OK
+
+        self.transport(stalled_once)
+        model = self.model()
+        model.begin_turn()
+        with mock.patch.object(agent_mod.time, "sleep"):
+            model.turn([{"role": "user", "content": "hi"}], [])
+
+        retries = model.retries()
+        self.assertEqual(len(retries), 1)
+        self.assertEqual(retries[0]["attempt"], 1)
+        self.assertIn("timed out", retries[0]["why"])
+        self.assertGreaterEqual(retries[0]["ms"], 0)
+
+    def test_a_turn_that_needed_no_retry_records_nothing(self):
+        self.transport(lambda body: (200, self.OK))
+        model = self.model()
+        model.begin_turn()
+        model.turn([{"role": "user", "content": "hi"}], [])
+
+        self.assertEqual(model.retries(), [])
+
     def test_two_network_failures_then_success(self):
         attempts = []
         fail_first = agent_mod.NearAiModel.ATTEMPTS - 1
@@ -1161,6 +1192,42 @@ class NearAiRetryTests(unittest.TestCase):
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
         self.assertEqual(len(attempts), agent_mod.NearAiModel.ATTEMPTS)
+
+
+class RetryVisibilityTests(unittest.TestCase):
+    """The turn log carries what the model client retried, so a slow turn is not
+    a mystery in production."""
+
+    class FlakyModel(RecordingModel):
+        def __init__(self):
+            super().__init__(content="Noted.")
+            self.began = 0
+
+        def begin_turn(self):
+            self.began += 1
+
+        def retries(self):
+            return [{"attempt": 1, "ms": 10000, "why": "timed out"}]
+
+    def test_the_reply_carries_the_retries(self):
+        model = self.FlakyModel()
+        reply = make_agent(model=model).respond("stark hello")
+
+        self.assertEqual(model.began, 1)
+        self.assertEqual(reply.retries, [{"attempt": 1, "ms": 10000, "why": "timed out"}])
+
+    def test_a_model_without_the_hook_still_answers(self):
+        reply = make_agent(model=RecordingModel()).respond("stark hello")
+
+        self.assertEqual(reply.retries, [])
+
+    def test_the_log_keeps_them_only_when_there_were_some(self):
+        quiet = turnlog_mod.turn(outcome="answered")
+        noisy = turnlog_mod.turn(
+            outcome="answered", retries=[{"attempt": 1, "ms": 10000, "why": "timed out"}])
+
+        self.assertNotIn("retries", quiet)
+        self.assertEqual(noisy["retries"][0]["ms"], 10000)
 
 
 class InjectionTests(unittest.TestCase):

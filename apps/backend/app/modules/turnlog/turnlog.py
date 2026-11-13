@@ -79,7 +79,8 @@ def turn(*, outcome: str, heard: str = "", said: str | None = None,
          ms: dict[str, int] | None = None,
          conversation: list[dict] | None = None,
          channel: str | None = None,
-         account_id: str | None = None) -> dict[str, Any]:
+         account_id: str | None = None,
+         retries: list[dict] | None = None) -> dict[str, Any]:
     """The entry shape for one spoken exchange. Pure — nothing is written.
 
     - `heard`: the transcript as the recognizer produced it, verbatim.
@@ -101,6 +102,10 @@ def turn(*, outcome: str, heard: str = "", said: str | None = None,
     - `account_id`: whose turn it was. The log is one file for every account, so
       this is what lets an operator read one person's turns and nobody else's.
       Absent on entries written before 2026-11-12.
+    - `retries`: model attempts that failed before one answered, each with how
+      long it ran and what stopped it. Absent on a turn that needed none; when a
+      slow turn is not the network and not the account, this is where the reason
+      is written down.
     """
     entry = {
         "kind": "turn",
@@ -123,6 +128,8 @@ def turn(*, outcome: str, heard: str = "", said: str | None = None,
         entry["channel"] = channel
     if account_id:
         entry["account_id"] = account_id
+    if retries:
+        entry["retries"] = [dict(r) for r in retries]
     return entry
 
 

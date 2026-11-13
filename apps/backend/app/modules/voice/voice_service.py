@@ -112,7 +112,8 @@ class VoiceService:
         TurnLogger.turn(account_id=account_id, agent=agent, outcome="answered",
                         clip=clip, mime=mime,
                         heard=transcript, said=said, stt=stt_reason, payload=payload,
-                        speak=wants_speak, ms=timings, conversation=reply.conversation)
+                        speak=wants_speak, ms=timings, conversation=reply.conversation,
+                        retries=reply.retries)
         return payload
 
     def speak(self, text: str) -> dict[str, Optional[str]]:
