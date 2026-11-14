@@ -1,6 +1,6 @@
-# Stark — handoff
+# Stark: handoff
 
-**Rewritten 2026-11-13.** This file says what is true now. It is not a log: history is in
+**Rewritten 2026-11-13, merged with the 2026-11-14 chain check.** This file says what is true now. It is not a log: history is in
 `git log`, and an entry that stops being true is edited or deleted, not appended to. If
 the code and this file disagree, the code wins, and the fix is to correct this file in
 the same change.
@@ -27,13 +27,13 @@ Product rules that hold everywhere:
 
 ---
 
-## 2. State, as of 2026-11-13
+## 2. State, as of 2026-11-14
 
 | Part | State | Last checked |
 |---|---|---|
 | Vault contract | Live on testnet; user vaults sit under `stark-usdc-fcb734.testnet` (e.g. `u-e2e541dbcb1.stark-usdc-fcb734.testnet`). Deposits, a repeated deposit sent back, a ₦5,000 `pay` that moved 3.205130 USDC to the treasury, and refusals over the cap and to an unlisted meter all happened on chain. | 2026-11-12 (README) |
-| Rate bound (§5) | **In code, not on chain.** Built and tested on 2026-11-13; `apps/backend/assets/stark_vault.wasm` is rebuilt, but no vault runs it until the code is published again (§8.2). | 2026-11-13 |
-| Mainnet | Production runs on mainnet from 2026-11-12, with `funder.moonboys-stark.near` as funder and treasury. No user vault on mainnet yet. | 2026-11-12 (README) |
+| Rate bound (§5) | **In code, not on chain.** Built and tested on 2026-11-13; `apps/backend/assets/stark_vault.wasm` is rebuilt. Two mainnet vaults read on 2026-11-14 carry different `code_hash`es, so they do not follow one published contract; with no upgrade method, the three existing vaults never get it. Vaults created from the new wasm do (§8.2). | 2026-11-14 |
+| Mainnet | Production runs on mainnet from 2026-11-12, with `funder.moonboys-stark.near` as funder and treasury (there is no `treasury.*` account). Three user vaults, `u-312d6989246f5965`, `u-fbda9ededd79777a` and `u-278a146620c99d70` under the funder, each with deployed code, one `pay`-only key, USDC and real policies; `payment_count` 6, 8 and 0. Their `owner` is still the funder (§5). | 2026-11-14 |
 | Bill payment | Flutterwave is the only provider for bills, bank deposits and bank withdrawals, from one NGN balance. It only accepts calls from whitelisted IPs; **the production IP was whitelisted on 2026-11-13** (owner). No live token is recorded in this file yet: record the first one here (§8.1). | 2026-11-13 |
 | Bank deposits | Hosted checkout built. On 2026-11-03 every checkout link showed `Initialization failed` in test mode, and the dashboard's *Enable v3 webhooks*, *Enable webhook retries* and *Settle to my payout balance* were not set. Not rechecked since. | 2026-11-03 |
 | Crypto deposits | NEAR Intents (1Click) quotes are live, mainnet only. No deposit has completed. | 2026-11-12 (README) |
@@ -137,7 +137,7 @@ already closed is dropped instead of lent out.
 | The agent's key can only call `pay` on its own vault | one function-call key per vault, scoped to `pay` |
 | Monthly cap, per-payment cap, meter allowlist, pause | checked in `pay()`; owner-only to change |
 | Over-cap payments need the owner | `pay_approved` is owner-only |
-| The rate cannot drain a vault | `set_rate` refuses a rate above the owner's `set_rate_ceiling`, or more than 5% above the rate the day opened at, even when the funder signs; falls are free; `get_state` shows `max_usdc_per_kngn`. **Not on chain until published (§8.2).** |
+| The rate cannot drain a vault | `set_rate` refuses a rate above the owner's `set_rate_ceiling`, or more than 5% above the rate the day opened at, even when the funder signs; falls are free; `get_state` shows `max_usdc_per_kngn`. **Only in vaults created from the new wasm (§8.2).** |
 | Deposits only from Stark | USDC from anyone but the funder or treasury is sent back untouched |
 | Code cannot change under a vault | no upgrade method; vaults run the published global contract |
 
@@ -230,15 +230,15 @@ not retry. AI judges read the README: "do X – see Y" steps, no marketing.
    token and pending shapes against `vending/vending.py`, and record the token's receipt
    id and date in §2. Then one checkout deposit and one bank withdrawal end to end,
    watching the webhook arrive; set the three Flutterwave dashboard switches in §2 first.
-2. **Publish the vault code (owner).** It carries the rate bound. From `apps/backend`,
-   with the funder keys for the network:
-   ```sh
-   python -m app.modules.chain.vault_chain publish assets/stark_vault.wasm
-   ```
-   Existing vaults run whatever is published, so they get the bound from then on. Then
-   set a ceiling on each vault with `set_rate_ceiling`, signed by its owner. The backend
-   already follows `max_usdc_per_kngn` when it syncs the rate, and covers the gap when
-   the market moves faster than 5% a day.
+2. **Ship the rate bound to vaults (owner).** New vaults are deployed from
+   `STARK_VAULT_CODE`; once it points at the rebuilt `assets/stark_vault.wasm` (or, for
+   `global:<funder>`, once that code is published with `vault_chain publish`), every
+   vault created after that carries the bound. The three existing mainnet vaults are
+   pinned to the code they were created with and have no upgrade method, so they keep it: move
+   their users to new vaults if they need the bound. Then set a ceiling on each new
+   vault with `set_rate_ceiling`, signed by its owner. The backend already follows
+   `max_usdc_per_kngn` when it syncs the rate, and covers the gap when the market moves
+   faster than 5% a day.
 3. **Crypto withdrawals (owner).** Set `STARK_TREASURY_NEAR_ACCOUNT` and a funded
    full-access `STARK_TREASURY_KEY` for the environment; until then they stay off.
 4. **Hand a vault to its user** (product decision): a way for a user to create a NEAR
