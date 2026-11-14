@@ -2,16 +2,38 @@
 
 **Written 2026-10-20, last resumed 2026-11-03 (money flow, crypto withdrawals, live
 rails).** If you are an agent picking this up, read §0 (newest first) and then §1–3
-before touching anything. Sections 9, 10 and 13 were brought in line with §0 on
-2026-11-11; §11 and §12 still carry VTpass-era notes, and where they disagree, §0 wins.
+before touching anything. Sections 9, 10, 12 and 13 were brought in line on 2026-11-11
+and 2026-11-14; §11 still carries VTpass-era notes, and where anything disagrees, the
+block below wins.
 
 **2026-11-12:** SMS, WhatsApp, TV control and the Kokoro voice sidecar were removed.
 Telegram and the web voice path are the doors, and ElevenLabs is the only voice. Older
 entries below that mention the removed pieces are history.
 
+**2026-11-14, re-checked against the chain and the live hosts.** This file is a log, not
+a status. Where a line below disagrees with the code or with mainnet, the code wins:
+
+- The repo is **public** at `github.com/maxxexee/stark-ai` (MIT, branch `main`, HEAD
+  `5a4c71a`). The old `geekman58748` remote still 301-redirects, and is stale.
+- **Per-user vaults exist on mainnet.** `u-312d6989246f5965`, `u-fbda9ededd79777a` and
+  `u-278a146620c99d70`, all `.<funder>.moonboys-stark.near`: each has deployed code, a
+  single `pay`-only function-call key, USDC and real policies. `payment_count` is 6, 8
+  and 0. §0 and §9 below still say none exists — that is history now.
+- Those three vaults' `owner` is still the funder account. Owner powers (limits,
+  allowlist, `pause`, `withdraw`) have **not** been handed to their users: `accept_owner`
+  has not run.
+- Mainnet is `funder.moonboys-stark.near` (with `moonboys-stark.near` beside it). There is
+  no `treasury.*` account.
+- Swagger is **local only** (`STARK_DOCS=1`). On the live hosts `/docs`, `/redoc` and
+  `/openapi.json` all return 404.
+- The dashboard is built: `dash.hellostark.xyz`, with `/demo` as a read-only sample
+  account that needs no login.
+- `README.md` was rewritten on 2026-11-14; its numbers, entry points and refusal codes
+  were read from the code and the chain, so it is the accurate front door.
+
 ---
 
-## 0. Resume here — state as of 2026-11-03
+## 0. Resume here — state as of 2026-11-03 (history; read the 2026-11-14 block above first)
 
 **Later on 2026-11-03: Bachs and VTpass were replaced by Flutterwave.** One Flutterwave
 account now collects deposits (hosted checkout), pays bills and sends withdrawals, from
@@ -421,13 +443,13 @@ These cost real time. Each one was hit and diagnosed once already.
 |---|---|
 | **`$HOME` is redirected** | The shell's `$HOME` is `/Users/mac/.freebuff-profiles/last`, **not** `/Users/mac`. Any `~/Desktop` or `~/...` path resolves to a near-empty shadow directory. **Use absolute `/Users/mac/...` paths.** This caused a whole session of "the file doesn't exist" conclusions that were wrong. |
 | **The design source is not in this repo** | It lives at `/Users/mac/Desktop/export/` — 24 artboards, 5 conversation transcripts, 2 docs, 12 reference images. Also `/Users/mac/Desktop/stRKREADME.md`, byte-identical to `export/README.md`. |
-| **`/Users/mac/stark-ai` is a different thing** | It is an old, unrelated single-file landing page for hellostark.xyz (blue/purple gradient, "Intelligence, deployed."). Same brand name, **not** this design. Do not use it as the visual reference. Leave it alone. |
+| **`/Users/mac/stark-ai` is this repo** | The monorepo lives here: `apps/` and `docs/` at the root, remote `maxxexee/stark-ai`. An earlier version of this file called it "an unrelated landing page" — that was a different path and is no longer true. |
 | **Only Python 3.14.7 exists** | `/opt/homebrew/bin/python3.14`. FastAPI + pydantic fail dependency resolution on it (pip backtracks until it times out). This is why everything here is **stdlib-only**. If you need FastAPI later, install Python 3.13 first or budget an hour. |
 | **Background server lifecycle** | `nohup ... &` inside a tool call gets killed when that call's shell is cleaned up. Run `python3 server.py` as a *managed* background process instead. |
 | **`pgrep -f "python3 -u server.py"` gives a false negative** | The process's `argv[0]` is the full framework path, so the pattern doesn't match even while the server is serving. Use `lsof -tiTCP:8000 -sTCP:LISTEN` instead. |
 | **rustup needs `RUSTUP_HOME` for the same reason** | `cargo` reports "no default toolchain" even though `/Users/mac/.rustup/toolchains/stable-aarch64-apple-darwin` exists. Always prefix Rust commands with `RUSTUP_HOME=/Users/mac/.rustup CARGO_HOME=/Users/mac/.cargo PATH=/Users/mac/.cargo/bin:$PATH`. |
 | **Do not `rustup default stable`** | With the redirected `$HOME` it downloads six components into `/Users/mac/.freebuff-profiles/.../.rustup`, dies on a DNS error for `rust-docs`, and **rolls back** — it looks like a broken toolchain and is not. The toolchain is already installed; just set `RUSTUP_HOME`. |
-| **Two copies of the project exist** | `/Users/mac/stark-ai` is the actual git repo, with the project under `stark/`, and it is now the **newest** copy. `/Users/mac/stark` is an unversioned copy that is **stale** — it is missing all of M2/M3. Edits made only there do **not** reach the public repo; that is how `contracts/` went missing from the push on 2026-10-20. Edit the repo copy only, and never rsync the stale copy over it (§12). |
+| **A second copy of the project exists** | `/Users/mac/stark-ai` is the actual git repo, with the monorepo at the root (`apps/`, `docs/`) and a pre-monorepo snapshot in `stark/`. `/Users/mac/stark` is an unversioned copy that is **stale**. Edits made only there do **not** reach the public repo; that is how `contracts/` went missing from the push on 2026-10-20. Edit the repo copy only, and never rsync the stale copy over it (§12). |
 | **crates.io 403s curl but not cargo** | `curl https://crates.io/...` returns 403 with curl's default UA. Send `-A "cargo"`. Cargo itself is unaffected. |
 | **near-sdk 5 refuses a plain `cargo build`** | It `compile_error!`s unless it can prove this is not an on-chain build. The fix used here is target-specific deps: the wasm branch uses plain `near-sdk`, the non-wasm branch adds `features = ["unit-testing"]`. |
 | **`#[near]` on a plain struct derives borsh only** | JSON returns compile fine in host tests (the wasm wrapper is `cfg`'d out there) and then fail `--target wasm32-unknown-unknown` with `no Serialize`. Derive `near_sdk::serde::{Serialize, Deserialize}` explicitly, with `#[serde(crate = "near_sdk::serde")]`. |
@@ -467,7 +489,7 @@ Re-read that file before submitting; it warns dates and rules may change.
 | Build window | `2026-11-01T00:00:00Z` → **`2026-11-14T23:59:00Z`** |
 | Judging | starts 11-16, results by 11-18 |
 | Submit | `POST https://nearhackathon.com/api/applications` (12000-byte body) |
-| Repo | must be **public** by the deadline — live at `github.com/geekman58748/stark-ai`, branch `main`. Layout and drift risk in §12 |
+| Repo | **public** at `github.com/maxxexee/stark-ai`, branch `main` (the old `geekman58748` URL redirects). Layout and drift risk in §12 |
 | Demo | human must publish a public X post with video/screenshots |
 
 **Tracks we picked** — use the ids, not the display names:
@@ -496,8 +518,9 @@ Deliberately **not** claimed: `privacy` (a weak fourth claim dilutes the README)
 
 The API is FastAPI (`apps/backend/requirements.txt`; `bun run setup` in
 `apps/backend` makes the `.venv`), laid out one module per feature after
-awesome-nest-boilerplate — see `apps/backend/README.md` § Layout. Swagger UI is at
-`/docs`. The contract is Rust, which needs `RUSTUP_HOME` set (§1).
+awesome-nest-boilerplate — see `apps/backend/README.md` § Layout. Swagger UI exists only
+when the server is started with `STARK_DOCS=1`; the deployed hosts return 404 on `/docs`.
+The contract is Rust, which needs `RUSTUP_HOME` set (§1).
 
 ```
 apps/backend/
@@ -510,17 +533,15 @@ apps/backend/
   app/modules/chain/           borsh, ed25519, base58, RPC, sign pay(); vault signer, dry-run by default
   app/modules/receipt/         Postgres store: receipts + wallet, per account, request_id keyed
   app/modules/payment/         contract checks -> record -> buy -> charge on delivery
-  app/modules/vending/         VTpass client + CLI, catalogue, kind -> product (dry-run by default)
+  app/modules/vending/         catalogue + kind -> product; bills are bought on Flutterwave
   tests/                       unit tests, support.py (TempAccount, ApiHarness), smoke_test.py
-  fixtures/                    VTpass responses (see §10 on provenance)
 apps/contracts/
   vault/                       NEAR contract: caps, allowlist, owner withdraw
-  vault/src/policy.rs          pure rules, no near-sdk, 20 tests
-  vault/src/lib.rs             contract wrapper, 18 env-based tests
 docs/
-  API.md           218 lines   THE CONTRACT — frozen, additive changes only
-README.md                       product intro, run instructions, ground rules
+  API.md                      THE CONTRACT — frozen, additive changes only
+docs/FRONTEND.md               screen-by-screen build guide for the dashboard
 docs/HANDOFF.md                this file
+README.md                      product intro, architecture, run instructions — rewritten 2026-11-14
 ```
 
 ### Run it
@@ -528,33 +549,33 @@ docs/HANDOFF.md                this file
 ```sh
 cd apps/backend
 bun run setup                     # once
-bun dev                           # http://127.0.0.1:8000, Swagger at /docs
+bun dev                           # http://127.0.0.1:8000; Swagger only with STARK_DOCS=1
 ```
 
 ```sh
 cd apps/backend
 bun smoke                         # exits 1 on failure (server running, STARK_STUB_RESET=1)
 bun run test                      # every unit test
-.venv/bin/python -m app.modules.vending.vtpass variations   # dry-run, no keys needed
 ```
 
 ### Verify the whole thing in ~30 seconds
 
 ```sh
 cd apps/backend
-.venv/bin/python -m unittest tests.test_vtpass 2>&1 | tail -3
-.venv/bin/python -m app.modules.vending.vtpass buy --meter 0101170026583 --amount 5000 --phone 08031234567
+.venv/bin/python -m unittest tests.test_api_surface tests.test_agent 2>&1 | tail -3
 curl -s http://127.0.0.1:8000/v1/state
+curl -s http://127.0.0.1:8000/v1/demo
 ```
 
-Expected: `OK` for the tests, a `DELIVERED` token block from the CLI, and JSON state with
-`balance_ngn: 64200`.
+Expected: `OK` for the tests, and JSON state from `/v1/state` (auth required) plus the
+public sample account from `/v1/demo` (`balance_ngn: 64200`, cap 30000, spent 23000).
 
 ---
 
 ## 5. The API contract
 
-Full detail in [`docs/API.md`](API.md). All 20 routes, plus the stub-only reset:
+Full detail in [`docs/API.md`](API.md). 54 route-plus-method pairs are mounted, including
+`/` and `/health`; this table is a snapshot, and the routers are the source of truth:
 
 | Method | Path | Status | Notes |
 |---|---|---|---|
@@ -850,18 +871,22 @@ refactor delay the one working demo.
 
 ---
 
-## 9. What's NOT built
+## 9. What exists and what does not
 
-Rewritten 2026-11-11 to match §0 (2026-11-03). Do not assume any of this exists:
+Re-checked 2026-11-14. The first two bullets were rewritten; the rest were accurate on
+2026-11-11 unless noted.
 
-- **Per-user vaults, live.** The shared vault is deployed at `stark-vault.testnet` and
-  a `pay()` signed by `near_tx` was accepted on chain (commit `f2e8c61`). Vaults per
-  user (`u-<hex>.stark-vault.testnet`) are code and tests only: `STARK_FUNDER_KEY` and
-  `STARK_AGENT_KEY` are not on this machine, so none has been created.
+- **Per-user vaults are live on mainnet.** Three exist (`u-312d…`, `u-fbda…`, `u-278a…`,
+  see the block at the top), each with deployed code and a `pay`-only key. The shared
+  testnet vault `stark-vault.testnet` is still there for the e2e suite. What has **not**
+  happened is the owner handover: `owner` on all three is still the funder account, so
+  users cannot yet change their own limits or withdraw.
 - **A live bill purchase.** Bills go through Flutterwave, and Flutterwave answers every
   bill and transfer with `Please enable IP Whitelisting` (HTTP 400) until the caller's
-  IP is whitelisted, test mode included. No bill has been bought, so no real token has
-  come back. Production needs a fixed outgoing IP.
+  IP is whitelisted, test mode included. That is still unverified from a dev machine.
+  The on-chain half has run live, though: the mainnet vaults record `payment_count` 6, 8
+  and 0 (2026-11-14), which only increments on a settled `pay()`. Production needs a
+  fixed outgoing IP.
 - **Token custody.** Each user's vault `balance_ngn` is a naira ledger that mirrors
   money Stark holds (the Flutterwave NGN balance and the treasury's USDC). The vault does
   not hold tokens: crypto deposits land as USDC in Stark's treasury and the funder
@@ -893,8 +918,10 @@ Rewritten 2026-11-11 to match §0 (2026-11-03). Do not assume any of this exists
   needs two devices, which is why it is quiet in a fresh install.
 - **Reminder pushes** — the loop, the de-dupe and the Telegram send are written and
   tested. The bot is now live, but no delivered push has been recorded here.
-- **Frontend** — being built by a human teammate against `docs/API.md`.
-- **Demo video, X post, submission** — none.
+- **Frontend** — built and deployed: `dash.hellostark.xyz`, plus `/demo` as a read-only
+  sample account. `docs/FRONTEND.md` is the screen-by-screen contract, not a wish list.
+- **Demo video, X post, submission** — not verifiable from this repo; the human owns all
+  three.
 
 ---
 
@@ -936,8 +963,10 @@ Decisions taken, and why:
 
 ## 10. Uncovered and unverified (do not let these get laundered into facts)
 
-1. **No bill has been bought live.** VTpass is gone (2026-11-03); bills now go
-   through Flutterwave (`flutterwave/flutterwave.py`, `vending/vending.py`). The test key
+1. **No bill has been bought live through Flutterwave.** VTpass is gone (2026-11-03);
+   bills now go through Flutterwave (`flutterwave/flutterwave.py`, `vending/vending.py`).
+   On-chain `pay()` has run (three mainnet vaults, `payment_count` 6/8/0), but the
+   vendor leg has not been observed from here. The test key
    reads `/bill-categories`, `/banks/NG`, `/balances/NGN` and `/accounts/resolve`, but
    `POST` bills and transfers answer `Please enable IP Whitelisting` (HTTP 400) until the
    caller's IP is on the dashboard's whitelist. The list is empty and has no off switch.
@@ -1136,10 +1165,12 @@ Decisions taken, and why:
 **Where the repo actually is** (this section used to claim no git existed anywhere — wrong):
 
 ```
-/Users/mac/stark-ai/            git repo, remote github.com/geekman58748/stark-ai, branch main
-  apps/backend …                THE PROJECT since the monorepo move (2026-10-22): backend,
-                                dashboard, website, contracts; docs/ sits at the root
-  index.html                    the OLD unrelated landing page — leave it alone
+/Users/mac/stark-ai/            git repo, remote github.com/maxxexee/stark-ai, public, branch main
+  apps/backend                  FastAPI backend + tests
+  apps/dashboard                the app (TanStack Start) — dash.hellostark.xyz
+  apps/website                  the landing page — hellostark.xyz
+  apps/contracts                the Rust vault contract
+  docs/                         API.md, FRONTEND.md, HANDOFF.md, screenshots/
   stark/                        the PRE-monorepo copy — stale, do not edit. A server
                                 started from stark/backend once held :8000 and broke smoke
 /Users/mac/stark/               STALE unversioned copy — missing all of M2/M3; do not use
@@ -1157,22 +1188,24 @@ Rules that keep this from drifting again:
   ```sh
   rsync -a --exclude 'target/' --exclude '__pycache__/' /Users/mac/stark-ai/stark/ /Users/mac/stark/
   ```
-- **The public repo is required by 2026-11-14.** The app auto-deploys to hellostark.xyz on
+- **The repo is public as of 2026-11-13.** The app auto-deploys to hellostark.xyz on
   push to `main`, so a push is a deploy — do not push broken code.
 - `.gitignore` covers `__pycache__/`, `*.pyc`, `.venv/`, `.venv-tts/` (an old voice
   venv, still ignored so a local copy stays out of git), `.DS_Store`, `.env`, and now `target/` + `**/target/` (a near-sdk
   build is ~1 GB; `Cargo.lock` **is** committed).
-- No secrets anywhere in the tree. VTpass credentials are read from env vars only.
-- `index.html` (the old landing page) and `Desktop/export/` must not be modified — they are
-  the human's artifacts and the design reference.
+- No secrets anywhere in the tree. Vendor and chain credentials are read from env vars
+  only; `.env` is ignored and `.env.example` is the tracked template.
+- `apps/backend/stark.db` is a local SQLite artifact that is **untracked and not ignored** as
+  of 2026-11-14. Keep it out of commits, or add it to `.gitignore`.
+- `Desktop/export/` must not be modified — it is the human's design source (§1).
 
 ---
 
 ## 13. If you're the next agent, do this next
 
-**Rewritten 2026-11-11 to match §0.** M0–M4, auth, Neon storage, the vault deploy and the
-Flutterwave money flow are built. What is left is almost all owner-gated account setup,
-then the first live runs.
+**Updated 2026-11-14.** M0–M4, auth, Neon storage, the mainnet vaults and the Flutterwave
+money flow are built. What is left is owner-gated account setup, the vault owner handover,
+and the human's submission steps.
 
 1. **Flutterwave dashboard (owner).** Add the server's outgoing IP under *Settings →
    Whitelisted IP addresses* (test mode needs it too; production needs a fixed IP).
@@ -1184,21 +1217,21 @@ then the first live runs.
    whitelisted, buy one Ikeja prepaid token with the test key and check the bill result
    shape against what `vending.py` expects (§10.2). Then one checkout deposit and one
    bank withdrawal end to end, watching the webhook arrive.
-3. **Per-user vaults (owner).** Put `STARK_FUNDER_ACCOUNT`, `STARK_FUNDER_KEY` and
-   `STARK_AGENT_KEY` in `apps/backend/.env` and in Brimble. Publish the vault code as a
-   global contract, from `apps/backend`, once and again after every contract change
-   (existing vaults run whatever is published, so they keep the old code until then):
+3. **Per-user vaults — created, handover outstanding.** Three vaults are live on mainnet
+   (§0). Re-publish the vault code as a global contract after every contract change,
+   from `apps/backend` (existing vaults keep the old code until then):
    ```sh
    python -m app.modules.chain.vault_chain publish assets/stark_vault.wasm
    ```
-   That is also the first round trip of the global-contract actions (§10.21), so check
-   the transaction on the explorer before creating a user's vault.
+   Then run the owner handover for each vault (`accept_owner` from the user's account), or
+   the funder keeps owner powers: limits, allowlist, `pause` and `withdraw`.
 4. **Crypto withdrawals (owner).** Fund and name a real mainnet treasury account and set
    `STARK_TREASURY_NEAR_ACCOUNT` and `STARK_TREASURY_KEY`. Until then 1Click refuses the
    quote's `refundTo` and the feature stays off.
-5. **Make the in-memory state durable.** Bills from `POST /v1/bills`, limits from
-   `PATCH /v1/limits` and `units_left` still reset on restart (§9, §10.13). This is the
-   next code item that needs no one else.
+5. **Docs drift.** `docs/API.md` still describes the `needs_confirmation` / 409
+   `bill_unconfirmed` gate that HEAD `5a4c71a` removed, and its route table predates the
+   wallet and admin routes. `README.md` and this file's top block are current; reconcile
+   `API.md` before a judge reads it.
 
 **Never without explicit human confirmation:** submit the application, publish on X, make
 the repo public, sign transactions, spend tokens, deploy to mainnet, or commit secrets.
