@@ -565,7 +565,7 @@ Last checked **2026-11-14**, against `main` and the live deployments.
 | API | **Live** at `geddon.hellostark.xyz` (`/health`). Swagger is local only. |
 | Sign-in and storage | **Live.** Neon Auth; one wallet and one receipt trail per account in Neon Postgres. |
 | Telegram | **Live** as [@hellostarkai_bot](https://t.me/hellostarkai_bot), text and voice notes. |
-| Bill payment in naira | **Built, not vending in production.** Flutterwave only accepts whitelisted IPs and the production IP is not yet whitelisted, so production has not delivered a token. |
+| Bill payment in naira | **Live.** Flutterwave only accepts whitelisted IPs; the production IP was whitelisted on 2026-11-13, and bills pay through it (owner, 2026-11-14). |
 | Crypto deposits | **Built.** 1Click quotes are live; no user deposit has completed yet. |
 
 ## Operations
@@ -618,7 +618,7 @@ speech; the Telegram Bot API. The repository layout follows
 | Every request is 401 | Not signed in, or `NEON_AUTH_BASE_URL` belongs to a different Neon branch than `DATABASE_URL` |
 | Dashboard shows no data | The API is not on `127.0.0.1:8000` |
 | `Please enable IP Whitelisting` from Flutterwave | This machine's IP is not on the dashboard's list, test mode included |
-| Payments succeed but no token | That is the known production state: the biller call is blocked on IP whitelisting |
+| Payments succeed but no token | The server's IP is not on Flutterwave's list (production's is); a local or new host needs adding |
 | `float_low` | The Flutterwave float has not settled; see `/admin` |
 | `/docs` is 404 | Expected in production; run locally with `STARK_DOCS=1` |
 
