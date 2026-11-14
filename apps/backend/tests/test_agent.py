@@ -13,6 +13,7 @@ import pathlib
 import unittest
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
 
@@ -71,6 +72,7 @@ class FakeToolbox:
         self.requests: list[tuple[str, int, str]] = []
         self.refusals: list[tuple[str, int, str]] = []
         self.deposits: list[tuple[str, int, str, str]] = []
+        self.coin_amounts: list = []
 
     def get_state(self):
         return {
@@ -101,8 +103,9 @@ class FakeToolbox:
         return [{"kind": kind, "provider": provider, "plan": "mtn-1gb", "label": "1GB",
                  "price_ngn": 1_000}]
 
-    def add_money(self, method, amount_ngn, asset, chain):
+    def add_money(self, method, amount_ngn, asset, chain, amount_crypto=None):
         self.deposits.append((method, amount_ngn, asset, chain))
+        self.coin_amounts.append(amount_crypto)
         pay = ({"checkout_url": "https://checkout.example/dep_1"} if method == "bank"
                else {"asset": asset, "chain": chain or "tron", "amount": "13.1",
                      "address": "TXyz" * 8, "memo": None})
@@ -906,6 +909,43 @@ class SetupToolTests(unittest.TestCase):
         self.assertEqual(result["data"]["asset"], "USDT")
         self.assertEqual(effect["deposit"]["pay"]["address"], "TXyz" * 8)
 
+    def test_a_coin_amount_reaches_the_toolbox_and_naira_never_reaches_the_model(self):
+        toolbox = FakeToolbox()
+        effect: dict = {}
+        result = make_agent(toolbox)._run_tool(ToolCall("add_money", {
+            "method": "crypto", "amount_crypto": "2", "asset": "USDC", "chain": "sol"}),
+            effect, heard("add 2 usdc on solana"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(toolbox.coin_amounts, [Decimal("2")])
+        self.assertNotIn("amount_ngn", result["data"])
+        self.assertEqual(result["data"]["amount"], "13.1")
+        self.assertEqual(result["data"]["chain"], "Solana")
+
+    def test_crypto_is_the_default_way_to_add_money(self):
+        toolbox = FakeToolbox()
+        make_agent(toolbox)._run_tool(ToolCall("add_money", {"amount_crypto": "5"}),
+                                      {}, heard("add 5 usdc"))
+        self.assertEqual(toolbox.deposits[0][0], "crypto")
+
+    def test_a_coin_amount_that_is_not_a_number_is_asked_again(self):
+        toolbox = FakeToolbox()
+        result = make_agent(toolbox)._run_tool(ToolCall("add_money", {
+            "method": "crypto", "amount_crypto": "two-ish"}), {}, heard(""))
+        self.assertEqual(result["error"]["code"], "bad_amount")
+        self.assertEqual(toolbox.deposits, [])
+
+    def test_a_question_with_set_answers_rides_on_the_reply_as_choices(self):
+        class AskingChain(FakeToolbox):
+            def add_money(self, *args):
+                raise ToolRefusal("pick_chain", "USDC can be sent on Base, Solana.",
+                                  ("USDC on Base", "USDC on Solana"))
+        effect: dict = {}
+        make_agent(AskingChain())._run_tool(ToolCall("add_money", {
+            "method": "crypto", "amount_crypto": "2"}), effect, heard(""))
+        self.assertEqual(effect["choices"], ["USDC on Base", "USDC on Solana"])
+        reply = agent_mod.Agent._apply_effects(agent_mod.AgentReply("Which network?"), effect)
+        self.assertEqual(reply.choices, ["USDC on Base", "USDC on Solana"])
+
     def test_a_refused_setup_is_said_not_raised(self):
         class Refusing(FakeToolbox):
             def add_money(self, *args):
@@ -1502,3 +1542,52 @@ class PaymentCarriesItsDestination(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoinDepositToolboxTests(unittest.TestCase):
+    """`AccountToolbox.add_money` for crypto, over a fake deposit service."""
+
+    class Deposits:
+        def __init__(self):
+            self.started: list = []
+            self.previews: list = []
+
+        def crypto_assets(self):
+            return [{"asset_id": "sol-usdc", "symbol": "USDC", "chain": "sol"},
+                    {"asset_id": "base-usdc", "symbol": "USDC", "chain": "base"},
+                    {"asset_id": "tron-usdt", "symbol": "USDT", "chain": "tron"}]
+
+        def preview(self, asset_id, amount_ngn, amount_in):
+            self.previews.append((asset_id, amount_ngn, amount_in))
+            return {"amount_ngn": 3_100}
+
+        def start(self, account_id, amount_ngn, method, asset_id):
+            self.started.append((amount_ngn, method, asset_id))
+            return {"method": method, "amount_ngn": amount_ngn}
+
+    def toolbox(self):
+        from app.modules.agent.account_toolbox import AccountToolbox
+        self.deposits = self.Deposits()
+        return AccountToolbox("acct_1", SimpleNamespace(deposits=self.deposits))
+
+    def test_two_usdc_is_priced_by_the_rate_not_by_the_user(self):
+        self.toolbox().add_money("crypto", 0, "usdc", "Solana", Decimal("2"))
+        self.assertEqual(self.deposits.previews, [("sol-usdc", None, Decimal("2"))])
+        self.assertEqual(self.deposits.started, [(3_100, "crypto", "sol-usdc")])
+
+    def test_no_coin_named_means_usdc(self):
+        with self.assertRaises(ToolRefusal) as caught:
+            self.toolbox().add_money("crypto", 0, "", "", Decimal("2"))
+        self.assertEqual(caught.exception.code, "pick_chain")
+        self.assertEqual(caught.exception.options, ("USDC on Base", "USDC on Solana"))
+        self.assertIn("Solana", caught.exception.message)
+        self.assertNotIn("sol,", caught.exception.message)
+
+    def test_a_tapped_network_name_finds_its_chain(self):
+        self.toolbox().add_money("crypto", 5_000, "USDC", "USDC on Base".split(" on ")[1])
+        self.assertEqual(self.deposits.started, [(5_000, "crypto", "base-usdc")])
+
+    def test_an_unknown_coin_offers_the_ones_taken(self):
+        with self.assertRaises(ToolRefusal) as caught:
+            self.toolbox().add_money("crypto", 5_000, "DOGE", "")
+        self.assertEqual(caught.exception.options, ("USDC", "USDT"))

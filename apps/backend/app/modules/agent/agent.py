@@ -20,6 +20,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.modules.agent import memory
@@ -31,6 +32,7 @@ from app.modules.agent.prompt import SYSTEM_PROMPT
 from app.modules.agent.toolbox import Limits, ToolBox
 from app.modules.agent.tools import READ_ONLY_TOOLS, TOOLS
 from app.modules.bill.dtos.create_bill_dto import CreateBillDto
+from app.modules.wallet.chains import ChainNames
 
 log = logging.getLogger("stark.agent")
 
@@ -50,6 +52,9 @@ class AgentReply:
     # A deposit `add_money` started, link or address included. The door shows it
     # under the reply, so the model never has to copy an address character by character.
     deposit: dict | None = None
+    # Answers the user can pick from, when the turn ended on a question with a
+    # fixed set of answers ("which network?"). A door with buttons shows them.
+    choices: list[str] = field(default_factory=list)
     # Model attempts that failed and were retried during this turn, oldest first
     # (see `NearAiModel.retries`). Empty on the ordinary turn; non-empty is the
     # only evidence of *why* a slow turn was slow.
@@ -305,6 +310,7 @@ class Agent:
         reply.tx_hash = effect.get("tx_hash")
         reply.code = effect.get("code")
         reply.deposit = effect.get("deposit")
+        reply.choices = list(effect.get("choices") or [])
         return reply
 
     # --- tool routing --------------------------------------------------------
@@ -333,6 +339,8 @@ class Agent:
                                            "message": f"Unknown tool {call.name}",
                                            "detail": {}}}
         except ToolRefusal as err:
+            if err.options:
+                effect["choices"] = list(err.options)
             return {"ok": False,
                     "error": {"code": err.code, "message": err.message, "detail": {}}}
         except PaymentError as err:
@@ -352,18 +360,38 @@ class Agent:
     def _add_money(self, arguments: dict, effect: dict[str, Any]) -> dict:
         """Start a deposit. The model sees what to tell the user, not the link or the
         address: those travel on the reply, straight from the deposit, to the door."""
+        method = str(arguments.get("method") or "crypto")
+        coins = self._coin_amount(arguments.get("amount_crypto")) if method == "crypto" else None
         deposit = self.toolbox.add_money(
-            str(arguments.get("method") or ""), int(arguments.get("amount_ngn") or 0),
-            str(arguments.get("asset") or ""), str(arguments.get("chain") or ""))
+            method, int(arguments.get("amount_ngn") or 0),
+            str(arguments.get("asset") or ""), str(arguments.get("chain") or ""), coins)
         effect["deposit"] = deposit
-        told = {"amount_ngn": deposit["amount_ngn"], "method": deposit["method"],
-                "status": deposit["status"], "expires_at": deposit["expires_at"],
-                "shown_to_user": "the link" if deposit["method"] == "bank"
-                else "the address and exact amount"}
-        if deposit["method"] == "crypto":
+        told = {"method": deposit["method"], "status": deposit["status"],
+                "expires_at": deposit["expires_at"]}
+        if deposit["method"] == "bank":
+            told["amount_ngn"] = deposit["amount_ngn"]
+            told["shown_to_user"] = "the link"
+        else:
+            # The coin, never the naira: they are paying in the coin, and the rate
+            # settles what it credits.
+            told["amount"] = deposit["pay"]["amount"]
             told["asset"] = deposit["pay"]["asset"]
-            told["chain"] = deposit["pay"]["chain"]
+            told["chain"] = ChainNames.display(deposit["pay"]["chain"])
+            told["shown_to_user"] = "the address and exact amount"
         return {"ok": True, "data": told}
+
+    @staticmethod
+    def _coin_amount(value: Any) -> Decimal | None:
+        """The coin figure the model passed ("2", "1.5"), or None when it passed none."""
+        if value in (None, ""):
+            return None
+        try:
+            amount = Decimal(str(value).replace(",", "").strip())
+        except InvalidOperation:
+            amount = Decimal(0)
+        if not amount.is_finite() or amount <= 0:
+            raise ToolRefusal("bad_amount", "How much of the coin do you want to send?")
+        return amount
 
     @staticmethod
     def _without_links(text: str) -> str:

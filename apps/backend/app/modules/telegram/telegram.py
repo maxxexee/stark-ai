@@ -61,6 +61,7 @@ from app.modules.voice import stt
 from app.modules.voice import tts
 from app.modules.voice import wake
 from app.modules.telegram.identity_repository import CODE_TTL_SECONDS
+from app.modules.telegram.replies import Outgoing, Replies
 
 CHANNEL = "telegram"
 
@@ -178,9 +179,10 @@ def send_chat_action(chat_id: int, action: str, *, bot_token: str,
 
 
 def send_message(chat_id: int, text: str, *, bot_token: str,
-                 timeout: float = 15.0) -> bool:
-    """One reply. Never raises — a chat that cannot be reached is not an error."""
-    body = json.dumps({"chat_id": chat_id, "text": text}).encode()
+                 extra: dict[str, Any] | None = None, timeout: float = 15.0) -> bool:
+    """One reply, with any buttons or formatting in `extra`. Never raises — a chat
+    that cannot be reached is not an error."""
+    body = json.dumps({**(extra or {}), "chat_id": chat_id, "text": text}).encode()
     req = urllib.request.Request(
         f"{TELEGRAM_API}/bot{bot_token}/sendMessage",
         data=body, method="POST",
@@ -193,20 +195,19 @@ def send_message(chat_id: int, text: str, *, bot_token: str,
         return False
 
 
-def pay_note(deposit: dict[str, Any]) -> str:
-    """What to do with a deposit `add_money` started, written from the deposit itself
-    so a link or an address is never retyped by the model."""
-    pay = deposit["pay"]
-    if deposit["method"] == "bank":
-        return (f"Add ₦{deposit['amount_ngn']:,} by bank transfer, card or USSD:\n"
-                f"{pay['checkout_url']}\n\nThe link works for an hour.")
-    lines = [f"Send exactly {pay['amount']} {pay['asset']} on {pay['chain']} to:",
-             pay["address"]]
-    if pay.get("memo"):
-        lines.append(f"Memo: {pay['memo']}")
-    lines.append(f"\nThis adds ₦{deposit['amount_ngn']:,}. The address works for an "
-                 "hour, and your balance updates once it lands. Only send on that network.")
-    return "\n".join(lines)
+def answer_callback(callback_id: str, *, bot_token: str, timeout: float = 5.0) -> bool:
+    """Stop the spinner on a tapped button. Cosmetic, so it never raises."""
+    body = json.dumps({"callback_query_id": callback_id}).encode()
+    req = urllib.request.Request(
+        f"{TELEGRAM_API}/bot{bot_token}/answerCallbackQuery",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 _USERNAME_CACHE: dict[str, str | None] = {}
@@ -278,6 +279,8 @@ class Turn:
     said: str | None = None
     result: Any = None
     speak: bool = False
+    # `sendMessage` fields for the reply itself, such as the menu.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -290,7 +293,10 @@ class TelegramAdapter:
     secret: str | None = None
     download: Callable[[str], bytes | None] | None = None
     transcribe: Callable[[bytes], tuple[str | None, str]] | None = None
-    send: Callable[[int, str], bool] | None = None
+    # `(chat_id, text, extra)`, where `extra` holds buttons and formatting.
+    send: Callable[[int, str, dict[str, Any]], bool] | None = None
+    # Acknowledging a tapped button. None calls Telegram when there is a token.
+    answer: Callable[[str], None] | None = None
     # Resolving the bot's @username for a deep link. Injected in tests so the
     # Connect screen's payload is asserted without a network call.
     username_lookup: Callable[[str | None], str | None] | None = None
@@ -354,8 +360,8 @@ class TelegramAdapter:
         self.stats["updates"] += 1
         update_id = update.get("update_id")
         # `channel_post`, `edited_message` and the rest are never read: only a new
-        # message a person sent the bot in their own DM.
-        message = update.get("message") or {}
+        # message a person sent the bot in their own DM, or a choice they tapped.
+        message = update.get("message") or self._tapped(update.get("callback_query"))
         chat = message.get("chat") or {}
         sender = message.get("from") or {}
         # In a DM the chat is the person, so the reply goes to whoever is linked.
@@ -387,14 +393,46 @@ class TelegramAdapter:
                     outcome="failed",
                     reply="Something went wrong handling that. Nothing was charged.")
 
+            choices = list(getattr(turn.result, "choices", None) or [])
+            buttons = Replies.choices(choices) if choices else {}
             if turn.reply:
-                self._deliver(chat_id, turn.reply, spoken=turn.speak)
+                extra = {**turn.extra, **(buttons if not turn.speak else {})}
+                self._deliver(chat_id, turn.reply, spoken=turn.speak, extra=extra)
+                if turn.speak and buttons:
+                    self._send(chat_id, "Tap one:", buttons)
             # Text too, after a voice note: an address is copied, not listened to.
             deposit = getattr(turn.result, "deposit", None)
             if deposit:
-                self._send(chat_id, pay_note(deposit))
+                note = Replies.deposit(deposit)
+                self._send(chat_id, note.text, note.extra)
         self._emit_turn(turn)
         return {"ok": True, "handled": turn.outcome, "update_id": update_id}
+
+    def _tapped(self, callback: dict[str, Any] | None) -> dict[str, Any]:
+        """A tapped choice, as the message it stands for, or {} if it is not one.
+
+        It is read exactly as if the person had typed the choice: the same DM,
+        dedupe, identity and agent checks follow. The spinner is stopped first.
+        """
+        if not callback:
+            return {}
+        self._acknowledge(str(callback.get("id") or ""))
+        said = Replies.choice_from(callback.get("data"))
+        chat = (callback.get("message") or {}).get("chat") or {}
+        if said is None or not chat:
+            return {}
+        return {"chat": chat, "from": callback.get("from") or {}, "text": said}
+
+    def _acknowledge(self, callback_id: str) -> None:
+        if not callback_id:
+            return
+        try:
+            if self.answer is not None:
+                self.answer(callback_id)
+            elif self.bot_token:
+                answer_callback(callback_id, bot_token=self.bot_token)
+        except Exception as err:  # a spinner must never cost the reply
+            self.log(f"telegram callback answer failed: {err}")
 
     def _emit_turn(self, turn: Turn) -> None:
         """Hand the exchange to the log, if anything is listening.
@@ -450,15 +488,16 @@ class TelegramAdapter:
         finally:
             stop.set()
 
-    def _send(self, chat_id: int, text: str) -> None:
+    def _send(self, chat_id: int, text: str, extra: dict[str, Any] | None = None) -> None:
         if self.send is not None:
-            self.send(chat_id, text)
+            self.send(chat_id, text, extra or {})
         elif self.bot_token:
-            send_message(chat_id, text, bot_token=self.bot_token)
+            send_message(chat_id, text, bot_token=self.bot_token, extra=extra)
         else:
             self.log(f"telegram reply to {chat_id}: {text}")
 
-    def _deliver(self, chat_id: int, text: str, *, spoken: bool) -> None:
+    def _deliver(self, chat_id: int, text: str, *, spoken: bool,
+                 extra: dict[str, Any] | None = None) -> None:
         """Voice note when Stark was spoken to and the voice works; text otherwise.
 
         Fail-closed like everything else here: no voice, no ffmpeg, or a
@@ -470,7 +509,7 @@ class TelegramAdapter:
             if ogg and self._send_voice(chat_id, ogg):
                 self.stats["spoken"] += 1
                 return
-        self._send(chat_id, text)
+        self._send(chat_id, text, extra)
 
     def _send_voice(self, chat_id: int, ogg: bytes) -> bool:
         if self.send_voice is not None:
@@ -490,8 +529,13 @@ class TelegramAdapter:
 
         if text.startswith("/"):
             self.stats["commands"] += 1
-            return Turn(outcome="command", heard=text,
-                        reply=self._command(text, channel_user_id, display_name))
+            reply = self._command(text, channel_user_id, display_name)
+            # The menu goes up whenever the chat is linked and the person is
+            # starting out: on /start, /help, and the moment a code links it.
+            linked = self.identities.resolve(CHANNEL, channel_user_id) is not None
+            verb = text.split()[0].split("@")[0].lower()
+            menu = Replies.menu() if linked and verb in ("/start", "/help", "/link") else {}
+            return Turn(outcome="command", heard=text, reply=reply, extra=menu)
 
         user_id = self.identities.resolve(CHANNEL, channel_user_id)
         if user_id is None:

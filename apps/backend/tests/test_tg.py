@@ -17,6 +17,7 @@ import tempfile
 import time
 import unittest
 import wave
+from types import SimpleNamespace
 from unittest import mock
 from pathlib import Path
 
@@ -118,13 +119,17 @@ class AdapterCase(unittest.TestCase):
         self.agent = FakeAgent()
         self.ids = FakeIdentities()
         self.sent: list[tuple[int, str]] = []
+        self.extras: list[dict] = []
+        self.answered: list[str] = []
         self.turns: list[dict] = []
         self.adapter = TelegramAdapter(
             agent=self.agent,
             identities=self.ids,
             bot_token="123:TEST",
             secret="s3cret",
-            send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
+            send=lambda chat_id, text, extra=None: (
+                self.sent.append((chat_id, text)), self.extras.append(extra or {})) and True,
+            answer=self.answered.append,
             on_turn=self.turns.append,
             # Voice stays off unless a test turns it on: unit tests never
             # reach for a voice provider, whatever is in the environment.
@@ -441,7 +446,7 @@ class TestChatContext(AdapterCase):
             agent=self.agent, identities=self.ids, bot_token="1:T", secret="s",
             download=lambda file_id: _tiny_wav(),
             transcribe=lambda clip: ("what's the weather", "ok"),
-            send=lambda chat_id, text: True,
+            send=lambda chat_id, text, extra=None: True,
             on_turn=self.turns.append,
         )
         adapter.handle_update(_update(voice={"file_id": "f1"}, text=None))
@@ -458,7 +463,7 @@ class TestChatContext(AdapterCase):
 
         adapter = TelegramAdapter(
             agent=self.agent, identities=self.ids, bot_token="1:T", secret="s",
-            send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
+            send=lambda chat_id, text, extra=None: self.sent.append((chat_id, text)) or True,
             on_turn=boom,
         )
         result = adapter.handle_update(_update(text="what's left"))
@@ -504,7 +509,7 @@ class TestConcurrentChats(unittest.TestCase):
         sent: dict[int, list[str]] = {1: [], 2: []}
         chat_two_done = threading.Event()
 
-        def send(chat_id, text):
+        def send(chat_id, text, extra=None):
             if chat_id == 1 and not sent[1]:
                 chat_two_done.wait(5)     # hold chat 1 mid-delivery
             sent[chat_id].append(text)
@@ -569,7 +574,7 @@ class TestOnlyPrivateMessages(unittest.TestCase):
         self.sent: list[tuple[int, str]] = []
         self.adapter = TelegramAdapter(
             agent=self.agent, identities=self.ids, bot_token="1:T", secret="s",
-            send=lambda chat_id, text: self.sent.append((chat_id, text)) or True,
+            send=lambda chat_id, text, extra=None: self.sent.append((chat_id, text)) or True,
             speak=lambda text: None,
         )
 
@@ -661,7 +666,7 @@ class TestResumeIsAppOnly(unittest.TestCase):
         self.adapter = TelegramAdapter(
             agent=FakeAgent(), identities=FakeIdentityStore({"42": "acct_owner"}),
             controls=self.controls, bot_token="1:T", secret="s",
-            send=lambda chat_id, text: True,
+            send=lambda chat_id, text, extra=None: True,
         )
 
     def test_a_chat_can_pause(self):
@@ -791,3 +796,84 @@ class TestTypingBubble(AdapterCase):
         self.assertIsNone(self.adapter.notify)
         result = self.adapter.handle_update(_update(text="what's left"))
         self.assertEqual(result["handled"], "agent")
+
+
+def _tap(chat_id=42, data="say:USDC on Solana"):
+    return {"update_id": next(_SEQ), "callback_query": {
+        "id": f"cb{next(_SEQ)}", "data": data,
+        "from": {"id": chat_id, "first_name": "Tunde"},
+        "message": {"message_id": 1, "chat": {"id": chat_id, "type": "private"}}}}
+
+
+class TestRichReplies(AdapterCase):
+    CRYPTO = {"id": "dep_1", "method": "crypto", "amount_ngn": 3_000,
+              "pay": {"asset": "USDC", "chain": "sol", "amount": "2.19",
+                      "address": "5fVWef1cLUKoRL7rs<x>", "memo": None}}
+
+    def reply_with(self, **fields):
+        def respond(user_id, said, thread):
+            self.agent.transcripts.append(said)
+            return SimpleNamespace(reply="Here you go.", actions=[], code=None,
+                                   receipt_id=None, token=None, conversation=[],
+                                   deposit=fields.get("deposit"),
+                                   choices=fields.get("choices", []))
+        self.agent.respond = respond
+
+    def test_a_crypto_deposit_copies_in_one_tap_and_never_says_naira(self):
+        self.linked()
+        self.reply_with(deposit=self.CRYPTO)
+        self.adapter.handle_update(_update(text="add 2 usdc on solana"))
+        text, extra = self.sent[-1][1], self.extras[-1]
+        self.assertIn("<code>5fVWef1cLUKoRL7rs&lt;x&gt;</code>", text)   # escaped
+        self.assertIn("on Solana", text)
+        self.assertNotIn("₦", text)
+        self.assertEqual(extra["parse_mode"], "HTML")
+        copies = [row[0]["copy_text"]["text"]
+                  for row in extra["reply_markup"]["inline_keyboard"]]
+        self.assertEqual(copies, ["5fVWef1cLUKoRL7rs<x>", "2.19"])
+
+    def test_a_bank_deposit_is_a_pay_button(self):
+        self.linked()
+        self.reply_with(deposit={"method": "bank", "amount_ngn": 3_000,
+                                 "pay": {"checkout_url": "https://pay.example/x"}})
+        self.adapter.handle_update(_update(text="add 3000 by bank"))
+        button = self.extras[-1]["reply_markup"]["inline_keyboard"][0][0]
+        self.assertEqual(button, {"text": "Pay ₦3,000", "url": "https://pay.example/x"})
+        self.assertNotIn("pay.example", self.sent[-1][1])
+
+    def test_choices_become_buttons_on_the_reply(self):
+        self.linked()
+        self.reply_with(choices=["USDC on Base", "USDC on Solana"])
+        self.adapter.handle_update(_update(text="add 2 usdc"))
+        rows = self.extras[-1]["reply_markup"]["inline_keyboard"]
+        self.assertEqual([b["callback_data"] for b in rows[0]],
+                         ["say:USDC on Base", "say:USDC on Solana"])
+
+    def test_a_tapped_choice_is_read_as_if_typed(self):
+        self.linked()
+        tap = _tap()
+        result = self.adapter.handle_update(tap)
+        self.assertEqual(result["handled"], "agent")
+        self.assertEqual(self.agent.transcripts[-1], "USDC on Solana")
+        self.assertEqual(self.answered, [tap["callback_query"]["id"]])
+
+    def test_a_tap_from_an_unlinked_chat_reaches_no_agent(self):
+        result = self.adapter.handle_update(_tap(chat_id=77))
+        self.assertEqual(result["handled"], "unlinked")
+        self.assertEqual(self.agent.transcripts, [])
+
+    def test_a_tap_that_is_not_ours_is_ignored(self):
+        self.linked()
+        result = self.adapter.handle_update(_tap(data="pay:9000"))
+        self.assertEqual(result["handled"], "ignored")
+        self.assertEqual(self.agent.transcripts, [])
+
+    def test_a_linked_chat_gets_the_menu_on_start(self):
+        self.linked()
+        self.adapter.handle_update(_update(text="/start"))
+        keyboard = self.extras[-1]["reply_markup"]["keyboard"]
+        self.assertEqual(keyboard[0][0], {"text": "Balance"})
+
+    def test_an_unlinked_chat_gets_no_menu(self):
+        self.adapter.handle_update(_update(chat_id=77, text="/start"))
+        self.assertEqual(self.extras[-1], {})

@@ -17,7 +17,10 @@ class ToolRefusal(Exception):
     """A non-payment action the app refused (a bad reference, a rail switched off).
     Its message is written for the user and goes back to the model as is."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, options: tuple[str, ...] = ()):
         super().__init__(message)
         self.code = code
         self.message = message
+        # Answers the user can pick from ("USDC on Solana"). A door that has
+        # buttons shows them, so a choice is a tap instead of typing.
+        self.options = options

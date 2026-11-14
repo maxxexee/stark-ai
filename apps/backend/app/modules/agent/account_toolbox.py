@@ -4,12 +4,14 @@ so every rule they enforce holds in a chat too."""
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.common.api_error import ApiError
 from app.modules.agent.errors import PaymentError, ToolRefusal
 from app.modules.bill.dtos.create_bill_dto import CreateBillDto
 from app.modules.vending import catalog
+from app.modules.wallet.chains import ChainNames
 
 if TYPE_CHECKING:
     from app.app_module import AppModule
@@ -70,10 +72,21 @@ class AccountToolbox:
         except ApiError as err:
             raise ToolRefusal(err.code, err.message) from err
 
-    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str) -> dict:
+    # Stark's own coin, used when a crypto deposit names none.
+    DEFAULT_COIN = "USDC"
+
+    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str,
+                  amount_crypto: Decimal | None = None) -> dict:
         try:
-            asset_id = self._asset_id(asset, chain) if method == "crypto" else None
-            return self.module.deposits.start(self.account_id, amount_ngn, method, asset_id)
+            if method != "crypto":
+                return self.module.deposits.start(self.account_id, amount_ngn, method, None)
+            asset_id = self._asset_id(asset or self.DEFAULT_COIN, chain)
+            if amount_crypto is not None:
+                # "Add 2 USDC": the coin is the figure they said, so the naira it
+                # credits comes from the rate, never from asking them to convert.
+                preview = self.module.deposits.preview(asset_id, None, amount_crypto)
+                amount_ngn = preview["amount_ngn"]
+            return self.module.deposits.start(self.account_id, amount_ngn, "crypto", asset_id)
         except ApiError as err:
             raise ToolRefusal(err.code, err.message) from err
 
@@ -93,12 +106,18 @@ class AccountToolbox:
             symbols = sorted({a["symbol"].upper() for a in listed})
             raise ToolRefusal(
                 "bad_asset",
-                f"Stark doesn't take {asset or 'that'}. It takes {', '.join(symbols)}.")
+                f"Stark doesn't take {asset or 'that'}. It takes {', '.join(symbols)}.",
+                tuple(symbols))
         if chain:
-            matches = [a for a in matches if catalog.slug(a["chain"]) == catalog.slug(chain)]
+            wanted = catalog.slug(chain)
+            matches = [a for a in matches
+                       if wanted in (catalog.slug(a["chain"]),
+                                     catalog.slug(ChainNames.display(a["chain"])))]
         if len(matches) != 1:
-            chains = sorted({a["chain"] for a in listed if a["symbol"].upper() == symbol})
+            names = sorted({ChainNames.display(a["chain"])
+                            for a in listed if a["symbol"].upper() == symbol})
             raise ToolRefusal(
                 "pick_chain",
-                f"{symbol} can be sent on {', '.join(chains)}. Which network?")
+                f"{symbol} can be sent on {', '.join(names)}. Which network?",
+                tuple(f"{symbol} on {name}" for name in names))
         return matches[0]["asset_id"]

@@ -20,7 +20,8 @@ meter token comes back, but only if the vault contract lets the payment through.
 Product rules that hold everywhere:
 
 - Money in the app is **whole naira, stored as integers**. No floats, no strings.
-- No crypto words in user-facing copy, except when the user asks to add money with crypto.
+- No chain words in user-facing copy. Adding money is the one place a coin appears:
+  crypto is the default, sized in the coin the user names (USDC unless they say).
 - Black and burnt orange (`#C2410C`, `#F08A4B` on dark), Crimson Pro headings, Inter
   body, no sliders anywhere.
 - `docs/API.md` is frozen: changes only add to it.
