@@ -1,872 +1,42 @@
-"""Stark's agent layer: tools, routing, policy gate and the model loop.
+"""Stark's agent: the model loop, the account snapshot, and tool routing.
 
-This is M2. The agent takes what the user said, lets a model choose tool calls,
-runs them under the vault's rules, and returns a sentence that can be spoken.
+The agent takes what the user said, lets a model choose tool calls, runs them under
+the owner's rules, and returns a sentence that can be spoken. The pieces:
 
-One model backend: `NearAiModel`, POSTing to NEAR AI's OpenAI-compatible
-`/v1/chat/completions` with `NEAR_AI_API_KEY`. Without a key every turn fails and
-the user hears that Stark lost connection; nothing is paid. Tests drive the same
-loop with scripted models from `tests/`.
+- `prompt.py` and `tools.py`: what the model is told and may call.
+- `model.py`: the NEAR AI client. Without `NEAR_AI_API_KEY` every turn fails and the
+  user hears that Stark lost connection; nothing is paid.
+- `payment_gate.py`: every rule a payment must pass, in code.
+- `payment_intent.py`: a second model call that decides whether the user asked to pay.
 
-The safety property that matters: the policy gate is enforced in `_run_tool`, not
-by asking the model nicely. A model that hallucinates a ₦40,000 payment gets a
-refusal and no signature.
+The safety property that matters: the gate is enforced in `_run_tool`, not by asking
+the model nicely. A model that hallucinates a ₦40,000 payment gets a refusal and no
+signature.
 """
 
 from __future__ import annotations
 
-import http.client
 import json
 import logging
-import os
-import re
-import ssl
-import threading
-import time
-import urllib.error
-import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Protocol
-from urllib.parse import urlsplit
+from typing import Any
 
 from app.modules.agent import memory
-from app.modules.agent import policy as policy_rules
+from app.modules.agent.errors import PaymentError, ToolRefusal
+from app.modules.agent.model import Model, NearAiModel, ToolCall
+from app.modules.agent.payment_gate import PaymentGate, Utterance
+from app.modules.agent.payment_intent import PaymentIntentJudge
+from app.modules.agent.prompt import SYSTEM_PROMPT
+from app.modules.agent.toolbox import Limits, ToolBox
+from app.modules.agent.tools import READ_ONLY_TOOLS, TOOLS
 from app.modules.bill.dtos.create_bill_dto import CreateBillDto
 
 log = logging.getLogger("stark.agent")
 
-# How long the same charge stays "already done". Measured 2026-10-24: the same
-# spoken phrase — "recharge my airtime number" — bought ₦1,000 twice, 29 seconds
-# apart, because nothing compared the new attempt with the receipt it had just
-# written. Five minutes is long enough to catch a repeat of the same instruction
-# and short enough that a deliberate second top-up later in the day is not gated.
-DUPLICATE_WINDOW_SECONDS = 300
-
-# The refusals the owner may lift for one payment, by approving it in the app. Kept
-# here rather than imported from the approval module, which depends on this one.
-OVER_A_LIMIT = frozenset({policy_rules.OVER_PER_PAYMENT_CAP, policy_rules.OVER_CAP})
-
-NEAR_AI_BASE = os.environ.get("NEAR_AI_BASE_URL") or "https://cloud-api.near.ai"
-# Tool-capable and on NEAR's own fleet. `openai/gpt-5-nano` is Incognito (no
-# end-to-end TEE) and was `is_ready: false` when checked 2026-10-22.
-#
-# Measured 2026-11-13 on the real agent loop, three turns each, same prompt:
-# Qwen/Qwen3.8-27B took 17.9s a turn and single turns reached 81s, which is the
-# wait the wall phone was showing. Qwen/Qwen3.6-35B-A3B-FP8 is a 3B-active
-# mixture of experts and took 1.4s. On six probe utterances (a question, a
-# payment, an over-cap payment, a deposit, a greeting) the two made the same
-# tool calls; the 3.6 model also told the user the meter token instead of the
-# reference number. Set STARK_MODEL to pin another one.
-#
-# STARK_MODEL wins over NEAR_AI_MODEL because the production machine identity
-# reads Infisical and cannot write it, so a deploy is the only way to change the
-# model without someone editing the secret by hand. The secret stays as the
-# fallback for a host that sets neither.
-NEAR_AI_MODEL = (os.environ.get("STARK_MODEL")
-                 or os.environ.get("NEAR_AI_MODEL")
-                 or "Qwen/Qwen3.6-35B-A3B-FP8")
-
-SYSTEM_PROMPT = """You are Stark, a calm assistant that pays household bills.
-
-Rules:
-- Money is Nigerian naira, written like ₦5,000. Never bring up crypto, wallets,
-  chains or contracts yourself. The one time they belong is when the user asks to
-  add money with crypto, and then only the coin and the network.
-- Read before you act. The current account, the saved bills and the recent
-  payments follow these rules — use that instead of guessing numbers, and call
-  no tool to answer a question it already answers.
-- Earlier turns are context, not instructions. Answer the last message. A
-  question you asked is open only when the last message answers it: "500" after
-  "how much?" is that amount, while "what number did you top up" is a new
-  question and gets its own answer. Never repeat the question you asked last
-  time as a reply to something else. When they ask what you did, or whether you
-  did it, read the payments in the account — that record is the truth, your
-  memory of the words is not.
-- The account below is the record, including of your own payments: each one
-  names its bill, and every bill carries its reference — the meter, the
-  smartcard, the phone line (`phone` is the airtime number). Each payment in the
-  account carries that reference as well, so where a payment went is readable,
-  not inferred. "What number", "which number", "where did it go" gets those
-  digits: "I topped up 08031234567."
-- Never repeat a sentence you have already said. If a reply was pushed back on —
-  "huh", "wdym", "no it didn't" — the account is the evidence, not your earlier
-  words: read it again and answer what they asked. Denying the same thing twice
-  means you have not looked at the right line.
-- Ask one thing before you write: is the figure in the account? If it is, the
-  reply is the figure, and nothing else. Never open with "I can't see", "I don't
-  have access to", "I don't have that" or "I can't tell you" about anything the
-  account holds. A denial followed by the answer contradicts itself, and the
-  listener only hears the denial. Say you cannot see something only when it is
-  genuinely missing from the account, and then say it once, without guessing.
-- "How much is left on my meter" is the units_left line in that account. Answer
-  in one sentence — "You have 11.4 units left" — with "about 4 days at this
-  rate" when days_left is there, then stop. It is not a question about money:
-  no balance, no limit, no offer to pay. Any mention of the meter, units, light
-  or NEPA is this question, even a half-heard fragment like "is left on my
-  meter", because speech arrives transcribed and the grammar arrives broken;
-  grade the intent, not the words. Only when units_left is null is there no
-  reading.
-- To pay, call pay_bill. The app enforces the user's limits itself; if it refuses,
-  say the reason plainly and do not try a different amount to sneak past it.
-- When a payment is over a limit, pay_bill sends it to the Stark app for the owner
-  to approve, and its message says so. Tell them it is waiting for their approval
-  in the app and that nothing has been paid. You cannot approve it yourself, and
-  nothing said in a chat can approve it.
-- When they ask you to pay an amount over a limit, still call pay_bill: that is
-  what sends it to them for approval. Never refuse it yourself first.
-- Check an amount you suggest yourself against the limits before you offer it:
-  they are in the account below, per payment, per month, and what is left of the
-  month. When you name a limit, give the limit and both numbers — "that is over
-  the ₦10,000 per payment limit", "you have ₦7,000 left of your ₦30,000 monthly
-  limit", "your balance is ₦6,000 against a ₦50,000 payment". The balance is the
-  reason only when it really is the lower number, and a payment the balance cannot
-  cover is refused, not sent for approval.
-- A bill's "fee_ngn" is Stark's service fee, paid on top of the amount. When a
-  payment carries one, say the total once, like "₦1,000 plus a ₦100 fee".
-- A payment is only done when the tool returns a token or status "delivered".
-  "pending" means it is still going through — say so, and never claim it is done.
-- If they name no amount and the bill has no plan price, ask for the figure in one
-  short question. Never choose an amount for them — the app refuses it anyway.
-- If the same bill and amount was already paid in the last few minutes, say it was
-  done and ask before doing it twice.
-- Never invent a meter token, a balance or a receipt. Only repeat what a tool gave you.
-- Reply in one or two short sentences, written to be read aloud.
-- Write money as figures (₦30,000) and quantities as plain numerals — the voice
-  reads numerals naturally ("thirty thousand naira"). Never spell numbers out as
-  words. The one exception is a meter token: write it as single digits with spaces,
-  4 8 2 1 0 9 3 …, so it can be repeated one digit at a time.
-- Write for the ear, not the eye: no em dashes, parentheses, slashes or symbols.
-  Commas and full stops only.
-- A question is not an instruction. "If I pay this, how much is left?", "how much
-  would it cost?", "should I?", or someone confused or asking why — answer the
-  question and pay nothing until they clearly ask you to pay. Answer and stop:
-  do not end with an offer to pay when they only asked what would happen.
-- When they ask what something will come to, give them the figure. Work it out
-  from the account: "what will my balance be after I pay DStv?" is a subtraction,
-  so the reply carries the number. Replying with the price and a question back is
-  not an answer, and neither is asking for an amount the account already shows.
-  You can always see what a bill costs: a subscription's price is its plan price
-  in the account. Never answer that you cannot see the amount.
-- One owner, one line. The account has no other people and no other numbers: never
-  ask who to send airtime to, and never name a network, contact or provider that
-  is not in the account. If they name no bill and two bills could fit, ask which
-  bill, in one short question: which bill, not whom.
-- Speech is transcribed and can be wrong. If a word looks misheard, work out what it
-  must have been from the account and the recent payments. If two readings would pay
-  different bills or different amounts, ask one short question instead of acting.
-- A subscription is a bill with a plan or a renewal date. "My meter number" is the
-  bill's reference; prepaid and postpaid meters are the same field. Read the digits
-  you were given, never make any up.
-- The account below already carries each bill's plan, price, reference and renewal
-  date, plus the last five payments. Never ask for a detail that is already there.
-  Never say a payment happened, or when it happened, unless it is in that list.
-  It is also the read: pay_bill takes an id straight out of it, so a payment does
-  not need a second call to list the bills first.
-- `phone` in the account is the owner's own number. Read it out when asked for a
-  phone number — it is not a secret, and it is the same digits as the airtime bill.
-- For a hypothetical about money, do the arithmetic on the numbers in the account and
-  answer with the figure. "If I pay A and top up B, how much is left?" is a
-  subtraction, not a request to pay either one.
-- You can pay bills, save a new bill, and add money to the balance. Nothing else.
-  You cannot send or forward messages, receipts or money to Telegram, email or
-  anywhere else, and you cannot withdraw. Say plainly that you cannot do that yet,
-  and never imply something was sent.
-- To save a bill, call add_bill with the kind, the provider and the reference the
-  user gave: the meter number, smartcard number or phone line. Never make up or
-  complete a reference. Data and TV are sold as plans, so call find_plans first and
-  pass the plan's code; if they did not say which plan, name two or three by price
-  and ask. After saving, read the reference back so a misheard digit is caught,
-  and say the owner must confirm the new bill in the Stark app before it can be
-  paid. A bill marked needs_confirmation cannot be paid until they do.
-- To add money, call add_money with the amount and how they want to pay: "bank"
-  for bank transfer, card or USSD, or "crypto" with the coin, like USDT, and the
-  network when they named one. If they did not say how, ask bank or crypto, in one
-  short question. The funding line in the account says which ways are switched on.
-- The app shows the payment link or the deposit address right under your reply.
-  Never write a link, an address or a crypto amount yourself. Say how much is being
-  added, that the link or address is below, and that it works for an hour. Money is
-  only added when the deposit says "credited": until then say it has not arrived.
-- When the account shows something worth acting on before being asked — units
-  or days low, a bill renewing within the week, the monthly limit nearly used —
-  end with one short sentence saying so, plainly. Once, not after every reply,
-  and only when it is true of the numbers above. If the user already knows or
-  has just been told, do not repeat it.
-"""
-
-# A question about money, not an instruction to move it. Both models were eager:
-# measured 2026-10-24, "if I pay DStv and top up 5 thousand, how much is left?"
-# called pay_bill twice and actually topped up ₦5,000 of airtime, and "I'm confused,
-# DStv says I owe, what should I do?" tried to pay DStv. Instructions in a prompt are
-# not a gate, so the refusal lives here and runs before any amount is even parsed.
-_QUESTION_NOT_PAYMENT = re.compile(
-    r"\b(?:"
-    r"if\s+(?:i|we)\b|what\s+if\b|suppose|supposing|imagine|hypothetically"
-    r"|how\s+much\s+(?:would|will)\b|what\s+would\b"
-    r"|should\s+i\b|do\s+you\s+think\b"
-    r"|i(?:'|\u2019)?m\s+confused|i\s+am\s+confused|i\s+don(?:'|\u2019)?t\s+understand"
-    r"|why\s+(?:did|was|is|are|has|have)\b|explain\b"
-    r")",
-    re.IGNORECASE,
-)
-
-
-# A question *about* the account, as opposed to permission to pay it. "Can you pay
-# my DStv?" is a request; "what's my most recent subscription?" is not, but with
-# `pay_bill` the only tool offered a model will reach for it — measured 2026-10-24,
-# that read question attempted a DStv payment (blocked by the cap, not by sense).
-_READ_QUESTION = re.compile(
-    r"^\s*(?:what|whats|what's|which|who|when|where|how|read|show|list|tell|explain"
-    r"|do\s+i|did\s+i|does|is|are|was|were|can\s+you\s+(?:tell|read|show|see))\b",
-    re.IGNORECASE,
-)
-# The one interrogative shape that *is* a payment request: asking permission.
-# "When does my DStv renew" opens like a question and stays one; "can you pay my
-# DStv" is the user saying yes in advance, and must still pay.
-_PERMISSION = re.compile(
-    r"^\s*(?:can|could|would|will)\s+(?:you|u)\s+(?:\w+\s+){0,2}"
-    r"(?:pay|top\s*up|topup|buy|renew|recharge|fund|load|purchase)\b",
-    re.IGNORECASE,
-)
-_WAKE = re.compile(r"^\s*(?:hey\s+|ok\s+|okay\s+)?stark[,\s]+", re.IGNORECASE)
-
-# A web link in the model's reply. See `Agent.respond`.
-_LINK = re.compile(r"(?:https?://|www\.)\S+", re.I)
-
-# The words that turn a refused repeat into an intended one. The duplicate gate
-# below stops the same charge twice in five minutes, but a user who is asked
-# "you already did that — still want it?" and answers "again" must not be stuck
-# in a loop of their own confirmation. Nothing here is a payment instruction on
-# its own; it only ever loosens the duplicate check.
-_REPEAT_OK = re.compile(
-    r"\b(?:again|one\s+more|twice|second\s+time|second\s+one|confirm(?:ed)?"
-    r"|yes|yeah|sure|certainly|do\s+it|go\s+ahead|really|meant\s+it)\b",
-    re.IGNORECASE,
-)
-
-
-def asks_instead_of_paying(transcript: str) -> bool:
-    """True when the utterance is a question about money, not a request to spend.
-
-    Deliberately conservative in both directions: a hypothetical or an advice
-    question can never pay, and neither can a read question with no payment verb.
-    A bare "yes" is a confirmation, not a read question, so it still pays — the
-    model may have just asked "should I pay the ₦7,900?".
-    """
-    said = _WAKE.sub("", transcript or "")
-    if _QUESTION_NOT_PAYMENT.search(said):
-        return True
-    if not _READ_QUESTION.search(said):
-        return False
-    return not _PERMISSION.search(said)
-
-
-TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_state",
-            "description": (
-                "Read the wallet balance, the monthly limit, how much is spent, and "
-                "how many electricity units and days are left. The instructions "
-                "already carry this as a current snapshot, so call this only when "
-                "the snapshot is missing or a value is not in it."
-            ),
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_bills",
-            "description": (
-                "List the saved bills (electricity, airtime, data, TV, internet, water) "
-                "with their ids, labels and references. The snapshot in the "
-                "instructions already carries these, so call this only when it is "
-                "missing or a bill is not in it."
-            ),
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recent_activity",
-            "description": "The most recent payments, newest first.",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "pay_bill",
-            "description": (
-                "Pay a saved bill. Only call this when the user clearly asked to pay. "
-                "The amount is in whole naira. If the user did not name an amount, use "
-                "the bill's plan price when it has one — otherwise ask them for the "
-                "figure instead of choosing it: an unpriced call is refused. A plan "
-                "costs its own price. The app checks the user's limits before anything "
-                "is charged."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                "bill_id": {
-                    "type": "string",
-                    "description": (
-                        "Id from the saved bills in your instructions. "
-                        "Empty means the main electricity meter."
-                    ),
-                },
-                    "amount_ngn": {
-                        "type": "integer",
-                        "description": "Whole naira, e.g. 5000.",
-                    },
-                },
-                "required": ["amount_ngn"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_plans",
-            "description": (
-                "The data or TV plans a provider sells, each with its code and price. "
-                "Call before saving a data or TV bill, or when asked what plans exist."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["data", "tv"]},
-                    "provider": {"type": "string",
-                                 "description": "MTN, Airtel, Glo, 9mobile, DStv, GOtv…"},
-                },
-                "required": ["kind", "provider"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_bill",
-            "description": (
-                "Save a new bill so it can be paid. Only call this when the user asked "
-                "to add or save one and gave its reference."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": [
-                        "electricity", "airtime", "data", "tv", "internet", "water"]},
-                    "provider": {"type": "string", "description": (
-                        "The network, TV provider or electricity company, e.g. MTN, "
-                        "DStv, Ikeja Electric.")},
-                    "reference": {"type": "string", "description": (
-                        "Meter number, smartcard number or phone number, exactly as "
-                        "the user gave it.")},
-                    "label": {"type": "string",
-                              "description": "A short name, e.g. Home meter. Optional."},
-                    "plan": {"type": "string",
-                             "description": "Plan code from find_plans; data and TV only."},
-                },
-                "required": ["kind", "provider", "reference"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_money",
-            "description": (
-                "Start adding money to the balance. Bank gives a checkout link for "
-                "bank transfer, card or USSD; crypto gives an address to send a coin "
-                "to. Nothing is taken until the user pays."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "method": {"type": "string", "enum": ["bank", "crypto"]},
-                    "amount_ngn": {"type": "integer",
-                                   "description": "Whole naira to add, e.g. 20000."},
-                    "asset": {"type": "string",
-                              "description": "Crypto only: the coin, e.g. USDT, USDC."},
-                    "chain": {"type": "string", "description": (
-                        "Crypto only: the network they named, e.g. tron, sol, eth. "
-                        "Leave empty if they did not say.")},
-                },
-                "required": ["method", "amount_ngn"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
-
-# Reads the snapshot already carries, so they are not offered when it is present
-# (see Agent._tools_for). The definitions stay in TOOLS: a failed snapshot read puts
-# every read back in play.
-READ_ONLY_TOOLS = frozenset({"get_state", "list_bills", "recent_activity"})
-# What a question may still call: a lookup changes nothing, so "what plans does MTN
-# have?" can be answered while every tool that spends or saves stays off the table.
-LOOKUP_TOOLS = frozenset({"find_plans"})
-
-
-# --- model interface ---------------------------------------------------------
-
-
-@dataclass
-class ToolCall:
-    name: str
-    arguments: dict[str, Any]
-    id: str = field(default_factory=lambda: f"call_{uuid.uuid4().hex[:8]}")
-
-    def as_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "type": "function",
-            "function": {"name": self.name, "arguments": json.dumps(self.arguments)},
-        }
-
-
-@dataclass
-class ModelTurn:
-    content: str | None = None
-    tool_calls: list[ToolCall] = field(default_factory=list)
-
-    def assistant_message(self) -> dict:
-        return {
-            "role": "assistant",
-            "content": self.content,
-            "tool_calls": [call.as_dict() for call in self.tool_calls],
-        }
-
-
-class Model(Protocol):
-    name: str
-
-    def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn: ...
-
-
-# --- amount parsing ----------------------------------------------------------
-
-
-_ONES = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
-    "eighteen": 18, "nineteen": 19,
-}
-_TENS = {
-    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
-}
-
-
-def parse_amount(text: str) -> int | None:
-    """Pull a naira amount out of what the user said.
-
-    Handles "₦5,000", "5000", "5k", "1.5k" and spoken numbers up to the
-    thousands ("five thousand", "two thousand five hundred"). Returns `None`
-    when no amount was named, which is the signal to use the default.
-    """
-    heard = text.lower().replace(",", "").replace("₦", " ").replace("naira", " ")
-
-    suffixed = re.search(r"\b(\d+(?:\.\d+)?)\s*k\b", heard)
-    if suffixed:
-        return int(round(float(suffixed.group(1)) * 1000))
-
-    digits = re.search(r"\b(\d{1,9})\b", heard)
-    if digits:
-        return int(digits.group(1))
-
-    words = re.findall(r"[a-z]+", heard)
-    total = 0
-    current = 0
-    seen = False
-    for word in words:
-        if word in _ONES:
-            current += _ONES[word]
-            seen = True
-        elif word in _TENS:
-            current += _TENS[word]
-            seen = True
-        elif word == "hundred":
-            current = max(current, 1) * 100
-            seen = True
-        elif word == "thousand":
-            total += max(current, 1) * 1000
-            current = 0
-            seen = True
-        elif seen and word not in ("and",):
-            # A new unrelated word after a number ends the amount.
-            break
-    amount = total + current
-    return amount if seen and amount > 0 else None
-
-
-def heard_amounts(text: str) -> set[int]:
-    """Every naira figure the user said, for checking the one the model chose.
-
-    `parse_amount` keeps only the first, which is right for a default and wrong for
-    a check: "home with 5000 and office with 3000" names two payments. Same forms
-    as `parse_amount`; each run of spoken number words is one figure.
-    """
-    heard = text.lower().replace(",", "").replace("₦", " ").replace("naira", " ")
-    found = {int(round(float(m) * 1000)) for m in re.findall(r"\b(\d+(?:\.\d+)?)\s*k\b", heard)}
-    # Not the halves of a decimal: "1.5k" is ₦1,500, not also ₦1.
-    found |= {int(m) for m in re.findall(r"(?<![\d.])\b(\d{1,9})\b(?!\.\d)", heard)}
-    total = current = 0
-    seen = False
-    # A trailing "" closes the last run.
-    for word in [*re.findall(r"[a-z]+", heard), ""]:
-        if word in _ONES:
-            current += _ONES[word]
-        elif word in _TENS:
-            current += _TENS[word]
-        elif word == "hundred":
-            current = max(current, 1) * 100
-        elif word == "thousand":
-            total += max(current, 1) * 1000
-            current = 0
-        elif word == "and" and seen:
-            continue
-        else:
-            if total + current > 0:
-                found.add(total + current)
-            total = current = 0
-            seen = False
-            continue
-        seen = True
-    return found
-
-
-# --- recency ----------------------------------------------------------------
-
-
-def _now() -> datetime:
-    """The clock, behind a name so a test can pin it without patching time."""
-    return datetime.now(timezone.utc)
-
-
-def _parse_ts(value: Any) -> datetime | None:
-    """A receipt's `created_at` as aware UTC, or None when it is unreadable.
-
-    Accepts the `Z` suffix the API writes and the offset form the store may
-    return. Unreadable is not "old": it returns None and the caller treats the
-    receipt as not-recent rather than guessing.
-    """
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _ago_phrase(seconds: int) -> str:
-    """"30 seconds" / "2 minutes" — short enough to be spoken."""
-    if seconds < 60:
-        return f"{max(seconds, 1)} seconds"
-    minutes = round(seconds / 60)
-    return f"{minutes} minute" + ("s" if minutes != 1 else "")
-
-
-# --- spoken phrases ----------------------------------------------------------
-
-
-def _window_phrase(minutes: int) -> str:
-    """How long a request waits, said the way a person would say it."""
-    if minutes % 1440 == 0:
-        days = minutes // 1440
-        return "a day" if days == 1 else f"{days} days"
-    if minutes % 60 == 0:
-        hours = minutes // 60
-        return "an hour" if hours == 1 else f"{hours} hours"
-    return f"{minutes} minutes"
-
-
-def _loads(value: Any) -> dict:
-    if isinstance(value, dict):
-        return value
-    try:
-        parsed = json.loads(value or "{}")
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-# --- NEAR AI model -----------------------------------------------------------
-
-
-class _Connection:
-    """One keep-alive HTTPS connection to the model host, and its lock."""
-
-    def __init__(self, host: str, port: int, timeout: float) -> None:
-        self.conn = http.client.HTTPSConnection(
-            host, port, timeout=timeout, context=ssl.create_default_context()
-        )
-        self.lock = threading.Lock()
-        # Set by `NearAiModel._acquire`; carried into the retry note.
-        self.reused = False
-
-
-class NearAiModel:
-    """NEAR AI's OpenAI-compatible chat endpoint.
-
-    The only model backend. The request/response handling is deliberately narrow:
-    one POST, tool calls only. Without a key it is still built, so an account's
-    routes work, and every turn fails before any request — the agent turns that
-    into a spoken "lost connection" and pays nothing.
-
-    Connections are kept alive and reused. A TLS handshake to the model costs
-    0.68s from Lagos (measured 2026-11-13) and a call on an open connection 0.40s,
-    so a fresh connection per turn paid that handshake again for every model
-    round — twice on any turn that calls a tool. The pool is the same borrow and
-    return the database layer uses, for the same reason: the server handles each
-    request on a new thread, so a thread-local connection would be a new
-    handshake every time.
-    """
-
-    name = "near-ai"
-    MAX_IDLE = 8
-
-    # The builder's egress drops TLS mid-response: measured 2026-10-24 on
-    # geddon.hellostark.xyz, [SSL: UNEXPECTED_EOF_WHILE_READING] arrived on about
-    # one turn in 18 and the server handed the client a 500 with nothing to say.
-    # A retry costs nothing when the network is healthy and turns a dropped
-    # reply into the answer that was asked for.
-    ATTEMPTS = 3
-    RETRY_DELAYS = (0.3, 0.9)
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = NEAR_AI_MODEL,
-        base_url: str = NEAR_AI_BASE,
-        # One stalled round used to sit on the 30s socket timeout before the
-        # retry answered, and the turn was 31.9s of silence (measured 2026-11-13,
-        # turn log, `agent: 31890`). A reply that is coming takes 1 to 4s and
-        # the slowest measured round was 7.6s, so 10s is generous and turns a
-        # stall into a retry the user can wait out.
-        timeout: int = 10,
-    ):
-        self.api_key = api_key or os.environ.get("NEAR_AI_API_KEY")
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        endpoint = urlsplit(self.base_url)
-        self._host = endpoint.hostname or "cloud-api.near.ai"
-        self._port = endpoint.port or 443
-        self._path = (endpoint.path.rstrip("/") or "") + "/v1/chat/completions"
-        self._idle: list[_Connection] = []
-        self._mutex = threading.Lock()
-        # The server answers each request on its own thread, so the retry record
-        # for the turn in flight is per thread, like the connection pool is not.
-        self._local = threading.local()
-
-    def begin_turn(self) -> None:
-        """Start a fresh retry record for the turn about to run."""
-        self._local.events = []
-
-    def retries(self) -> list[dict]:
-        """Attempts that failed and went to a retry, in the order they happened."""
-        return list(getattr(self._local, "events", []))
-
-    def _note_retry(self, attempt: int, started: float, error: BaseException,
-                    reused: bool | None) -> None:
-        """Keep the reason, not just the count: a stall and a reset look the same
-        in the timing and completely different in the sentence.
-
-        `reused` is the deciding datum for a read timeout: a pooled connection
-        that the far end has already forgotten looks exactly like a provider
-        that took too long, and only the pool state tells them apart.
-        """
-        events = getattr(self._local, "events", None)
-        if events is None:
-            self._local.events = events = []
-        events.append({
-            "attempt": attempt + 1,
-            "ms": int((time.perf_counter() - started) * 1000),
-            "reused": reused,
-            "why": str(error)[:120],
-        })
-
-    # --- connection ----------------------------------------------------------
-
-    def _acquire(self) -> _Connection:
-        with self._mutex:
-            if self._idle:
-                wire = self._idle.pop()
-                wire.reused = True
-                return wire
-        wire = _Connection(self._host, self._port, self.timeout)
-        wire.reused = False
-        return wire
-
-    def _release(self, wire: _Connection) -> None:
-        with self._mutex:
-            if len(self._idle) < self.MAX_IDLE:
-                self._idle.append(wire)
-                return
-        self._close(wire)
-
-    @staticmethod
-    def _close(wire: _Connection) -> None:
-        try:
-            wire.conn.close()
-        except Exception:
-            pass
-
-    def turn(self, messages: list[dict], tools: list[dict]) -> ModelTurn:
-        if not self.api_key:
-            raise RuntimeError("NEAR_AI_API_KEY is not set")
-        payload = {"model": self.model, "messages": messages, "temperature": 0}
-        # A question is offered no tools. Some providers (DeepSeek on NEAR AI) reject
-        # `tools: []` with a 400, so the field is left out rather than sent empty.
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-        body = self._post(payload)
-
-        choices = body.get("choices") or []
-        if not choices:
-            raise RuntimeError("NEAR AI returned no choices")
-        message = choices[0].get("message") or {}
-
-        calls = []
-        for raw in message.get("tool_calls") or []:
-            function = raw.get("function") or {}
-            calls.append(
-                ToolCall(
-                    name=function.get("name", ""),
-                    arguments=_loads(function.get("arguments")),
-                    id=raw.get("id") or f"call_{uuid.uuid4().hex[:8]}",
-                )
-            )
-        return ModelTurn(content=message.get("content"), tool_calls=calls)
-
-    def _post(self, payload: dict) -> dict:
-        """One completion, retried only where the failure is the network's.
-
-        A 4xx means the request itself is wrong (bad key, bad shape): retrying
-        is just a slower failure, so it raises at once. Everything else — a
-        dropped TLS handshake, a reset socket, a body cut in half, 429, 5xx —
-        gets `ATTEMPTS` goes before it becomes a real error.
-
-        A pooled connection can be reaped while it sits idle; the retry then
-        runs on a fresh one, which is why the borrow happens inside the loop.
-        """
-        body = json.dumps(payload).encode()
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-        last: RuntimeError | None = None
-        for attempt in range(self.ATTEMPTS):
-            started = time.perf_counter()
-            wire: _Connection | None = None
-            retryable = False
-            reused: bool | None = None
-            try:
-                wire = self._acquire()
-                reused = getattr(wire, "reused", None)
-                with wire.lock:
-                    wire.conn.request("POST", self._path, body, headers)
-                    response = wire.conn.getresponse()
-                    status = response.status
-                    raw = response.read()
-                self._release(wire)
-                wire = None
-            except (http.client.HTTPException, OSError, urllib.error.URLError) as err:
-                # ssl.SSLEOFError, a reset connection, a truncated body.
-                if wire is not None:
-                    self._close(wire)
-                    wire = None
-                last, retryable = RuntimeError(f"Could not reach NEAR AI: {err}"), True
-            else:
-                detail = raw.decode("utf-8", "replace")[:300]
-                if status == 429 or status >= 500:
-                    last, retryable = RuntimeError(
-                        f"NEAR AI returned HTTP {status}: {detail}"), True
-                elif status >= 400:
-                    raise RuntimeError(f"NEAR AI returned HTTP {status}: {detail}")
-                else:
-                    try:
-                        return json.loads(raw or b"{}")
-                    except json.JSONDecodeError as err:
-                        last, retryable = RuntimeError(
-                            f"Could not reach NEAR AI: {err}"), True
-            if not retryable:
-                break
-            if last is not None:
-                self._note_retry(attempt, started, last, reused)
-            if attempt < self.ATTEMPTS - 1:
-                time.sleep(self.RETRY_DELAYS[min(attempt, len(self.RETRY_DELAYS) - 1)])
-        raise last if last else RuntimeError("NEAR AI failed without a reason")
-
-
-# --- toolbox -----------------------------------------------------------------
-
-
-class PaymentError(Exception):
-    """A payment the app refused or that failed downstream."""
-
-    def __init__(self, code: str, message: str, detail: dict | None = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.detail = detail or {}
-
-
-class ToolRefusal(Exception):
-    """A non-payment action the app refused (a bad reference, a rail switched off).
-    Its message is written for the user and goes back to the model as is."""
-
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-class ToolBox(Protocol):
-    """What the agent may touch. `AccountToolbox` implements it over one account."""
-
-    def get_state(self) -> dict: ...
-    def list_bills(self) -> list[dict]: ...
-    def recent_activity(self) -> list[dict]: ...
-    # Which ways of adding money are on, and the last few deposits.
-    def funding(self) -> dict: ...
-    def pay(self, bill_id: str, amount_ngn: int) -> dict: ...
-    def add_bill(self, dto: CreateBillDto) -> dict: ...
-    def find_plans(self, kind: str, provider: str) -> list[dict]: ...
-    # A deposit in `DepositService.shape`: its `pay` is the link or the address.
-    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str) -> dict: ...
-    # A payment over a limit, filed for the owner to approve in the app. Returns
-    # the request with its `window_minutes`.
-    def request_approval(self, bill_id: str, amount_ngn: int, reason: str) -> dict: ...
-    # An activity row for a payment the rules refused, so the owner can see it.
-    def record_refusal(self, bill_id: str, amount_ngn: int, reason: str) -> None: ...
-
-
-@dataclass(frozen=True)
-class Limits:
-    """The owner's policy, mirrored from the vault's `get_policy()`."""
-
-    monthly_cap_ngn: int
-    per_payment_cap_ngn: int
-    allowed_meters: frozenset[str]
-
-    def __post_init__(self) -> None:
-        if self.per_payment_cap_ngn > self.monthly_cap_ngn:
-            raise ValueError("per-payment cap cannot exceed the monthly cap")
-
-
-# --- agent -------------------------------------------------------------------
+LINK_STARTS = ("http://", "https://", "www.")
+# Intent judgments in flight, one per turn, beside that turn's own model call.
+_JUDGING = ThreadPoolExecutor(max_workers=8, thread_name_prefix="stark-intent")
 
 
 @dataclass
@@ -912,40 +82,34 @@ class Agent:
         model: Model,
         toolbox: ToolBox,
         limits: Limits,
+        intent: PaymentIntentJudge,
         max_turns: int = 5,
         threads: memory.Threads | None = None,
     ):
         self.model = model
         self.toolbox = toolbox
         self.limits = limits
+        self.intent = intent
+        self.gate = PaymentGate(toolbox)
         self.max_turns = max_turns
         # What the last few turns of a chat said, when the caller names one. A
         # caller that passes no thread gets exactly the old one-shot behaviour.
         self.threads = threads or memory.Threads()
 
     @staticmethod
-    def _tools_for(has_snapshot: bool, transcript: str = "") -> list[dict]:
+    def _tools_for(has_snapshot: bool) -> list[dict]:
         """The tools this turn offers.
 
-        Three rules, each measured on 2026-10-24:
-
-        - **A question gets lookups only.** With `pay_bill` the only thing on
-          offer, gemini-flash-lite called it on "what's my most recent
-          subscription", and on "if I pay DStv, how much is left" it paid the
-          airtime. Nothing that spends or saves can be called on a turn that does
-          not offer it.
-        - **With a snapshot, the read tools are withheld.** They carry nothing
-          the snapshot does not, and each call is a round trip: a 1.2s answer
-          became 2.5s when the model read what it had already been given.
-        - **No snapshot** (the read itself failed) puts every tool back, because
-          a wrong number is worse than a slow one.
+        With a snapshot the read tools are withheld: they carry nothing the snapshot
+        does not, and each call is a round trip (measured 2026-10-24, a 1.2s answer
+        became 2.5s when the model read what it had already been given). No snapshot
+        (the read itself failed) puts every tool back, because a wrong number is
+        worse than a slow one. Whether a question may pay is not decided here:
+        `pay_bill` asks the intent judge before anything else.
         """
         if not has_snapshot:
             return TOOLS
-        if asks_instead_of_paying(transcript):
-            return [t for t in TOOLS if t["function"]["name"] in LOOKUP_TOOLS]
-        return [t for t in TOOLS
-                if t["function"]["name"] not in READ_ONLY_TOOLS]
+        return [t for t in TOOLS if t["function"]["name"] not in READ_ONLY_TOOLS]
 
     def _system_message(self) -> tuple[dict, bool]:
         """The prompt plus what the app already knows, and whether it got it.
@@ -1035,14 +199,18 @@ class Agent:
         if callable(begin):
             begin()
         system, has_snapshot = self._system_message()
-        messages: list[dict] = [system]
-        messages.extend(self.threads.history(thread))
-        messages.append({"role": "user", "content": transcript})
+        history = self.threads.history(thread)
+        messages: list[dict] = [system, *history, {"role": "user", "content": transcript}]
+        # The intent judge reads the reply before this message: a bare "yes" pays
+        # only when Stark has just offered to. Judged on every turn, read only by
+        # `pay_bill`: a question costs one unused call, a payment no extra wait.
+        stark_said = history[-1]["content"] if history else ""
+        said = Utterance(transcript, _JUDGING.submit(self.intent.judge, stark_said, transcript))
         reply = AgentReply(reply="Sorry, I didn't catch that.")
         effect: dict[str, Any] = {}
 
         try:
-            applied = self._drive(messages, reply, effect, has_snapshot, transcript)
+            applied = self._drive(messages, reply, effect, has_snapshot, said)
         except Exception as err:
             # The model is unreachable, timed out, or answered something that is
             # not a turn. The user still gets a sentence: the alternative is a
@@ -1057,7 +225,7 @@ class Agent:
             applied.code = applied.code or "model_unavailable"
         # Links reach the user only from the deposit itself (`deposit`), never from
         # the model's words: a link it writes is one something it read put there.
-        applied.reply = _LINK.sub("(link removed)", applied.reply)
+        applied.reply = self._without_links(applied.reply)
         # Every path returns this same `reply` object, so the exchange the model
         # actually saw — prompt, account, tool results, answers — is attached once.
         applied.conversation = messages
@@ -1070,11 +238,11 @@ class Agent:
         return applied
 
     def _drive(self, messages: list[dict], reply: AgentReply, effect: dict,
-               has_snapshot: bool, transcript: str) -> AgentReply:
+               has_snapshot: bool, said: Utterance) -> AgentReply:
         """The model loop. Kept separate so one failure can be caught above it."""
         for _ in range(self.max_turns):
             turn = self.model.turn(
-                messages, self._tools_for(has_snapshot, transcript))
+                messages, self._tools_for(has_snapshot))
             messages.append(turn.assistant_message())
 
             if not turn.tool_calls:
@@ -1097,7 +265,7 @@ class Agent:
             results = []
             for call in turn.tool_calls:
                 reply.actions.append(call.name)
-                result = self._run_tool(call, effect, transcript)
+                result = self._run_tool(call, effect, said)
                 results.append(result)
                 messages.append(
                     {
@@ -1151,7 +319,7 @@ class Agent:
     # --- tool routing --------------------------------------------------------
 
     def _run_tool(self, call: ToolCall, effect: dict[str, Any],
-                  transcript: str = "") -> dict:
+                  said: Utterance) -> dict:
         try:
             if call.name == "get_state":
                 return {"ok": True, "data": self.toolbox.get_state()}
@@ -1161,7 +329,7 @@ class Agent:
             if call.name == "recent_activity":
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":
-                return self._pay_bill(call.arguments, effect, transcript)
+                return self.gate.pay(call.arguments, effect, said, self.limits)
             if call.name == "find_plans":
                 args = call.arguments
                 return {"ok": True, "data": self.toolbox.find_plans(
@@ -1191,187 +359,6 @@ class Agent:
                               "message": "That didn't work just now. Nothing was charged.",
                               "detail": {}}}
 
-    def _pay_bill(self, arguments: dict, effect: dict[str, Any],
-                  transcript: str = "") -> dict:
-        """The gate. Nothing is signed or charged unless every rule passes."""
-        # First gate: did they ask for a payment at all? A question that merely
-        # mentions money must never reach the vendor (see _QUESTION_NOT_PAYMENT).
-        if asks_instead_of_paying(transcript):
-            effect["code"] = "not_a_payment_request"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "not_a_payment_request",
-                    "message": (
-                        "The user asked a question or sounded unsure. Nothing was "
-                        "charged. Answer them, then ask before paying anything."
-                    ),
-                    "detail": {},
-                },
-            }
-
-        amount = arguments.get("amount_ngn")
-        if not isinstance(amount, int) or isinstance(amount, bool):
-            try:
-                amount = int(amount)
-            except (TypeError, ValueError):
-                return {"ok": False,
-                        "error": {"code": "bad_amount",
-                                  "message": policy_rules.MESSAGES["bad_amount"],
-                                  "detail": {}}}
-
-        bills = self.toolbox.list_bills()
-        bill = None
-        bill_id = arguments.get("bill_id") or ""
-        if bill_id:
-            bill = next((b for b in bills if b.get("id") == bill_id), None)
-        if bill is None:
-            bill = next((b for b in bills if b.get("kind") == "electricity"), None)
-        if bill is None:
-            return {"ok": False,
-                    "error": {"code": "unknown_bill",
-                              "message": "I don't have that bill saved.",
-                              "detail": {"bill_id": bill_id}}}
-
-        # A bill this agent saved is not payable until its owner confirms it in the
-        # app: a voice in the room must not be able to name a number and pay it.
-        if bill.get("needs_confirmation"):
-            effect["code"] = "bill_unconfirmed"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "bill_unconfirmed",
-                    "message": (
-                        f"That {bill.get('kind')} bill is saved but not confirmed. "
-                        "Confirm it in the Stark app, then I can pay it. Nothing was "
-                        "charged."
-                    ),
-                    "detail": {"bill_id": bill.get("id")},
-                },
-            }
-
-        # A plan is sold at its own price. Refuse a mispriced attempt before it can
-        # reach the vendor, so the user hears the real number.
-        plan_price = bill.get("plan_price_ngn")
-        if isinstance(plan_price, int) and amount != plan_price:
-            effect["code"] = "plan_price_mismatch"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "plan_price_mismatch",
-                    "message": (
-                        f"{bill.get('label', 'That bill')} costs ₦{plan_price:,}. "
-                        "Nothing was charged."
-                    ),
-                    "detail": {"amount_ngn": amount, "plan_price_ngn": plan_price},
-                },
-            }
-
-        # Two more gates, both about the user's agreement rather than the
-        # account's limits — so they run before the policy check.
-
-        # 1. A figure nobody said is a figure nobody agreed to. A plan costs its
-        #    own price (checked just above), so only an amount-priced top-up can
-        #    reach here unpriced — and that is exactly where a model picks the
-        #    number for the user: measured 2026-10-24, "recharge my airtime
-        #    number" bought ₦1,000 twice, 29 seconds apart.
-        #    The figure must also be one they said, not merely some figure: "pay
-        #    500" must never let the model choose ₦5,000.
-        heard = heard_amounts(transcript)
-        if not heard and not isinstance(plan_price, int):
-            effect["code"] = "amount_required"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "amount_required",
-                    "message": (
-                        "How much would you like me to pay? Nothing has been "
-                        "charged yet."
-                    ),
-                    "detail": {"bill_id": bill.get("id")},
-                },
-            }
-        if not isinstance(plan_price, int) and amount not in heard:
-            effect["code"] = "amount_mismatch"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "amount_mismatch",
-                    "message": (
-                        "That is not the amount the user said. Pay exactly what they "
-                        "said, or ask. Nothing has been charged."
-                    ),
-                    "detail": {"amount_ngn": amount, "heard_ngn": sorted(heard)},
-                },
-            }
-
-        # 2. The same bill, the same amount, minutes ago — delivered or still
-        #    pending. Seeded history is skipped: it is artboard data, not
-        #    something Stark did just now.
-        age = self._just_paid(bill.get("id"), amount)
-        if age is not None and not _REPEAT_OK.search(transcript):
-            effect["code"] = "duplicate_payment"
-            return {
-                "ok": False,
-                "error": {
-                    "code": "duplicate_payment",
-                    "message": (
-                        f"₦{amount:,} for {bill.get('label', 'that bill')} already "
-                        f"went through {_ago_phrase(age)} ago. Nothing has been "
-                        "charged. Say it again if you meant a second one."
-                    ),
-                    "detail": {"amount_ngn": amount, "seconds_ago": age},
-                },
-            }
-
-        state = self.toolbox.get_state()
-        meter = str(bill.get("reference") or "")
-        rejection = policy_rules.check_payment(
-            paused=bool(state.get("paused")),
-            monthly_cap_ngn=self.limits.monthly_cap_ngn,
-            per_payment_cap_ngn=self.limits.per_payment_cap_ngn,
-            spent_this_period_ngn=int(state.get("spent_ngn") or 0),
-            balance_ngn=int(state.get("balance_ngn") or 0),
-            amount_ngn=amount + int(bill.get("fee_ngn") or 0),
-            meter_allowed=meter in self.limits.allowed_meters,
-        )
-        # One request is one payment as far as the per-payment cap goes. Measured
-        # 2026-11-03: asked for ₦15,000 against a ₦10,000 cap, the model paid
-        # ₦10,000 and then ₦5,000 to the same bill. What this request already
-        # paid that bill counts toward the cap, so the split goes for approval.
-        paid_to: dict[str, int] = effect.setdefault("paid_to", {})
-        already = paid_to.get(bill["id"], 0)
-        if (rejection is None and already
-                and already + amount > self.limits.per_payment_cap_ngn):
-            rejection = policy_rules.Rejection(
-                policy_rules.OVER_PER_PAYMENT_CAP,
-                {"amount_ngn": already + amount,
-                 "cap_ngn": self.limits.per_payment_cap_ngn},
-            )
-        if rejection is not None:
-            effect["code"] = rejection.code
-            error = rejection.as_dict()
-            if rejection.code in OVER_A_LIMIT:
-                request = self.toolbox.request_approval(bill["id"], amount, rejection.code)
-                error["message"] = (
-                    f"{rejection.message} I've sent it to the Stark app for you to "
-                    "approve. Nothing is paid unless you approve it within "
-                    f"{_window_phrase(request['window_minutes'])}."
-                )
-                error["detail"]["request_id"] = request["id"]
-            else:
-                self.toolbox.record_refusal(bill["id"], amount, rejection.message)
-            return {"ok": False, "error": error}
-
-        # The vault is signed inside the payment path, so the app's own
-        # `POST /v1/payments` is held to the same onchain caps as the agent.
-        receipt = self.toolbox.pay(bill["id"], amount)
-        paid_to[bill["id"]] = already + amount
-        effect["token"] = receipt.get("token")
-        effect["receipt_id"] = receipt.get("id")
-        effect["tx_hash"] = receipt.get("tx_hash")
-        return {"ok": True, "data": receipt}
-
     def _add_money(self, arguments: dict, effect: dict[str, Any]) -> dict:
         """Start a deposit. The model sees what to tell the user, not the link or the
         address: those travel on the reply, straight from the deposit, to the door."""
@@ -1388,40 +375,25 @@ class Agent:
             told["chain"] = deposit["pay"]["chain"]
         return {"ok": True, "data": told}
 
-    def _just_paid(self, bill_id: Any, amount: int) -> int | None:
-        """Seconds since this exact charge was already made, or None.
-
-        The repeat guard for the same instruction twice in a row. Only a real
-        purchase counts: same bill, same figure, delivered or pending, inside
-        `DUPLICATE_WINDOW_SECONDS`. A seeded entry (`seed-*`), a declined attempt
-        or a receipt with no readable timestamp is not "just now" — each of
-        those would block a first payment that has nothing to be a repeat of.
-
-        A read, not a model call: `recent_activity` is the local store.
-        """
-        try:
-            recent = self.toolbox.recent_activity() or []
-        except Exception:
-            return None                  # no history to compare against
-        now = _now()
-        for entry in recent:
-            if not isinstance(entry, dict):
+    @staticmethod
+    def _without_links(text: str) -> str:
+        """Every word holding a web link, from the link on, becomes "(link removed)"."""
+        pieces: list[str] = []
+        word = ""
+        for char in text + " ":
+            if not char.isspace():
+                word += char
                 continue
-            if entry.get("bill_id") != bill_id or entry.get("amount_ngn") != amount:
-                continue
-            if entry.get("status") not in ("delivered", "pending"):
-                continue
-            if str(entry.get("request_id") or "").startswith("seed-"):
-                continue
-            when = _parse_ts(entry.get("created_at"))
-            if when is None:
-                continue
-            age = (now - when).total_seconds()
-            if 0 <= age <= DUPLICATE_WINDOW_SECONDS:
-                return int(age)
-        return None
+            lowered = word.lower()
+            starts = [at for at in (lowered.find(start) for start in LINK_STARTS) if at >= 0]
+            pieces.append(word[:min(starts)] + "(link removed)" if starts else word)
+            pieces.append(char)
+            word = ""
+        return "".join(pieces)[:-1]
 
 
 def build_agent(toolbox: ToolBox, limits: Limits) -> Agent:
-    """The account's agent, on NEAR AI."""
-    return Agent(model=NearAiModel(), toolbox=toolbox, limits=limits)
+    """The account's agent, on NEAR AI. The intent judge shares the model's pool."""
+    model = NearAiModel()
+    return Agent(model=model, toolbox=toolbox, limits=limits,
+                 intent=PaymentIntentJudge(model))

@@ -32,7 +32,7 @@ from unittest import mock
 from app.modules.voice import audio
 from app.modules.chain import near_tx
 from app.modules.voice import stt
-from app.modules.agent.agent import NEAR_AI_MODEL, NearAiModel
+from app.modules.agent.model import NEAR_AI_MODEL, NearAiModel
 from app.modules.chain.vault_chain import VaultChain
 from app.modules.flutterwave.flutterwave import FlutterwaveClient, FlutterwaveError
 

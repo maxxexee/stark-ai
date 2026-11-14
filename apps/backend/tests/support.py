@@ -32,7 +32,7 @@ from app.modules.account.account import Account
 from app.modules.payment import payment_service
 from app.modules.receipt import receipt_repository
 from app.shared.services.api_config_service import ApiConfigService
-from tests.regex_model import RegexModel
+from tests.regex_model import RegexIntent, RegexModel
 
 # The store methods that are scoped to an account. Everything else (`close`) is not.
 _ACCOUNT_SCOPED = frozenset({
@@ -138,7 +138,7 @@ class ApiHarness:
         # Every agent this app builds talks to the scripted model, never NEAR AI.
         self.module.accounts.build_agent = lambda account_id, limits: agent_layer.Agent(
             model=RegexModel(), toolbox=AccountToolbox(account_id, self.module),
-            limits=limits)
+            limits=limits, intent=RegexIntent())
         app = create_app(self.module)
         app.dependency_overrides[auth_guard] = self._sign_in
         self.client = TestClient(app)

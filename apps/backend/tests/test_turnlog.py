@@ -21,7 +21,7 @@ from unittest import mock
 
 from app.modules.turnlog import turnlog
 from app.modules.agent.agent import AgentReply
-from tests.regex_model import RegexModel
+from tests.regex_model import RegexIntent, RegexModel
 
 
 class EntryShapeTests(unittest.TestCase):
@@ -352,10 +352,11 @@ class ConversationTests(unittest.TestCase):
         from tests.test_agent import FakeToolbox  # the double lives with the agent tests
 
         from app.modules.agent import agent as agent_mod
+        from app.modules.agent.toolbox import Limits
         toolbox = FakeToolbox()
         reply = agent_mod.Agent(
-            model=RegexModel(), toolbox=toolbox,
-            limits=agent_mod.Limits(monthly_cap_ngn=30_000,
+            model=RegexModel(), toolbox=toolbox, intent=RegexIntent(),
+            limits=Limits(monthly_cap_ngn=30_000,
                                     per_payment_cap_ngn=5_000,
                                     allowed_meters=frozenset({"0101170026583"})),
         ).respond("hello stark whats my balance")

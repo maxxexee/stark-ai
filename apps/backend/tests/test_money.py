@@ -264,8 +264,8 @@ class FakeAccounts:
 
 
 def limits():
-    from app.modules.agent import agent as agent_layer
-    return agent_layer.Limits(30_000, 10_000, frozenset({METER}))
+    from app.modules.agent.toolbox import Limits
+    return Limits(30_000, 10_000, frozenset({METER}))
 
 
 class MoneyCase(unittest.TestCase):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from app.modules.agent import agent as agent_layer
+from app.modules.agent.toolbox import Limits
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class AccountState:
     """
 
     bills: dict[str, dict[str, Any]]
-    limits: agent_layer.Limits
+    limits: Limits
     # When the owner paused Stark, or None while it may pay. Written through by
     # `ControlService`; every payment path refuses while it is set.
     paused_at: Optional[str] = None

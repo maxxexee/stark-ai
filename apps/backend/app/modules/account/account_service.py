@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from app.common.clock import Clock
 from app.modules.account.account import AccountState
 from app.modules.account.account_repository import AccountRepository
-from app.modules.agent import agent as agent_layer
+from app.modules.agent.toolbox import Limits
 from app.modules.auth.auth_service import AuthService
 from app.modules.receipt.receipt_repository import ReceiptRepository
 
@@ -27,7 +27,7 @@ class AccountService:
 
     def __init__(self, auth: AuthService, accounts: AccountRepository,
                  receipts: ReceiptRepository,
-                 build_agent: Callable[[str, agent_layer.Limits], object]) -> None:
+                 build_agent: Callable[[str, Limits], object]) -> None:
         self.auth = auth
         self.accounts = accounts
         self.receipts = receipts
@@ -63,7 +63,7 @@ class AccountService:
             self._states.pop(account_id, None)
 
     def rebuild_limits(self, account_id: str, *, monthly_cap_ngn: Optional[int] = None,
-                       per_payment_cap_ngn: Optional[int] = None) -> agent_layer.Limits:
+                       per_payment_cap_ngn: Optional[int] = None) -> Limits:
         """Replace this account's caps (and the agent's copy), storing any new cap.
 
         The meter allowlist is always re-derived from the bills, so adding or
@@ -71,7 +71,7 @@ class AccountService:
         """
         state = self.state(account_id)
         previous = state.limits
-        state.limits = agent_layer.Limits(
+        state.limits = Limits(
             monthly_cap_ngn=(previous.monthly_cap_ngn if monthly_cap_ngn is None
                              else monthly_cap_ngn),
             per_payment_cap_ngn=(previous.per_payment_cap_ngn if per_payment_cap_ngn is None
@@ -84,10 +84,10 @@ class AccountService:
                                      state.limits.per_payment_cap_ngn)
         return state.limits
 
-    def _limits_for(self, account_id: str, bills: dict[str, dict]) -> agent_layer.Limits:
+    def _limits_for(self, account_id: str, bills: dict[str, dict]) -> Limits:
         stored = self.accounts.limits(account_id)
         monthly, per = stored or (self.MONTHLY_CAP_NGN, self.PER_PAYMENT_CAP_NGN)
-        return agent_layer.Limits(monthly_cap_ngn=monthly, per_payment_cap_ngn=per,
+        return Limits(monthly_cap_ngn=monthly, per_payment_cap_ngn=per,
                                   allowed_meters=self._meters(bills))
 
     @staticmethod

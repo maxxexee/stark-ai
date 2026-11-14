@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.common.api_error import ApiError
-from app.modules.agent import agent as agent_layer
+from app.modules.agent.errors import PaymentError, ToolRefusal
 from app.modules.bill.dtos.create_bill_dto import CreateBillDto
 from app.modules.vending import catalog
 
@@ -56,26 +56,26 @@ class AccountToolbox:
         try:
             return self.module.bill_payments.pay(self.account_id, bill_id, amount_ngn)
         except ApiError as err:
-            raise agent_layer.PaymentError(err.code, err.message, err.detail) from err
+            raise PaymentError(err.code, err.message, err.detail) from err
 
     def add_bill(self, dto: CreateBillDto) -> dict:
         try:
             return self.module.bills.add(self.account_id, dto, by_agent=True)
         except ApiError as err:
-            raise agent_layer.ToolRefusal(err.code, err.message) from err
+            raise ToolRefusal(err.code, err.message) from err
 
     def find_plans(self, kind: str, provider: str) -> list[dict]:
         try:
             return self.module.plans.plans(kind, provider)
         except ApiError as err:
-            raise agent_layer.ToolRefusal(err.code, err.message) from err
+            raise ToolRefusal(err.code, err.message) from err
 
     def add_money(self, method: str, amount_ngn: int, asset: str, chain: str) -> dict:
         try:
             asset_id = self._asset_id(asset, chain) if method == "crypto" else None
             return self.module.deposits.start(self.account_id, amount_ngn, method, asset_id)
         except ApiError as err:
-            raise agent_layer.ToolRefusal(err.code, err.message) from err
+            raise ToolRefusal(err.code, err.message) from err
 
     def _asset_id(self, asset: str, chain: str) -> str:
         """The 1Click asset for a coin named in conversation ("USDT", "usdc on base").
@@ -85,20 +85,20 @@ class AccountToolbox:
         """
         listed = self.module.deposits.crypto_assets()
         if not listed:
-            raise agent_layer.ToolRefusal(
+            raise ToolRefusal(
                 "not_available", "Adding money with crypto isn't set up yet.")
         symbol = asset.strip().upper()
         matches = [a for a in listed if a["symbol"].upper() == symbol]
         if not matches:
             symbols = sorted({a["symbol"].upper() for a in listed})
-            raise agent_layer.ToolRefusal(
+            raise ToolRefusal(
                 "bad_asset",
                 f"Stark doesn't take {asset or 'that'}. It takes {', '.join(symbols)}.")
         if chain:
             matches = [a for a in matches if catalog.slug(a["chain"]) == catalog.slug(chain)]
         if len(matches) != 1:
             chains = sorted({a["chain"] for a in listed if a["symbol"].upper() == symbol})
-            raise agent_layer.ToolRefusal(
+            raise ToolRefusal(
                 "pick_chain",
                 f"{symbol} can be sent on {', '.join(chains)}. Which network?")
         return matches[0]["asset_id"]
