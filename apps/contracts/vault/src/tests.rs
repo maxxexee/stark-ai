@@ -84,13 +84,17 @@ fn callback(result: PromiseResult) {
 
 /// Rate 1000: one naira is one USDC base unit, so the naira figures below read directly.
 fn empty_vault() -> Vault {
+    vault_at_rate(1_000)
+}
+
+fn vault_at_rate(usdc_per_kngn: u128) -> Vault {
     act_as(funder(), OCT_2026);
     Vault::new(
         owner(),
         funder(),
         treasury(),
         usdc(),
-        U128(1_000),
+        U128(usdc_per_kngn),
         U128(30_000),
         U128(10_000),
         vec![METER.to_string()],
@@ -528,9 +532,7 @@ fn a_payment_whose_usdc_does_not_arrive_is_reversed() {
 
 #[test]
 fn usdc_is_rounded_up_so_a_payment_never_under_settles() {
-    let mut v = empty_vault();
-    act_as(funder(), OCT_2026);
-    v.set_rate(U128(641_026));
+    let mut v = vault_at_rate(641_026);
     deposit(&mut v, 10_000_000, "dep_1");
     act_as(agent(), OCT_2026);
     let out = v.authorise(METER.to_string(), U128(1_001));
@@ -743,4 +745,109 @@ fn an_approved_payment_can_be_refunded() {
     refund(&mut v, treasury(), out.payment_id, 40_000);
     assert_eq!(v.get_state().balance_ngn, U128(64_200));
     assert_eq!(v.get_state().spent_period_ngn, U128(0));
+}
+
+// --- the rate: bounded, because the caps are in naira -------------------------
+
+const DAY: u64 = 86_400_000_000_000;
+
+#[test]
+fn the_funder_can_raise_the_rate_five_percent_in_a_day() {
+    let mut v = empty_vault();
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(1_020));
+    v.set_rate(U128(1_050));
+    assert_eq!(v.get_state().usdc_per_kngn, U128(1_050));
+}
+
+#[test]
+#[should_panic(expected = "The rate can rise at most 5% in a day")]
+fn a_rise_past_five_percent_in_a_day_is_refused() {
+    let mut v = empty_vault();
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(1_030));
+    // Measured from the day's opening rate, not the last step: two 3% steps are 6%.
+    v.set_rate(U128(1_061));
+}
+
+#[test]
+fn a_new_day_opens_at_the_rate_the_last_one_closed_at() {
+    let mut v = empty_vault();
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(1_050));
+    act_as(funder(), OCT_2026 + DAY);
+    v.set_rate(U128(1_102));
+    assert_eq!(v.get_state().usdc_per_kngn, U128(1_102));
+}
+
+#[test]
+fn the_rate_can_always_fall() {
+    let mut v = empty_vault();
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(10));
+    assert_eq!(v.get_state().usdc_per_kngn, U128(10));
+}
+
+#[test]
+#[should_panic(expected = "above the owner's ceiling")]
+fn the_funder_cannot_set_a_rate_above_the_ceiling() {
+    let mut v = empty_vault();
+    act_as(owner(), OCT_2026);
+    v.set_rate_ceiling(U128(1_010));
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(1_011));
+}
+
+#[test]
+fn a_ceiling_below_the_rate_brings_the_rate_down() {
+    let mut v = empty_vault();
+    act_as(owner(), OCT_2026);
+    v.set_rate_ceiling(U128(900));
+    let state = v.get_state();
+    assert_eq!(state.usdc_per_kngn, U128(900));
+    assert_eq!(state.rate_ceiling, Some(U128(900)));
+    assert_eq!(state.max_usdc_per_kngn, U128(900));
+}
+
+#[test]
+#[should_panic(expected = "Only the owner")]
+fn only_the_owner_sets_the_ceiling() {
+    let mut v = empty_vault();
+    act_as(funder(), OCT_2026);
+    v.set_rate_ceiling(U128(5_000));
+}
+
+#[test]
+#[should_panic(expected = "needs to be above zero")]
+fn a_zero_ceiling_is_refused() {
+    let mut v = empty_vault();
+    act_as(owner(), OCT_2026);
+    v.set_rate_ceiling(U128(0));
+}
+
+#[test]
+fn the_state_reports_the_highest_rate_allowed_now() {
+    let mut v = empty_vault();
+    assert_eq!(v.get_state().rate_ceiling, None);
+    assert_eq!(v.get_state().max_usdc_per_kngn, U128(1_050));
+    act_as(owner(), OCT_2026);
+    v.set_rate_ceiling(U128(1_020));
+    assert_eq!(v.get_state().max_usdc_per_kngn, U128(1_020));
+}
+
+#[test]
+fn a_bounded_rate_bounds_the_usdc_the_caps_let_out() {
+    // The point of the bound: the monthly cap is ₦30,000, so with the ceiling at
+    // 1,050 no month can move more than 31,500 USDC units, whatever the funder sets.
+    let mut v = funded_vault();
+    act_as(owner(), OCT_2026);
+    v.set_rate_ceiling(U128(1_050));
+    act_as(funder(), OCT_2026);
+    v.set_rate(U128(1_050));
+    act_as(agent(), OCT_2026);
+    let mut usdc = 0;
+    for _ in 0..3 {
+        usdc += v.authorise(METER.to_string(), U128(10_000)).amount_usdc.0;
+    }
+    assert_eq!(usdc, 31_500);
 }

@@ -434,7 +434,7 @@ check("telemetry accepted", status == 202 and tel.get("accepted") is True, f"sta
 
 # The Telegram webhook must refuse an unauthenticated update, whether or not the
 # bot is configured — a missing header is 401 in both worlds, so this is testable
-# without any secret. (§8A: verify before parsing.)
+# without any secret. (HANDOFF §5: verify before parsing.)
 def raw_call(path: str, body: dict, headers: dict) -> tuple[int, dict]:
     req = urllib.request.Request(
         BASE + path, data=json.dumps(body).encode(), method="POST",

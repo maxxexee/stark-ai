@@ -1,6 +1,6 @@
 """Who is talking to us — channel identity linking and webhook dedupe.
 
-The rules this file exists to enforce (HANDOFF §8A):
+The rules this file exists to enforce (HANDOFF §5, Doors and identity):
 
 - **An unknown sender never creates a wallet and never pays.** A Telegram chat that
   has not been linked gets link instructions and nothing else — the agent is never

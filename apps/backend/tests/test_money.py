@@ -82,6 +82,7 @@ class FakeChain:
         self.policy = {"monthly_cap_ngn": "30000", "per_payment_cap_ngn": "10000",
                        "allowed_meters": [METER]}
         self.rate = "666667"
+        self.max_rate = None
         self.settled = True
         self.rpc = self
         self.payment_id = 0
@@ -126,7 +127,10 @@ class FakeChain:
         return {"amount_usdc": "666667"}
 
     def state(self, vault_id):
-        return {"usdc_per_kngn": self.rate, "balance_usdc": "0", "balance_ngn": "0"}
+        state = {"usdc_per_kngn": self.rate, "balance_usdc": "0", "balance_ngn": "0"}
+        if self.max_rate is not None:
+            state["max_usdc_per_kngn"] = self.max_rate
+        return state
 
     def call(self, vault_id, method, args):
         self._maybe_fail()
@@ -264,8 +268,8 @@ class FakeAccounts:
 
 
 def limits():
-    from app.modules.agent import agent as agent_layer
-    return agent_layer.Limits(30_000, 10_000, frozenset({METER}))
+    from app.modules.agent.toolbox import Limits
+    return Limits(30_000, 10_000, frozenset({METER}))
 
 
 class MoneyCase(unittest.TestCase):
@@ -546,6 +550,15 @@ class VaultServiceTests(MoneyCase):
         self.chain.rate = "1"
         self.vaults.authorise_payment(self.account.id, METER, 1000)
         self.assertEqual(self.chain.calls[-2], ("set_rate", {"usdc_per_kngn": "666667"}))
+
+    def test_the_synced_rate_stays_inside_the_vaults_bound(self):
+        # The vault refuses a rise past its ceiling or 5% a day; asking for one
+        # would fail every payment, so the sync asks for the most it will take.
+        self.vaults.ensure(self.account.id)
+        self.chain.rate = "600000"
+        self.chain.max_rate = "630000"
+        self.vaults.authorise_payment(self.account.id, METER, 1000)
+        self.assertEqual(self.chain.calls[-2], ("set_rate", {"usdc_per_kngn": "630000"}))
 
     def test_a_new_vault_opens_with_the_wallet_balance(self):
         self.receipts.set_wallet(self.account.id, 7_500, 0)

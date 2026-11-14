@@ -10,7 +10,7 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 [**Open the app**](https://dash.hellostark.xyz) · [**Read-only demo**](https://dash.hellostark.xyz/demo) · [**Telegram bot**](https://t.me/hellostarkai_bot) · [**Website**](https://hellostark.xyz)
 
 ![license](https://img.shields.io/badge/license-MIT-1f1f1f?style=flat-square)
-![track](https://img.shields.io/badge/NEAR%20HACKATHON-realworld%20%C2%B7%20security%20%C2%B7%20agents-00a67e?style=flat-square)
+![track](https://img.shields.io/badge/NEAR%20HACKATHON-realworld%20%C2%B7%20security-00a67e?style=flat-square)
 ![contract](https://img.shields.io/badge/contract-Rust%20%C2%B7%20near--sdk-b7410e?style=flat-square)
 ![api](https://img.shields.io/badge/api-Python%20%C2%B7%20FastAPI-3776ab?style=flat-square)
 ![web](https://img.shields.io/badge/web-TypeScript%20%C2%B7%20TanStack-3178c6?style=flat-square)
@@ -88,7 +88,7 @@ Two rules shape the whole design:
 | "What bills are due?" | Lists saved bills with their dates | Read-only |
 | "Top up my meter with 5,000" | Prices it, checks the rules, signs `pay()` | Cap, allowlist, balance, rate |
 | "Pay 15,000 for electricity" | Parks it in Approvals instead of paying | Over a cap → owner approves |
-| "If I pay DStv and top up 5,000, how much is left?" | Does the arithmetic, pays nothing | Spend tools withheld from the turn |
+| "If I pay DStv and top up 5,000, how much is left?" | Does the arithmetic, pays nothing | Read as a question, so `pay_bill` refuses |
 | "Add my MTN line, 0803…" | Saves the bill for next time | Never pays while saving |
 | "Recharge my airtime" | Asks how much | No figure spoken → `amount_required` |
 | "Pause everything" | Flips the kill switch | Contract `pause()` and app switch |
@@ -113,7 +113,9 @@ Two rules shape the whole design:
   can change its code after deployment.
 - Deposits are reference-checked, so a retried transfer cannot credit twice.
 - A failed on-chain payment reverses itself; the USDC does not vanish.
-- Rate changes are funder-only, and only within operator-set bounds.
+- Rate changes are funder-only and bounded twice: by operator-set bounds in the backend,
+  and on chain by the owner's ceiling and a 5% daily rise limit (vaults deployed with
+  that code; earlier vaults cannot be upgraded).
 
 **For developers**
 
@@ -170,14 +172,16 @@ Three processes, one repo:
 turn 1  "top up my meter with 5,000"
   │
   ├─ 1. Snapshot: balance, cap, spend, bills, recent activity appended to the prompt
-  ├─ 2. Tools: spend tools withheld on a question; read tools withheld when the
-  │        snapshot already answers it (a 1.2s answer became 2.5s otherwise)
+  ├─ 2. Tools: read tools withheld when the snapshot already answers them
+  │        (a 1.2s answer became 2.5s otherwise). Beside the turn, a short model
+  │        call reads the message: PAY, AGAIN, or not a payment
   ├─ 3. Model proposes pay_bill(bill_id, 5000)
-  ├─ 4. Guards, in code:
+  ├─ 4. Guards, in code (PaymentGate):
+  │       read as a payment?           else not_a_payment_request
   │       plan price matches?          else plan_price_mismatch
   │       a figure was spoken?         else amount_required
   │       is it the figure spoken?     else amount_mismatch
-  │       is this a question?          else the turn had no spend tools at all
+  │       paid this minutes ago?       else duplicate_payment, unless AGAIN
   ├─ 5. Backend policy: caps, float, paused, bill ownership
   ├─ 6. Sign pay("0101…", 5000) with the vault's agent key
   ├─ 7. Contract: paused? caps? allowlist? balance? → books the payment
@@ -209,6 +213,7 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | `funder` / `treasury` | Where deposits come from and where paid USDC lands |
 | `usdc` | The NEP-141 token this vault holds |
 | `usdc_per_kngn` | The naira rate, funder-set |
+| `rate_ceiling`, `max_usdc_per_kngn` | The owner's rate ceiling, and the highest rate `set_rate` takes today |
 | `monthly_cap_ngn`, `spent_period_ngn`, `period_key` | The cap, the month's spend, the month |
 | `balance_usdc`, `balance_ngn` | What is in the vault, in both units |
 | `total_paid_ngn`, `payment_count` | Lifetime totals |
@@ -216,7 +221,7 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 
 **Policy** (`get_policy`): `monthly_cap_ngn`, `per_payment_cap_ngn`, `allowed_meters`.
 
-**Entry points** (24 in total). The ones that matter:
+**Entry points** (25 in total). The ones that matter:
 
 | Method | Who may call | Does |
 |---|---|---|
@@ -224,7 +229,8 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | `pay_approved(...)` | **owner only** | Same, with caps lifted; pause, allowlist and balance still bind |
 | `ft_on_transfer(...)` | funder / treasury | Accept a deposit; a reused reference is returned untouched |
 | `debit` / `on_debited` | owner | Take USDC out for a withdrawal |
-| `set_rate` | funder | Set the naira rate |
+| `set_rate` | funder | Set the naira rate: at most the ceiling, and at most 5% above the day's opening rate |
+| `set_rate_ceiling` | owner | Cap the rate the funder may set |
 | `set_policy`, `add_meter`, `remove_meter`, `pause`, `unpause`, `withdraw` | owner | Administration |
 | `propose_owner` / `accept_owner` | owner / nominee | Hand a vault to the user's own account |
 | `get_state`, `get_policy`, `get_payment`, `is_applied`, `can_pay` | anyone | Read-only |
@@ -241,9 +247,10 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | Only listed meters can be paid | `pay()` checks the allowlist | `allowed_meters` in `get_policy` |
 | The server's key can only call `pay` | Each vault has exactly one access key: a function-call key scoped to `pay` on that vault | `view_access_key_list` |
 | That key cannot change the rate or the policy | Both are funder/owner-only | `tests.rs` |
+| The funder cannot inflate the rate | `set_rate` refuses above the owner's ceiling or a rise of more than 5% in a day | `tests.rs` |
 | Nobody can change a vault's code | Code is deployed into the vault, there is no full-access key, and no upgrade method exists | `view_access_key_list` |
 | An over-cap payment waits for the owner | Backend queues it; the owner calls `pay_approved()` | Approvals |
-| A question is never paid | Spend tools are withheld, and `pay_bill` re-refuses a question in code | `tests/test_agent.py` |
+| A question is never paid | A model call reads every message as PAY, AGAIN or not a payment; anything else, or a failed call, refuses in code | `tests/test_agent.py` |
 | One switch stops everything | `pause()` in the contract and in the app | Settings |
 
 A leaked server key cannot withdraw, cannot change policy, cannot pay a different
@@ -297,7 +304,7 @@ withheld. If the snapshot fails, every tool comes back: a wrong number is worse 
 slow one.
 
 **The prompt is not a security boundary.** Every rule that matters is re-checked below
-the model: amounts must be spoken, plan prices must match, questions get no spend tools,
+the model: amounts must be spoken, plan prices must match, a question is refused,
 and the contract re-checks caps and the allowlist on chain regardless.
 
 ## Telegram
@@ -415,7 +422,8 @@ Money is stored as integer naira. There are no floats. Chain writes go through
 
 - The rules: `apps/contracts/vault/src/policy.rs`, then `pay()` in `lib.rs`.
 - The agent: `Agent.respond` and `_tools_for` in `apps/backend/app/modules/agent/agent.py`.
-- The guards: `pay_bill` in the same file (plan price, spoken amount, question check).
+- The guards: `PaymentGate` in `payment_gate.py` (question check, plan price, spoken
+  amount, repeats, limits), and the payment judge in `payment_intent.py`.
 - Signing: `apps/backend/app/modules/chain/near_tx.py` and `vault_chain.py`.
 - The money loop: `apps/backend/app/modules/payment/`, `treasury/`, `liquidity/`.
 
@@ -508,7 +516,8 @@ bun smoke                       # HTTP-level end-to-end
 | `test_api_surface.py`, `test_openapi.py` | Route surface and documented contract |
 
 `tests/regex_model.py` is the deterministic stand-in model: it pattern-matches a
-transcript into tool calls, so agent tests need no network and no API key.
+transcript into tool calls and stands in for the payment judge, so agent tests need no
+network and no API key. Production has no regex: the judge is a model call.
 
 ## Security model
 
@@ -523,7 +532,7 @@ transcript into tool calls, so agent tests need no network and no API key.
 | Dust/storage attack on a vault | Only funder and treasury may deposit, with a bounded `msg` |
 | Replayed Telegram update | `processed_messages` on update ID |
 | Charged-back card money | Card funds are held 72h before withdrawal |
-| Operator fat-fingers a rate | Rate is bounded and bounded per move; stale rates expire in 15 minutes |
+| Operator fat-fingers a rate | Rate is bounded and bounded per move; stale rates expire in 15 minutes; on chain, the owner's ceiling and a 5% daily rise limit |
 
 **Honest caveats**
 

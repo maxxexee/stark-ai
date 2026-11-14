@@ -4,7 +4,7 @@ A TLS handshake from Lagos costs 0.43s to `cloud-api.near.ai` and 0.39s to
 `api.elevenlabs.io` (measured 2026-11-13); a call on an open connection costs a
 fraction of that. A voice turn pays both, once to hear the user and once to
 answer, so the two handshakes were around 0.8s of a 4.8s turn — the same waste
-`database.neon.Database` and `agent.NearAiModel` already pool away.
+`database.neon.Database` and `agent.model.NearAiModel` already pool away.
 
 Borrow and return rather than thread-local: `ThreadingHTTPServer` runs every
 request on a new thread, so a connection held per thread would be a handshake

@@ -11,16 +11,26 @@ import hashlib
 import json
 import pathlib
 import unittest
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
 from app.modules.agent import agent as agent_mod
+from app.modules.agent import model as model_mod
+from app.modules.agent.errors import ToolRefusal
+from app.modules.agent.model import ModelTurn, NearAiModel, ToolCall
+from app.modules.agent.payment_gate import Utterance
+from app.modules.agent.payment_intent import PaymentIntent, PaymentIntentJudge
+from app.modules.agent.prompt import SYSTEM_PROMPT
+from app.modules.agent.spoken_amounts import SpokenAmounts
+from app.modules.agent.toolbox import Limits
+from app.modules.agent.tools import TOOLS
 from app.modules.turnlog import turnlog as turnlog_mod
 from app.modules.agent import memory as memory_mod
 from app.modules.chain import near_tx
 from app.modules.agent import policy as policy_rules
-from tests.regex_model import RegexModel
+from tests.regex_model import RegexIntent, RegexModel
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 POLICY_RS = ROOT.parent / "contracts" / "vault" / "src" / "policy.rs"
@@ -140,7 +150,7 @@ class RecordingModel:
         self.seen.append([dict(m) for m in messages])
         if self.fail:
             raise RuntimeError("Could not reach NEAR AI")
-        return agent_mod.ModelTurn(content=self.content)
+        return ModelTurn(content=self.content)
 
 
 class ScriptedModel:
@@ -149,7 +159,7 @@ class ScriptedModel:
 
     name = "scripted"
 
-    def __init__(self, calls: list[agent_mod.ToolCall]):
+    def __init__(self, calls: list[ToolCall]):
         self.calls = calls
         self.turns = 0
 
@@ -157,16 +167,24 @@ class ScriptedModel:
         if self.turns < len(self.calls):
             call = self.calls[self.turns]
             self.turns += 1
-            return agent_mod.ModelTurn(tool_calls=[call])
-        return agent_mod.ModelTurn(content="Understood.")
+            return ModelTurn(tool_calls=[call])
+        return ModelTurn(content="Understood.")
 
 
-def make_agent(toolbox=None, limits=None, model=None, threads=None):
+def heard(text, intent=PaymentIntent.PAY):
+    """An utterance whose intent is already judged."""
+    judged = Future()
+    judged.set_result(intent)
+    return Utterance(text, judged)
+
+
+def make_agent(toolbox=None, limits=None, model=None, threads=None, intent=None):
     return agent_mod.Agent(
         model=model or RegexModel(),
+        intent=intent or RegexIntent(),
         toolbox=toolbox or FakeToolbox(),
         limits=limits
-        or agent_mod.Limits(
+        or Limits(
             monthly_cap_ngn=MONTHLY,
             per_payment_cap_ngn=PER_PAYMENT,
             allowed_meters=ALLOWED,
@@ -483,20 +501,10 @@ class AgentTests(unittest.TestCase):
         # reads it covers: a question answered in one call instead of two
         # (the latency fix of 2026-10-24). A missing snapshot puts them back,
         # because a wrong number is worse than a slow one.
-        offered = [t["function"]["name"]
-                   for t in agent_mod.Agent._tools_for(True, "stark pay my dstv")]
+        offered = [t["function"]["name"] for t in agent_mod.Agent._tools_for(True)]
         self.assertEqual(offered, ["pay_bill", "find_plans", "add_bill", "add_money"])
         without = [t["function"]["name"] for t in agent_mod.Agent._tools_for(False)]
-        self.assertEqual(without, [t["function"]["name"] for t in agent_mod.TOOLS])
-
-        # A question may look plans up and nothing else. Measured: with `pay_bill`
-        # on the table, gemini-flash-lite paid the airtime on a hypothetical.
-        def names(said):
-            return [t["function"]["name"] for t in agent_mod.Agent._tools_for(True, said)]
-        self.assertEqual(names("stark what's my balance"), ["find_plans"])
-        self.assertEqual(
-            names("stark if i pay dstv and top up 5 thousand what is left"), ["find_plans"])
-        self.assertIn("pay_bill", names("stark can you pay my dstv"))
+        self.assertEqual(without, [t["function"]["name"] for t in TOOLS])
 
     def test_a_priced_top_up_defaults_to_the_meter_and_returns_the_token(self):
         toolbox = FakeToolbox()
@@ -570,7 +578,7 @@ class AgentTests(unittest.TestCase):
         # left?" paid the airtime. ScriptedModel ignores every prompt rule, so this
         # proves the refusal is code and not advice to the model.
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_dstv", "amount_ngn": 7_900})])
         reply = make_agent(toolbox, model=model).respond(
             "stark if i pay dstv and top up 5 thousand how much will i have left")
@@ -579,7 +587,7 @@ class AgentTests(unittest.TestCase):
 
     def test_confusion_is_answered_not_charged(self):
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_dstv", "amount_ngn": 7_900})])
         reply = make_agent(toolbox, model=model).respond(
             "stark im confused dstv says i owe but i paid last week what should i do")
@@ -589,40 +597,64 @@ class AgentTests(unittest.TestCase):
     def test_a_clear_instruction_still_pays(self):
         # Same setup as the plan-price test: a bouquet needs the ₦10,000 cap.
         toolbox = FakeToolbox()
-        limits = agent_mod.Limits(MONTHLY, 10_000, ALLOWED)
-        model = ScriptedModel([agent_mod.ToolCall(
+        limits = Limits(MONTHLY, 10_000, ALLOWED)
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_dstv", "amount_ngn": 7_900})])
         make_agent(toolbox, model=model, limits=limits).respond("stark pay my dstv now")
         self.assertEqual(toolbox.pay_calls, [("bill_dstv", 7_900)])
 
-    def test_question_detection_covers_the_phrasings_people_use(self):
-        for said in ("if i pay my dstv how much is left",
-                     "what if i top up five thousand",
-                     "how much would dstv cost",
-                     "how much will i have left",
-                     "should i pay the light bill",
-                     "do you think i can afford it",
-                     "im confused about my bill",
-                     "i don't understand this charge",
-                     "why was i charged twice",
-                     "explain my limit",
-                     # Read questions: a model offered only `pay_bill` reaches for it.
-                     "what's my most recent subscription",
-                     "what is my balance",
-                     "read my meter number",
-                     "when does my dstv renew",
-                     "show me my last receipt",
-                     "stark what's my most recent subscription"):
-            self.assertTrue(agent_mod.asks_instead_of_paying(said), said)
-        for said in ("pay my dstv", "top up the house with five thousand",
-                     "buy 2gb for my line", "can you pay my dstv",
-                     "please pay the light bill", "yes", "do it",
-                     "i want to renew my dstv"):
-            self.assertFalse(agent_mod.asks_instead_of_paying(said), said)
+    def test_the_judge_sees_the_last_reply_and_only_one_verdict_pays(self):
+        # A bare "yes" is a payment only after Stark offered one, so the judge is
+        # shown the reply before the message, not the message alone.
+        model = RecordingModel(content="PAY")
+        verdict = PaymentIntentJudge(model).judge("Shall I pay the ₦7,900?", "yes")
+        self.assertIs(verdict, PaymentIntent.PAY)
+        sent = model.seen[0]
+        self.assertEqual(sent[0]["role"], "system")
+        self.assertIn("Stark said: Shall I pay the ₦7,900?", sent[1]["content"])
+        self.assertIn("User said: yes", sent[1]["content"])
+
+        for answer, expected in (("PAY", PaymentIntent.PAY),
+                                 ("Pay.", PaymentIntent.PAY),
+                                 ("AGAIN", PaymentIntent.PAY_AGAIN),
+                                 ("NO", PaymentIntent.NOT_PAYMENT),
+                                 ("NO, they asked a question", PaymentIntent.NOT_PAYMENT),
+                                 # Unreadable or contradictory: never a payment.
+                                 ("", PaymentIntent.NOT_PAYMENT),
+                                 ("Sure thing!", PaymentIntent.NOT_PAYMENT),
+                                 ("PAY? NO.", PaymentIntent.NOT_PAYMENT)):
+            with self.subTest(answer=answer):
+                judge = PaymentIntentJudge(RecordingModel(content=answer))
+                self.assertIs(judge.judge("", "pay my dstv"), expected)
+
+    def test_a_judge_that_cannot_answer_charges_nothing(self):
+        class DownJudge:
+            def judge(self, stark_said, user_said):
+                raise RuntimeError("Could not reach NEAR AI")
+        toolbox = FakeToolbox()
+        model = ScriptedModel([ToolCall(
+            "pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 5_000})])
+        reply = make_agent(toolbox, model=model, intent=DownJudge()).respond(
+            "stark top it up with 5000")
+        self.assertEqual(toolbox.pay_calls, [])
+        self.assertIsNone(reply.token)
+
+    def test_the_judge_is_asked_once_a_turn(self):
+        class CountingJudge:
+            calls = 0
+            def judge(self, stark_said, user_said):
+                CountingJudge.calls += 1
+                return PaymentIntent.PAY
+        model = ScriptedModel([
+            ToolCall("pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 500}),
+            ToolCall("pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 300})])
+        make_agent(model=model, intent=CountingJudge()).respond(
+            "stark pay 500 then 300 on the meter")
+        self.assertEqual(CountingJudge.calls, 1)
 
     def test_paying_the_tv_targets_the_tv_bill_at_its_plan_price(self):
         # The demo's per-payment cap must cover a real bouquet (see server.py).
-        limits = agent_mod.Limits(MONTHLY, 10_000, ALLOWED)
+        limits = Limits(MONTHLY, 10_000, ALLOWED)
         toolbox = FakeToolbox()
         reply = make_agent(toolbox, limits=limits).respond("stark pay my dstv")
         self.assertEqual(toolbox.pay_calls, [("bill_dstv", 7_900)])
@@ -658,9 +690,9 @@ class AgentTests(unittest.TestCase):
         # each through and it is the cap that must hold: the second is not paid.
         toolbox = FakeToolbox()
         model = ScriptedModel([
-            agent_mod.ToolCall(id="1", name="pay_bill",
+            ToolCall(id="1", name="pay_bill",
                                arguments={"bill_id": "bill_home_meter", "amount_ngn": 5_000}),
-            agent_mod.ToolCall(id="2", name="pay_bill",
+            ToolCall(id="2", name="pay_bill",
                                arguments={"bill_id": "bill_home_meter", "amount_ngn": 3_000}),
         ])
         reply = make_agent(toolbox, model=model).respond(
@@ -674,9 +706,9 @@ class AgentTests(unittest.TestCase):
         office = {**ELECTRICITY, "id": "bill_office_meter", "label": "Office meter"}
         toolbox = FakeToolbox(bills=[ELECTRICITY, office])
         model = ScriptedModel([
-            agent_mod.ToolCall(id="1", name="pay_bill",
+            ToolCall(id="1", name="pay_bill",
                                arguments={"bill_id": "bill_home_meter", "amount_ngn": 5_000}),
-            agent_mod.ToolCall(id="2", name="pay_bill",
+            ToolCall(id="2", name="pay_bill",
                                arguments={"bill_id": "bill_office_meter", "amount_ngn": 3_000}),
         ])
         make_agent(toolbox, model=model).respond("stark top up home with 5000 and office with 3000")
@@ -703,7 +735,7 @@ class AgentTests(unittest.TestCase):
 
     def test_unlisted_meter_is_refused(self):
         toolbox = FakeToolbox()
-        limits = agent_mod.Limits(
+        limits = Limits(
             monthly_cap_ngn=MONTHLY, per_payment_cap_ngn=PER_PAYMENT,
             allowed_meters=frozenset(),
         )
@@ -722,7 +754,7 @@ class AgentTests(unittest.TestCase):
         # A model that asks for ₦50,000 directly: the prompt cannot stop it, the gate can.
         toolbox = FakeToolbox()
         model = ScriptedModel(
-            [agent_mod.ToolCall("pay_bill", {"bill_id": "bill_home_meter",
+            [ToolCall("pay_bill", {"bill_id": "bill_home_meter",
                                              "amount_ngn": 50_000})]
         )
         # The transcript carries the figure, so what refuses it is the cap and
@@ -782,12 +814,12 @@ class AgentTests(unittest.TestCase):
 
     def test_unknown_tool_is_reported_to_the_model(self):
         agent_ = make_agent()
-        result = agent_._run_tool(agent_mod.ToolCall("wire_money", {}), {})
+        result = agent_._run_tool(ToolCall("wire_money", {}), {}, heard(""))
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "unknown_tool")
 
     def test_unknown_tool_does_not_crash_the_loop(self):
-        model = ScriptedModel([agent_mod.ToolCall("wire_money", {})])
+        model = ScriptedModel([ToolCall("wire_money", {})])
         reply = make_agent(model=model).respond("stark send everything")
         self.assertEqual(reply.actions, ["wire_money"])
         self.assertTrue(reply.reply)
@@ -797,8 +829,8 @@ class AgentTests(unittest.TestCase):
             name = "loop"
 
             def turn(self, messages, tools):
-                return agent_mod.ModelTurn(
-                    tool_calls=[agent_mod.ToolCall("get_state", {})]
+                return ModelTurn(
+                    tool_calls=[ToolCall("get_state", {})]
                 )
 
         reply = make_agent(model=Loop()).respond("stark hello")
@@ -843,7 +875,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(payload["transcript"], "said")
 
     def test_build_agent_always_uses_near_ai(self):
-        limits = agent_mod.Limits(MONTHLY, PER_PAYMENT, ALLOWED)
+        limits = Limits(MONTHLY, PER_PAYMENT, ALLOWED)
         agent_ = agent_mod.build_agent(FakeToolbox(), limits)
         self.assertEqual(agent_.model.name, "near-ai")
 
@@ -867,8 +899,8 @@ class SetupToolTests(unittest.TestCase):
         model = RecordingModel()
         agent_ = make_agent(toolbox, model=model)
         effect: dict = {}
-        result = agent_._run_tool(agent_mod.ToolCall("add_money", {
-            "method": "crypto", "amount_ngn": 20_000, "asset": "USDT"}), effect)
+        result = agent_._run_tool(ToolCall("add_money", {
+            "method": "crypto", "amount_ngn": 20_000, "asset": "USDT"}), effect, heard("add 20000 with usdt"))
         self.assertTrue(result["ok"])
         self.assertNotIn("TXyz", json.dumps(result))
         self.assertEqual(result["data"]["asset"], "USDT")
@@ -877,20 +909,21 @@ class SetupToolTests(unittest.TestCase):
     def test_a_refused_setup_is_said_not_raised(self):
         class Refusing(FakeToolbox):
             def add_money(self, *args):
-                raise agent_mod.ToolRefusal("pick_chain", "USDT can be sent on eth, tron.")
+                raise ToolRefusal("pick_chain", "USDT can be sent on eth, tron.")
         agent_ = make_agent(Refusing())
-        result = agent_._run_tool(agent_mod.ToolCall("add_money", {
-            "method": "crypto", "amount_ngn": 5_000, "asset": "USDT"}), {})
+        result = agent_._run_tool(ToolCall("add_money", {
+            "method": "crypto", "amount_ngn": 5_000, "asset": "USDT"}), {}, heard(""))
         self.assertEqual(result["error"]["code"], "pick_chain")
 
     def test_a_bill_the_agent_saved_is_paid_without_a_second_step(self):
         saved = {"id": "bill_new", "kind": "airtime", "provider": "MTN",
                  "label": "New line", "reference": "08031112222"}
         toolbox = FakeToolbox(bills=[*BILLS, saved])
-        limits = agent_mod.Limits(MONTHLY, PER_PAYMENT, ALLOWED | {"08031112222"})
+        limits = Limits(MONTHLY, PER_PAYMENT, ALLOWED | {"08031112222"})
         effect: dict = {}
-        result = make_agent(toolbox, limits=limits)._pay_bill(
-            {"bill_id": "bill_new", "amount_ngn": 1_000}, effect, "pay 1000 to the new line")
+        result = make_agent(toolbox, limits=limits).gate.pay(
+            {"bill_id": "bill_new", "amount_ngn": 1_000}, effect,
+            heard("pay 1000 to the new line"), limits)
         self.assertNotEqual((result.get("error") or {}).get("code"), "bill_unconfirmed")
         self.assertEqual(len(toolbox.pay_calls), 1)
 
@@ -904,8 +937,8 @@ class SetupToolTests(unittest.TestCase):
 
     def test_add_bill_saves_through_the_toolbox(self):
         toolbox = FakeToolbox()
-        result = make_agent(toolbox)._run_tool(agent_mod.ToolCall("add_bill", {
-            "kind": "tv", "provider": "DStv", "reference": "7023 456 789"}), {})
+        result = make_agent(toolbox)._run_tool(ToolCall("add_bill", {
+            "kind": "tv", "provider": "DStv", "reference": "7023 456 789"}), {}, heard(""))
         self.assertTrue(result["ok"])
         self.assertEqual(toolbox.bills[-1]["provider"], "DStv")
 
@@ -931,7 +964,8 @@ class AmountParsingTests(unittest.TestCase):
     def test_amounts(self):
         for text, expected in self.CASES:
             with self.subTest(text=text):
-                self.assertEqual(agent_mod.parse_amount(text), expected)
+                figures = SpokenAmounts.figures(text)
+                self.assertEqual(figures[0] if figures else None, expected)
 
 
 # --- limits in the prompt, and an answer when the model dies -----------------
@@ -980,8 +1014,8 @@ class LimitReasoningTests(unittest.TestCase):
         # The wording the demo relies on: say which limit decided it, and send an
         # over-limit request on to pay_bill so it reaches the owner for approval
         # instead of the model refusing it from the limits it can see.
-        self.assertIn("per payment limit", agent_mod.SYSTEM_PROMPT)
-        self.assertIn("still call pay_bill", agent_mod.SYSTEM_PROMPT)
+        self.assertIn("per payment limit", SYSTEM_PROMPT)
+        self.assertIn("still call pay_bill", SYSTEM_PROMPT)
 
 
 class ModelFailureTests(unittest.TestCase):
@@ -996,8 +1030,8 @@ class ModelFailureTests(unittest.TestCase):
             def turn(self, messages, tools):
                 self.calls += 1
                 if after and self.calls == 1:
-                    return agent_mod.ModelTurn(
-                        tool_calls=[agent_mod.ToolCall(after, {})]
+                    return ModelTurn(
+                        tool_calls=[ToolCall(after, {})]
                     )
                 raise RuntimeError("Could not reach NEAR AI: EOF occurred")
 
@@ -1024,9 +1058,9 @@ class ModelFailureTests(unittest.TestCase):
             def turn(self, messages, tools):
                 self.calls += 1
                 if self.calls == 1:
-                    return agent_mod.ModelTurn(
+                    return ModelTurn(
                         tool_calls=[
-                            agent_mod.ToolCall(
+                            ToolCall(
                                 "pay_bill",
                                 {"bill_id": "bill_home_meter", "amount_ngn": 1_000},
                             )
@@ -1046,7 +1080,7 @@ class NearAiRetryTests(unittest.TestCase):
     OK = json.dumps({"choices": [{"message": {"content": "fine"}}]}).encode()
 
     def model(self):
-        return agent_mod.NearAiModel(api_key="test-key")
+        return NearAiModel(api_key="test-key")
 
     def transport(self, answer):
         """Stand in for the pooled connection, one per attempt.
@@ -1079,7 +1113,7 @@ class NearAiRetryTests(unittest.TestCase):
             wires.append(Wire())
             return wires[-1]
 
-        patch = mock.patch.object(agent_mod.NearAiModel, "_acquire", acquire)
+        patch = mock.patch.object(NearAiModel, "_acquire", acquire)
         patch.start()
         self.addCleanup(patch.stop)
         return wires
@@ -1097,7 +1131,7 @@ class NearAiRetryTests(unittest.TestCase):
         self.transport(stalled_once)
         model = self.model()
         model.begin_turn()
-        with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(model_mod.time, "sleep"):
             model.turn([{"role": "user", "content": "hi"}], [])
 
         retries = model.retries()
@@ -1118,7 +1152,7 @@ class NearAiRetryTests(unittest.TestCase):
         time.sleep(0.05)
 
         wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
-        self.assertFalse(agent_mod.NearAiModel._alive(wire))
+        self.assertFalse(NearAiModel._alive(wire))
 
     def test_a_healthy_idle_socket_is_lent_out(self):
         import socket as socket_mod
@@ -1128,7 +1162,7 @@ class NearAiRetryTests(unittest.TestCase):
         self.addCleanup(held.close)
 
         wire = SimpleNamespace(conn=SimpleNamespace(sock=live))
-        self.assertTrue(agent_mod.NearAiModel._alive(wire))
+        self.assertTrue(NearAiModel._alive(wire))
 
     def test_a_pooled_connection_is_marked_as_reused(self):
         """A read timeout on a reused socket is a dead pool entry; on a fresh one
@@ -1166,8 +1200,8 @@ class NearAiRetryTests(unittest.TestCase):
 
         self.transport(always_stalls)
         model = self.model()
-        with mock.patch.object(agent_mod.NearAiModel, "RETRY_BUDGET_SECONDS", 0.0):
-            with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(NearAiModel, "RETRY_BUDGET_SECONDS", 0.0):
+            with mock.patch.object(model_mod.time, "sleep"):
                 with self.assertRaises(RuntimeError):
                     model.turn([{"role": "user", "content": "hi"}], [])
         self.assertEqual(attempts, [])
@@ -1182,22 +1216,22 @@ class NearAiRetryTests(unittest.TestCase):
 
     def test_two_network_failures_then_success(self):
         attempts = []
-        fail_first = agent_mod.NearAiModel.ATTEMPTS - 1
+        fail_first = NearAiModel.ATTEMPTS - 1
 
         def flaky(body):
             attempts.append(1)
             if len(attempts) <= fail_first:
-                raise agent_mod.urllib.error.URLError(
+                raise model_mod.urllib.error.URLError(
                     "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred"
                 )
             return 200, self.OK
 
         self.transport(flaky)
-        with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(model_mod.time, "sleep"):
             turn = self.model().turn([{"role": "user", "content": "hi"}], [])
 
         # Retried, not swallowed: every attempt reached the endpoint.
-        self.assertEqual(len(attempts), agent_mod.NearAiModel.ATTEMPTS)
+        self.assertEqual(len(attempts), NearAiModel.ATTEMPTS)
         self.assertEqual(turn.content, "fine")
 
     def test_a_turn_without_tools_leaves_the_field_out(self):
@@ -1206,26 +1240,26 @@ class NearAiRetryTests(unittest.TestCase):
 
         model = self.model()
         model.turn([{"role": "user", "content": "how much is left?"}], [])
-        model.turn([{"role": "user", "content": "pay it"}], agent_mod.TOOLS)
+        model.turn([{"role": "user", "content": "pay it"}], TOOLS)
 
         sent = [wire.sent[0] for wire in wires]
         self.assertNotIn("tools", sent[0])
         self.assertNotIn("tool_choice", sent[0])
-        self.assertEqual(sent[1]["tools"], agent_mod.TOOLS)
+        self.assertEqual(sent[1]["tools"], TOOLS)
 
     def test_it_gives_up_and_says_why(self):
         attempts = []
 
         def dead(body):
             attempts.append(1)
-            raise agent_mod.urllib.error.URLError("connection reset")
+            raise model_mod.urllib.error.URLError("connection reset")
 
         self.transport(dead)
-        with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(model_mod.time, "sleep"):
             with self.assertRaises(RuntimeError) as raised:
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
-        self.assertEqual(len(attempts), agent_mod.NearAiModel.ATTEMPTS)
+        self.assertEqual(len(attempts), NearAiModel.ATTEMPTS)
         self.assertIn("Could not reach NEAR AI", str(raised.exception))
 
     def test_a_bad_request_is_not_retried(self):
@@ -1236,7 +1270,7 @@ class NearAiRetryTests(unittest.TestCase):
             return 401, b"bad key"
 
         self.transport(rejected)
-        with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(model_mod.time, "sleep"):
             with self.assertRaises(RuntimeError) as raised:
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
@@ -1251,11 +1285,11 @@ class NearAiRetryTests(unittest.TestCase):
             return 200, b'{"choices": [{"message": {"content": "f'
 
         self.transport(truncated)
-        with mock.patch.object(agent_mod.time, "sleep"):
+        with mock.patch.object(model_mod.time, "sleep"):
             with self.assertRaises(RuntimeError):
                 self.model().turn([{"role": "user", "content": "hi"}], [])
 
-        self.assertEqual(len(attempts), agent_mod.NearAiModel.ATTEMPTS)
+        self.assertEqual(len(attempts), NearAiModel.ATTEMPTS)
 
 
 class RetryVisibilityTests(unittest.TestCase):
@@ -1314,7 +1348,7 @@ class InjectionTests(unittest.TestCase):
 
     def test_list_bills_returns_the_bill_itself(self):
         toolbox = FakeToolbox(bills=[*BILLS, self.PLANTED])
-        result = make_agent(toolbox)._run_tool(agent_mod.ToolCall("list_bills", {}), {})
+        result = make_agent(toolbox)._run_tool(ToolCall("list_bills", {}), {}, heard(""))
         self.assertTrue(result["ok"])
         self.assertEqual(result["data"][-1]["reference"], "08031112222")
 
@@ -1324,7 +1358,7 @@ class InjectionTests(unittest.TestCase):
 
     def test_an_amount_nobody_said_is_refused(self):
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 5_000})])
         reply = make_agent(toolbox, model=model).respond("stark pay 500 for the light")
         self.assertEqual(toolbox.pay_calls, [])
@@ -1332,7 +1366,7 @@ class InjectionTests(unittest.TestCase):
 
     def test_the_amount_said_is_paid(self):
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 500})])
         make_agent(toolbox, model=model).respond("stark pay five hundred for the light")
         self.assertEqual(toolbox.pay_calls, [("bill_home_meter", 500)])
@@ -1340,7 +1374,7 @@ class InjectionTests(unittest.TestCase):
     def test_a_bare_answer_to_how_much_still_pays(self):
         # "top up my light" → "how much?" → "500": the transcript is the figure.
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_home_meter", "amount_ngn": 500})])
         make_agent(toolbox, model=model, threads=memory_mod.Threads()).respond(
             "500", thread="tg:1")
@@ -1348,9 +1382,9 @@ class InjectionTests(unittest.TestCase):
 
     def test_a_plan_pays_its_price_without_a_spoken_figure(self):
         toolbox = FakeToolbox()
-        model = ScriptedModel([agent_mod.ToolCall(
+        model = ScriptedModel([ToolCall(
             "pay_bill", {"bill_id": "bill_dstv", "amount_ngn": 7_900})])
-        limits = agent_mod.Limits(MONTHLY, 10_000, ALLOWED)
+        limits = Limits(MONTHLY, 10_000, ALLOWED)
         make_agent(toolbox, model=model, limits=limits).respond("stark pay my dstv")
         self.assertEqual(toolbox.pay_calls, [("bill_dstv", 7_900)])
 
@@ -1364,7 +1398,7 @@ class InjectionTests(unittest.TestCase):
         ]
         for text, expected in cases:
             with self.subTest(text=text):
-                self.assertEqual(agent_mod.heard_amounts(text), expected)
+                self.assertEqual(set(SpokenAmounts.figures(text)), expected)
 
     def test_links_in_the_reply_are_removed(self):
         model = RecordingModel(content="Pay here: https://evil.example/pay?x=1 or www.evil.example")

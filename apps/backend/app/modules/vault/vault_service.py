@@ -53,7 +53,7 @@ from typing import Any, Callable, Optional
 from app.common.clock import Clock
 from app.database import neon
 from app.modules.account.account_service import AccountService
-from app.modules.agent import agent as agent_layer
+from app.modules.agent.toolbox import Limits
 from app.modules.chain import near_tx
 from app.modules.chain.vault_chain import ChainResult, VaultChain
 
@@ -374,7 +374,7 @@ class VaultService:
             raise AuthorisationFailed(_NOT_SETTLED)
         return PaymentAuthorisation(result.sent_tx_hash, outcome.get("payment_id"))
 
-    def _sync_policy(self, vault_id: str, limits: agent_layer.Limits) -> None:
+    def _sync_policy(self, vault_id: str, limits: Limits) -> None:
         """Push the account's caps, meters and the naira rate where the vault differs.
 
         Skipped on a dry chain, which has nothing to read.
@@ -395,8 +395,14 @@ class VaultService:
         }
         if held != wanted:
             self.chain.call(vault_id, "set_policy", wanted)
+        # The vault takes no rate above the owner's ceiling, nor a rise of more than
+        # 5% in a day, so a market jump is followed in steps and Stark covers the
+        # gap. A vault still on code from before the bound reports no maximum.
+        state = self.chain.state(vault_id)
         rate = self.usdc_per_kngn()
-        if int(self.chain.state(vault_id)["usdc_per_kngn"]) != rate:
+        if "max_usdc_per_kngn" in state:
+            rate = min(rate, int(state["max_usdc_per_kngn"]))
+        if int(state["usdc_per_kngn"]) != rate:
             self.chain.call(vault_id, "set_rate", {"usdc_per_kngn": str(rate)})
 
     # --- reconciliation -------------------------------------------------------

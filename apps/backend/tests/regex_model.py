@@ -10,17 +10,68 @@ from __future__ import annotations
 
 import re
 
-from app.modules.agent.agent import (
-    ModelTurn,
-    ToolCall,
-    _loads,
-    asks_instead_of_paying,
-    parse_amount,
-)
+from app.modules.agent.model import ModelTurn, ToolCall
+from app.modules.agent.payment_intent import PaymentIntent
+from app.modules.agent.spoken_amounts import SpokenAmounts
 
 # What it proposes when no figure was spoken. Proposing is all it does: the gate
 # refuses an unpriced charge, so this never reaches the vendor.
 DEFAULT_AMOUNT_NGN = 5_000
+
+
+# The intent rules the app used before the judge was a model. Here they only stand
+# in for that model, so the tests that drive RegexModel stay deterministic.
+_QUESTION_NOT_PAYMENT = re.compile(
+    r"\b(?:"
+    r"if\s+(?:i|we)\b|what\s+if\b|suppose|supposing|imagine|hypothetically"
+    r"|how\s+much\s+(?:would|will)\b|what\s+would\b"
+    r"|should\s+i\b|do\s+you\s+think\b"
+    r"|i(?:'|\u2019)?m\s+confused|i\s+am\s+confused|i\s+don(?:'|\u2019)?t\s+understand"
+    r"|why\s+(?:did|was|is|are|has|have)\b|explain\b"
+    r")",
+    re.IGNORECASE,
+)
+_READ_QUESTION = re.compile(
+    r"^\s*(?:what|whats|what's|which|who|when|where|how|read|show|list|tell|explain"
+    r"|do\s+i|did\s+i|does|is|are|was|were|can\s+you\s+(?:tell|read|show|see))\b",
+    re.IGNORECASE,
+)
+_PERMISSION = re.compile(
+    r"^\s*(?:can|could|would|will)\s+(?:you|u)\s+(?:\w+\s+){0,2}"
+    r"(?:pay|top\s*up|topup|buy|renew|recharge|fund|load|purchase)\b",
+    re.IGNORECASE,
+)
+_WAKE = re.compile(r"^\s*(?:hey\s+|ok\s+|okay\s+)?stark[,\s]+", re.IGNORECASE)
+_REPEAT_OK = re.compile(
+    r"\b(?:again|one\s+more|twice|second\s+time|second\s+one|confirm(?:ed)?"
+    r"|yes|yeah|sure|certainly|do\s+it|go\s+ahead|really|meant\s+it)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_instead_of_paying(transcript: str) -> bool:
+    said = _WAKE.sub("", transcript or "")
+    if _QUESTION_NOT_PAYMENT.search(said):
+        return True
+    if not _READ_QUESTION.search(said):
+        return False
+    return not _PERMISSION.search(said)
+
+
+class RegexIntent:
+    """Deterministic stand-in for `PaymentIntentJudge`."""
+
+    def judge(self, stark_said: str, user_said: str) -> PaymentIntent:
+        if asks_instead_of_paying(user_said):
+            return PaymentIntent.NOT_PAYMENT
+        if _REPEAT_OK.search(user_said):
+            return PaymentIntent.PAY_AGAIN
+        return PaymentIntent.PAY
+
+
+def parse_amount(text: str) -> int | None:
+    figures = SpokenAmounts.figures(text)
+    return figures[0] if figures else None
 
 
 _PAY_RE = re.compile(r"\b(top\s*(it\s*)?up|topup|buy|pay|recharge|send)\b")
@@ -133,7 +184,7 @@ class RegexModel:
         return ""
 
     def _after_tool(self, message: dict, user_text: str) -> ModelTurn:
-        result = _loads(message.get("content"))
+        result = ToolCall.parse_arguments(message.get("content"))
         name = message.get("name") or ""
 
         if name == "list_bills" and _PAY_RE.search(user_text.lower()):

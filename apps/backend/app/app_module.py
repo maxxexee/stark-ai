@@ -12,7 +12,8 @@ from app.database import neon
 from app.modules.admin.admin_service import AdminService
 from app.modules.account.account_repository import AccountRepository
 from app.modules.account.account_service import AccountService
-from app.modules.agent import agent as agent_layer
+from app.modules.agent.agent import Agent, build_agent
+from app.modules.agent.toolbox import Limits
 from app.modules.agent.account_toolbox import AccountToolbox
 from app.modules.approval.approval_repository import ApprovalRepository
 from app.modules.approval.approval_service import ApprovalService
@@ -188,7 +189,7 @@ class AppModule:
         return cls(ApiConfigService.from_env(), neon.open_database())
 
     def _build_agent(
-        self, account_id: str, limits: agent_layer.Limits
-    ) -> agent_layer.Agent:
+        self, account_id: str, limits: Limits
+    ) -> Agent:
         """An agent bound to one account's toolbox and caps."""
-        return agent_layer.build_agent(AccountToolbox(account_id, self), limits)
+        return build_agent(AccountToolbox(account_id, self), limits)

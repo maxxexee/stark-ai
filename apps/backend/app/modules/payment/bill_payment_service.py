@@ -19,7 +19,7 @@ from app.common.api_error import ApiError
 from app.common.clock import Clock
 from app.modules.account.account_service import AccountService
 from app.modules.agent import policy
-from app.modules.agent.agent import Limits
+from app.modules.agent.toolbox import Limits
 from app.modules.bill.bill_service import BillService
 from app.modules.payment import payment_service
 from app.modules.payment.payment_service import PaymentService
