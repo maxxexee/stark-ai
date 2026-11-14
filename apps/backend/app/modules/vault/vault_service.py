@@ -395,8 +395,14 @@ class VaultService:
         }
         if held != wanted:
             self.chain.call(vault_id, "set_policy", wanted)
+        # The vault takes no rate above the owner's ceiling, nor a rise of more than
+        # 5% in a day, so a market jump is followed in steps and Stark covers the
+        # gap. A vault still on code from before the bound reports no maximum.
+        state = self.chain.state(vault_id)
         rate = self.usdc_per_kngn()
-        if int(self.chain.state(vault_id)["usdc_per_kngn"]) != rate:
+        if "max_usdc_per_kngn" in state:
+            rate = min(rate, int(state["max_usdc_per_kngn"]))
+        if int(state["usdc_per_kngn"]) != rate:
             self.chain.call(vault_id, "set_rate", {"usdc_per_kngn": str(rate)})
 
     # --- reconciliation -------------------------------------------------------

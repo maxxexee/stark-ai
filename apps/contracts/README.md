@@ -21,9 +21,9 @@ From the repo root:
 
 | Command | What it does |
 |---|---|
-| `bun --filter @stark/contracts run contract:test` | 81 unit tests on the host |
+| `bun --filter @stark/contracts run contract:test` | 91 unit tests on the host |
 | `bun --filter @stark/contracts run contract:check` | type-check the wasm target |
-| `bun --filter @stark/contracts run contract:build` | deployable wasm → `vault/target/near/stark_vault.wasm` (193 KB) |
+| `bun --filter @stark/contracts run contract:build` | deployable wasm → `vault/target/near/stark_vault.wasm` (197 KB) |
 
 Or from `vault/`: `cargo test`, `cargo near build non-reproducible-wasm`.
 
@@ -36,7 +36,7 @@ toolchain.
 
 If cargo reports no toolchain although rustup is installed, your shell's `$HOME` is
 probably redirected; set `RUSTUP_HOME` to the real `~/.rustup`. See
-[`docs/HANDOFF.md`](../../docs/HANDOFF.md) §1.
+[`docs/HANDOFF.md`](../../docs/HANDOFF.md) §9.
 
 ## The vault
 
@@ -53,6 +53,15 @@ pause, and an owner withdraw that still works while paused. Caps are in naira; `
 converts at `usdc_per_kngn`, which only the funder sets. The spend counter resets on the
 first of each calendar month.
 
+**Bounds the rate:** because the caps are in naira, the rate decides how much USDC they
+let out. `set_rate` refuses a rate above the owner's ceiling (`set_rate_ceiling`; a
+ceiling below the current rate lowers the rate at once) and a rise of more than 5% over
+the rate the day opened at. A day is 24 hours from the first change after the last day
+ended. Falls are never limited. `get_state` reports `rate_ceiling` and
+`max_usdc_per_kngn`, the highest rate `set_rate` would take now, and every change emits
+`rate_changed`. The bound holds whoever signs: while Stark's funder is still a vault's
+owner it could raise the ceiling, but not the 5% a day.
+
 **Settles:** `pay` sends the bill's USDC to the treasury, which pays the biller in naira.
 If that transfer fails, the payment is reversed before `pay` returns (`settled: false`).
 A bank withdrawal's USDC goes back to the treasury (`debit`), and a failed bill's USDC
@@ -60,7 +69,8 @@ comes back from the treasury with `msg = "refund:<payment_id>"`, for that exact 
 only.
 
 **Roles:** the agent's function-call key may only call `pay` on its own vault. The
-funder sets the rate, deposits and debits. The owner changes policy. So a leaked agent
+funder sets the rate, inside its bounds, and deposits and debits. The owner changes
+policy and the rate ceiling. So a leaked agent
 key cannot move the rate, the caps or where the money goes.
 
 **Hand-over:** ownership moves in two steps. The owner calls `propose_owner(owner)`, and
@@ -70,7 +80,7 @@ accept, so the vault cannot be handed to an account nobody holds. (`set_owner` i
 
 **Upgrading existing vaults.** Vaults created from the global contract run whatever code
 is published under the funder's id, so a change reaches them only once it is published
-again (HANDOFF §13.3):
+again (HANDOFF §8.2):
 
 ```sh
 cd apps/backend

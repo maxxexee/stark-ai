@@ -24,6 +24,9 @@
 //!
 //! Money is USDC (the `usdc` NEP-141 token). Caps are in naira, the unit people
 //! budget in, and `pay` converts at `usdc_per_kngn`, which only the funder sets.
+//! Because the caps are in naira, the rate decides how much USDC they let out, so
+//! the rate is bounded too: it never goes above the owner's `rate_ceiling`, and it
+//! rises at most `MAX_DAILY_RISE_BPS` within a day, whoever holds the funder key.
 //! A paid bill's USDC goes to `treasury`, which pays the biller in naira; if that
 //! transfer fails, the payment is reversed before `pay` returns.
 
@@ -41,7 +44,7 @@ use near_sdk::{
 
 /// NEP-297 event standard identifier.
 const EVENT_STANDARD: &str = "stark-vault";
-const EVENT_VERSION: &str = "3.0";
+const EVENT_VERSION: &str = "3.1";
 
 const FT_TRANSFER_GAS: Gas = Gas::from_tgas(10);
 const CALLBACK_GAS: Gas = Gas::from_tgas(10);
@@ -56,6 +59,15 @@ const MAX_MSG_LEN: usize = 128;
 /// `Vault` struct so vaults already holding state still deserialise once they run
 /// this code.
 const PENDING_OWNER_KEY: &[u8] = b"pending_owner";
+/// Raw storage keys for the rate bounds, outside `Vault` for the same reason.
+/// The ceiling is a `u128` (little-endian); the anchor is the day's opening rate
+/// (`u128`) followed by the block time that day opened at (`u64`, nanoseconds).
+const RATE_CEILING_KEY: &[u8] = b"rate_ceiling";
+const RATE_ANCHOR_KEY: &[u8] = b"rate_anchor";
+/// How far the rate may rise inside one day, in basis points of the day's opening
+/// rate. A rise is what costs the user: more USDC per naira paid. Falls are free.
+const MAX_DAILY_RISE_BPS: u128 = 500;
+const DAY_NS: u64 = 86_400_000_000_000;
 
 const ERR_OWNER_ONLY: &str = "Only the owner can do that";
 const ERR_FUNDER_ONLY: &str = "Only Stark can do that";
@@ -65,6 +77,8 @@ const ERR_NO_BALANCE_MSG: &str = "That's more than the balance";
 const ERR_ZERO: &str = "That amount needs to be above zero.";
 const ERR_NO_RATE: &str = "The naira rate needs to be above zero";
 const ERR_NOT_PROPOSED: &str = "This account has not been offered the vault";
+const ERR_OVER_CEILING: &str = "That rate is above the owner's ceiling";
+const ERR_RISE_TOO_FAST: &str = "The rate can rise at most 5% in a day";
 
 #[near]
 #[derive(BorshStorageKey)]
@@ -139,6 +153,11 @@ pub struct StateView {
     pub treasury: AccountId,
     pub usdc: AccountId,
     pub usdc_per_kngn: U128,
+    /// The highest rate the owner allows, if they set one.
+    pub rate_ceiling: Option<U128>,
+    /// The highest rate `set_rate` would take right now: the ceiling, or the
+    /// day's opening rate plus `MAX_DAILY_RISE_BPS`, whichever is lower.
+    pub max_usdc_per_kngn: U128,
     pub paused: bool,
     /// `"YYYY-MM"` the spend counter belongs to.
     pub period_key: String,
@@ -308,11 +327,22 @@ impl Vault {
         U128(self.balance_usdc)
     }
 
-    /// The naira rate `pay` converts at. Funder-only, so the agent key can never move it.
+    /// The naira rate `pay` converts at. Funder-only, so the agent key can never move
+    /// it, and bounded, so the funder key cannot either: never above the owner's
+    /// ceiling, and up by at most `MAX_DAILY_RISE_BPS` of the day's opening rate.
     pub fn set_rate(&mut self, usdc_per_kngn: U128) {
         self.assert_funder();
-        require!(usdc_per_kngn.0 > 0, ERR_NO_RATE);
-        self.usdc_per_kngn = usdc_per_kngn.0;
+        let rate = usdc_per_kngn.0;
+        require!(rate > 0, ERR_NO_RATE);
+        if let Some(ceiling) = self.rate_ceiling() {
+            require!(rate <= ceiling, ERR_OVER_CEILING);
+        }
+        let (opening, since) = self.rate_anchor();
+        require!(rate <= Self::max_rise(opening), ERR_RISE_TOO_FAST);
+        let mut anchor = opening.to_le_bytes().to_vec();
+        anchor.extend_from_slice(&since.to_le_bytes());
+        env::storage_write(RATE_ANCHOR_KEY, &anchor);
+        self.change_rate(rate);
     }
 
     // --- owner -------------------------------------------------------------------
@@ -331,6 +361,19 @@ impl Vault {
         self.monthly_cap_ngn = monthly_cap_ngn.0;
         self.per_payment_cap_ngn = per_payment_cap_ngn.0;
         self.allowed_meters = allowed_meters;
+    }
+
+    /// The highest rate the funder may set. A ceiling below the current rate brings
+    /// the rate down to it at once.
+    pub fn set_rate_ceiling(&mut self, usdc_per_kngn: U128) {
+        self.assert_owner();
+        let ceiling = usdc_per_kngn.0;
+        require!(ceiling > 0, ERR_NO_RATE);
+        env::storage_write(RATE_CEILING_KEY, &ceiling.to_le_bytes());
+        emit("rate_ceiling_set", json!({ "rate_ceiling": usdc_per_kngn }));
+        if self.usdc_per_kngn > ceiling {
+            self.change_rate(ceiling);
+        }
     }
 
     pub fn add_meter(&mut self, meter: String) {
@@ -412,12 +455,16 @@ impl Vault {
 
     pub fn get_state(&self) -> StateView {
         let (key, spent) = self.current_period();
+        let ceiling = self.rate_ceiling();
+        let rise = Self::max_rise(self.rate_anchor().0);
         StateView {
             owner: self.owner.clone(),
             funder: self.funder.clone(),
             treasury: self.treasury.clone(),
             usdc: self.usdc.clone(),
             usdc_per_kngn: U128(self.usdc_per_kngn),
+            rate_ceiling: ceiling.map(U128),
+            max_usdc_per_kngn: U128(ceiling.map_or(rise, |c| c.min(rise))),
             paused: self.paused,
             period_key: key,
             spent_period_ngn: U128(spent),
@@ -610,6 +657,46 @@ impl Vault {
             ONE_YOCTO,
             FT_TRANSFER_GAS,
         )
+    }
+
+    fn change_rate(&mut self, rate: u128) {
+        let previous = std::mem::replace(&mut self.usdc_per_kngn, rate);
+        emit(
+            "rate_changed",
+            json!({ "from": U128(previous), "to": U128(rate) }),
+        );
+    }
+
+    fn rate_ceiling(&self) -> Option<u128> {
+        env::storage_read(RATE_CEILING_KEY).map(|bytes| {
+            u128::from_le_bytes(
+                bytes
+                    .try_into()
+                    .unwrap_or_else(|_| env::panic_str("Corrupt rate ceiling")),
+            )
+        })
+    }
+
+    /// The rate the current day opened at, and when that day opened. A day that
+    /// has run its 24 hours, or a vault that never stored one, opens a new day at
+    /// the current rate.
+    fn rate_anchor(&self) -> (u128, u64) {
+        let now = env::block_timestamp();
+        if let Some(bytes) = env::storage_read(RATE_ANCHOR_KEY) {
+            if bytes.len() != 24 {
+                env::panic_str("Corrupt rate anchor");
+            }
+            let opening = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+            let since = u64::from_le_bytes(bytes[16..].try_into().unwrap());
+            if now.saturating_sub(since) < DAY_NS {
+                return (opening, since);
+            }
+        }
+        (self.usdc_per_kngn, now)
+    }
+
+    fn max_rise(opening: u128) -> u128 {
+        opening * (10_000 + MAX_DAILY_RISE_BPS) / 10_000
     }
 
     fn pending_owner(&self) -> Option<AccountId> {
