@@ -45,9 +45,11 @@ answer is a delight, not a dependency. Typed messages keep typed replies.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -63,6 +65,10 @@ from app.modules.telegram.identity_repository import CODE_TTL_SECONDS
 CHANNEL = "telegram"
 
 TELEGRAM_API = "https://api.telegram.org"
+# What the chat shows while a turn runs. Telegram clears it after about five
+# seconds, so the adapter sends it again for as long as the turn is open.
+TYPING = "typing"
+TYPING_REFRESH_SECONDS = 4.0
 
 LINK_HELP = (
     "You are not linked to a Stark account yet.\n"
@@ -149,6 +155,26 @@ def download_file(file_id: str, *, bot_token: str,
         return data if len(data) <= max_bytes else None
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
         return None
+
+
+def send_chat_action(chat_id: int, action: str, *, bot_token: str,
+                     timeout: float = 5.0) -> bool:
+    """The "typing" bubble, so a slow turn looks busy instead of dead.
+
+    Never raises, same rule as `send_message`: a chat that cannot be reached is
+    not an error, and a cosmetic signal is worth less than the reply.
+    """
+    body = json.dumps({"chat_id": chat_id, "action": action}).encode()
+    req = urllib.request.Request(
+        f"{TELEGRAM_API}/bot{bot_token}/sendChatAction",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 def send_message(chat_id: int, text: str, *, bot_token: str,
@@ -275,6 +301,9 @@ class TelegramAdapter:
     # One callback per update that reached the agent, so the server can write the
     # turn to `turnlog`. Injected in tests; wired live in server.py.
     on_turn: Callable[[dict], None] | None = None
+    # `(chat_id, action)` for the typing bubble. Wired live in telegram_service;
+    # None sends nothing, so a test adapter never reaches for Telegram to draw one.
+    notify: Callable[[int, str], None] | None = None
     log: Callable[[str], None] = lambda line: None
     stats: dict[str, int] = field(default_factory=lambda: {
         "updates": 0, "duplicates": 0, "unlinked": 0, "agent": 0,
@@ -345,19 +374,25 @@ class TelegramAdapter:
         display_name = sender.get("first_name") or sender.get("username")
         text = (message.get("text") or message.get("caption") or "").strip()
 
-        try:
-            turn = self._route(message, text, channel_user_id, display_name, chat_id)
-        except Exception as err:  # a bad update must not 500 the webhook
-            self.log(f"telegram update failed: {err}")
-            turn = Turn(outcome="failed",
-                        reply="Something went wrong handling that. Nothing was charged.")
+        # The bubble goes up before the first slow step (transcription, the model,
+        # speech) and stays until the reply is away: a chat waiting on a payment
+        # is otherwise silent for 5 to 15 seconds and reads as dead.
+        with self._typing(chat_id):
+            try:
+                turn = self._route(message, text, channel_user_id, display_name,
+                                   chat_id)
+            except Exception as err:  # a bad update must not 500 the webhook
+                self.log(f"telegram update failed: {err}")
+                turn = Turn(
+                    outcome="failed",
+                    reply="Something went wrong handling that. Nothing was charged.")
 
-        if turn.reply:
-            self._deliver(chat_id, turn.reply, spoken=turn.speak)
-        # Always text, even after a voice note: an address is copied, not listened to.
-        deposit = getattr(turn.result, "deposit", None)
-        if deposit:
-            self._send(chat_id, pay_note(deposit))
+            if turn.reply:
+                self._deliver(chat_id, turn.reply, spoken=turn.speak)
+            # Text too, after a voice note: an address is copied, not listened to.
+            deposit = getattr(turn.result, "deposit", None)
+            if deposit:
+                self._send(chat_id, pay_note(deposit))
         self._emit_turn(turn)
         return {"ok": True, "handled": turn.outcome, "update_id": update_id}
 
@@ -382,6 +417,38 @@ class TelegramAdapter:
             })
         except Exception as err:  # a broken log must not break the reply
             self.log(f"telegram turn log failed: {err}")
+
+    def _notify(self, chat_id: int, action: str) -> None:
+        """One cosmetic signal. A chat that cannot be reached is not an error."""
+        if self.notify is None:
+            return
+        try:
+            self.notify(chat_id, action)
+        except Exception as err:  # a bubble must never cost the reply
+            self.log(f"telegram chat action failed: {err}")
+
+    @contextlib.contextmanager
+    def _typing(self, chat_id: int):
+        """Keep "typing" on screen for as long as this block runs.
+
+        The bubble lasts about five seconds and a payment turn is longer than
+        that, so the first one is sent here and the rest from a thread that
+        stops the moment the block exits. Daemon, and bounded by the block, so
+        a turn that hangs cannot leak a ticking thread per chat.
+        """
+        stop = threading.Event()
+
+        def keep() -> None:
+            while not stop.wait(TYPING_REFRESH_SECONDS):
+                self._notify(chat_id, TYPING)
+
+        self._notify(chat_id, TYPING)
+        worker = threading.Thread(target=keep, name="stark-typing", daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            stop.set()
 
     def _send(self, chat_id: int, text: str) -> None:
         if self.send is not None:

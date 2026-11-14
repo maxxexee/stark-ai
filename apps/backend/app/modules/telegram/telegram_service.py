@@ -44,6 +44,10 @@ class TelegramService:
             # every voice note ("I cannot hear voice notes right now").
             transcribe=stt.transcribe,
             on_turn=self.log_turn,
+            # "Stark is typing": the bubble is the only feedback a chat gets while
+            # a turn runs, and it is cosmetic, so it never fails the turn.
+            notify=lambda chat_id, action: telegram.send_chat_action(
+                chat_id, action, bot_token=config.telegram_bot_token),
             log=log.info,
         )
 

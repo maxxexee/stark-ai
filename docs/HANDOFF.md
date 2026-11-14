@@ -107,8 +107,8 @@ The gate, in order. Each refusal says nothing was charged:
    Checked live on 2026-11-13: 42 of 42 phrasings, 10 of them pidgin and other wording
    the prompt was not written against. A judgment took 0.6 to 6.8s that day, but runs in
    parallel, so a payment does not wait for two rounds in a row.
-2. **The bill.** Unknown bills refuse; a bill the agent saved is unpayable until the
-   owner confirms it in the app (`bill_unconfirmed`); a plan pays its own price only.
+2. **The bill.** Unknown bills refuse; a plan pays its own price only. A bill is payable
+   from the moment it is saved, from any door; the caps, pause and balance still apply.
 3. **The figure.** No figure said and no plan price is `amount_required`; a figure the
    user did not say is `amount_mismatch` ("pay 500" can never become ₦5,000).
 4. **A repeat.** The same bill and figure, delivered or pending within five minutes, is
@@ -119,12 +119,14 @@ The gate, in order. Each refusal says nothing was charged:
 
 Also: the snapshot (account, bills, last five payments, limits, funding) rides in the
 system prompt, and the read tools are withheld while it is there; links the model writes
-are removed from the reply; an unconfirmed bill's label is hidden from the model; with no
+are removed from the reply; with no
 `NEAR_AI_API_KEY` every turn answers that Stark lost connection and pays nothing.
 
 **Latency.** On 2026-11-13 the NEAR AI host was slow for calls that carry tools: three
 payment turns on unchanged `main` took 27 to 38s, with read timeouts and retries. That is
-the provider, not the agent; `STARK_TURN_LOG` records each retry and why.
+the provider, not the agent; `STARK_TURN_LOG` records each retry and why. One model call
+now gives up after 25s in all (`RETRY_BUDGET_SECONDS`), and a pooled socket the host has
+already closed is dropped instead of lent out.
 
 ---
 

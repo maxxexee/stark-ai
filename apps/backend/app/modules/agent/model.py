@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import select
 import ssl
 import threading
 import time
@@ -124,6 +125,15 @@ class NearAiModel:
     # reply into the answer that was asked for.
     ATTEMPTS = 3
     RETRY_DELAYS = (0.3, 0.9)
+    # One call's ceiling, in seconds. Three attempts on a 10s socket timeout could
+    # hold a turn for 31.2s (measured 2026-11-13, `agent: 31890` in the turn log).
+    # Each attempt borrows what is left of the budget, so a socket that never
+    # answers cannot stack three full timeouts. It must leave a whole timeout for
+    # the retry: at 12s, one stall left the retry 2s, which cannot carry a real
+    # answer, and a slow round became "lost connection" instead of a second try.
+    RETRY_BUDGET_SECONDS = 25.0
+    # Below this an attempt would time out before the request could finish.
+    MIN_ATTEMPT_SECONDS = 1.0
 
     def __init__(
         self,
@@ -180,15 +190,64 @@ class NearAiModel:
 
     # --- connection ----------------------------------------------------------
 
-    def _acquire(self) -> _Connection:
-        with self._mutex:
-            if self._idle:
+    def _acquire(self, timeout: float | None = None) -> _Connection:
+        """A pooled connection only after it proves it is still there.
+
+        The model host reaps idle keep-alive sockets before its own advertised
+        timeout, and a POST written into one of those is never answered: the
+        read sat for the whole timeout and the turn cost 12.5s (measured
+        2026-11-13, `reused: true`, `The read operation timed out`). A closed
+        socket is readable with nothing to read, so `_alive` sees the FIN and
+        the pool drops it instead of lending it out.
+
+        `timeout` is this attempt's share of the retry budget; the default is
+        the timeout the model was built with.
+        """
+        limit = self.timeout if timeout is None else timeout
+        while True:
+            with self._mutex:
+                if not self._idle:
+                    break
                 wire = self._idle.pop()
+            if self._alive(wire):
                 wire.reused = True
+                self._retime(wire, limit)
                 return wire
-        wire = _Connection(self._host, self._port, self.timeout)
+            self._close(wire)
+        wire = _Connection(self._host, self._port, limit)
         wire.reused = False
         return wire
+
+    @staticmethod
+    def _alive(wire: _Connection) -> bool:
+        """Whether an idle connection can still carry a request.
+
+        An idle keep-alive socket is readable only when the far end has said
+        something unasked for, which in practice means it closed. So silence is
+        the healthy answer, and it is the only test that works the same on the
+        TLS socket `http.client` holds (a peek would raise there). Zero timeout,
+        non-destructive, and anything that cannot answer counts as dead.
+        """
+        sock = getattr(getattr(wire, "conn", None), "sock", None)
+        if sock is None:
+            return False
+        try:
+            readable, _, _ = select.select([sock], [], [], 0)
+        except (OSError, ValueError):
+            return False
+        return not readable
+
+    @staticmethod
+    def _retime(wire: _Connection, timeout: float) -> None:
+        """Apply this attempt's timeout to a socket that is already open."""
+        sock = getattr(getattr(wire, "conn", None), "sock", None)
+        if sock is None:
+            return
+        try:
+            if sock.gettimeout() != timeout:
+                sock.settimeout(timeout)
+        except (OSError, ValueError):
+            pass
 
     def _release(self, wire: _Connection) -> None:
         with self._mutex:
@@ -249,13 +308,17 @@ class NearAiModel:
             "Authorization": f"Bearer {self.api_key}",
         }
         last: RuntimeError | None = None
+        began = time.perf_counter()
         for attempt in range(self.ATTEMPTS):
+            left = self.RETRY_BUDGET_SECONDS - (time.perf_counter() - began)
+            if left < self.MIN_ATTEMPT_SECONDS:
+                break
             started = time.perf_counter()
             wire: _Connection | None = None
             retryable = False
             reused: bool | None = None
             try:
-                wire = self._acquire()
+                wire = self._acquire(min(self.timeout, left))
                 reused = getattr(wire, "reused", None)
                 with wire.lock:
                     wire.conn.request("POST", self._path, body, headers)

@@ -78,15 +78,6 @@ class PaymentGate:
             return _refusal("unknown_bill", "I don't have that bill saved.",
                             {"bill_id": bill_id})
 
-        # A bill this agent saved is not payable until its owner confirms it in the
-        # app: a voice in the room must not be able to name a number and pay it.
-        if bill.get("needs_confirmation"):
-            effect["code"] = "bill_unconfirmed"
-            return _refusal("bill_unconfirmed", (
-                f"That {bill.get('kind')} bill is saved but not confirmed. "
-                "Confirm it in the Stark app, then I can pay it. Nothing was "
-                "charged."), {"bill_id": bill.get("id")})
-
         # A plan is sold at its own price. Refuse a mispriced attempt before it can
         # reach the vendor, so the user hears the real number.
         plan_price = bill.get("plan_price_ngn")

@@ -30,6 +30,6 @@ class BillDto(BaseModel):
     )
     needs_confirmation: Optional[bool] = Field(
         default=None, description=(
-            "true on a bill Stark saved from a chat, until the owner confirms it with "
-            "POST /v1/bills/{id}/confirm. Absent otherwise. Such a bill cannot be paid."),
+            "Legacy. No longer set: a bill saved from a chat is payable at once. "
+            "Kept so a row written before that still serializes."),
         examples=[None])

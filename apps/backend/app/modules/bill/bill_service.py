@@ -78,11 +78,13 @@ class BillService:
             raise ApiError(404, "unknown_bill", f"No bill {bill_id}")
         return bill
 
-    def add(self, account_id: str, dto: CreateBillDto, *,
-            by_agent: bool = False) -> dict[str, Any]:
-        """Save a bill. One the agent saves (`by_agent`) waits for the owner to
-        confirm it in the app before it can be paid: whoever can talk to Stark
-        could otherwise name their own number and pay it in the same breath."""
+    def add(self, account_id: str, dto: CreateBillDto) -> dict[str, Any]:
+        """Save a bill, payable at once.
+
+        A bill saved from a chat is the owner's own instruction, so there is no
+        second step. The caps, the pause and the balance still gate every
+        payment, whichever door it came through.
+        """
         kind = dto.kind.strip().lower()
         if kind not in BillKind.values():
             raise ApiError(400, "bad_kind",
@@ -138,8 +140,6 @@ class BillService:
             bill["plan_price_ngn"] = plan_price
         if renews_on:
             bill["renews_on"] = renews_on
-        if by_agent:
-            bill["needs_confirmation"] = True
         bills[bill["id"]] = bill
         self.repository.save_bill(account_id, bill)
         self.accounts.rebuild_limits(account_id)

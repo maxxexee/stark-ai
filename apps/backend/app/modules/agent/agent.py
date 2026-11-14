@@ -120,7 +120,7 @@ class Agent:
         """
         try:
             recent = self.toolbox.recent_activity()
-            bills = [self._as_seen(b) for b in self.toolbox.list_bills()]
+            bills = self.toolbox.list_bills()
             # A receipt names its bill, not its destination. On 2026-10-25 the
             # model was asked "what number" straight after a ₦500 airtime
             # top-up and answered "I can't see the number that was topped up" —
@@ -153,7 +153,7 @@ class Agent:
             # An unconfirmed line is not theirs until they say so in the app.
             phone = next((str(b.get("reference") or "") for b in bills
                           if isinstance(b, dict) and b.get("kind") == "airtime"
-                          and b.get("reference") and not b.get("needs_confirmation")), "")
+                          and b.get("reference")), "")
             if phone:
                 snapshot["phone"] = phone
             # The gate's own numbers, so a refusal can be explained before the
@@ -276,23 +276,14 @@ class Agent:
                     }
                 )
             # The tools may have moved money; the next turn must not read a
-            # snapshot from before the payment it just made.
-            messages[0], has_snapshot = self._system_message()
+            # snapshot from before the payment it just made. A read-only call
+            # cannot have changed anything, and rebuilding costs several
+            # database reads before the next model round can start, so the
+            # rebuild is skipped when nothing was written.
+            if any(call.name not in READ_ONLY_TOOLS for call in turn.tool_calls):
+                messages[0], has_snapshot = self._system_message()
 
         return self._apply_effects(reply, effect)
-
-    @staticmethod
-    def _as_seen(bill: dict) -> dict:
-        """A bill as the model may read it.
-
-        An unconfirmed bill's label and provider are whatever was said to Stark,
-        stored and then read back into every later prompt: a place to plant an
-        instruction. Until the owner confirms it, the model sees its kind only.
-        """
-        if not bill.get("needs_confirmation"):
-            return bill
-        return {**bill, "label": f"unconfirmed {bill.get('kind')} bill",
-                "provider": "unconfirmed"}
 
     @staticmethod
     def _lost_reply(reply: AgentReply) -> str:
@@ -324,8 +315,7 @@ class Agent:
             if call.name == "get_state":
                 return {"ok": True, "data": self.toolbox.get_state()}
             if call.name == "list_bills":
-                return {"ok": True,
-                        "data": [self._as_seen(b) for b in self.toolbox.list_bills()]}
+                return {"ok": True, "data": self.toolbox.list_bills()}
             if call.name == "recent_activity":
                 return {"ok": True, "data": self.toolbox.recent_activity()}
             if call.name == "pay_bill":

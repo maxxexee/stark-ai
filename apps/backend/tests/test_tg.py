@@ -743,3 +743,51 @@ class TestNewLinkIsAnnounced(AdapterCase):
         code = self.ids.issue_code(self.account.id)
         self.adapter._command(f"/link {code}", "42", "Tunde")
         self.assertEqual(self.sent, [])
+
+
+class TestTypingBubble(AdapterCase):
+    """"Stark is typing" is all a chat shows while a turn runs."""
+
+    def actions(self) -> list[tuple[int, str]]:
+        seen: list[tuple[int, str]] = []
+        self.adapter.notify = lambda chat_id, action: seen.append((chat_id, action))
+        return seen
+
+    def test_a_linked_turn_shows_typing_on_its_own_chat(self):
+        self.linked()
+        seen = self.actions()
+        self.adapter.handle_update(_update(text="what's left"))
+        self.assertTrue(seen)
+        self.assertEqual(seen[0], (42, telegram.TYPING))
+
+    def test_the_bubble_is_repeated_while_a_slow_turn_runs(self):
+        # Telegram clears it after about five seconds; a payment turn is longer.
+        self.linked()
+        seen = self.actions()
+        answer = self.agent.respond
+
+        def linger(user_id, said, thread):
+            time.sleep(0.15)
+            return answer(user_id, said, thread)
+
+        self.agent.respond = linger
+        with mock.patch.object(telegram, "TYPING_REFRESH_SECONDS", 0.02):
+            self.adapter.handle_update(_update(text="what's left"))
+        self.assertGreaterEqual(len(seen), 2)
+
+    def test_a_broken_notifier_does_not_cost_the_reply(self):
+        self.linked()
+
+        def boom(chat_id, action):
+            raise RuntimeError("telegram down")
+
+        self.adapter.notify = boom
+        result = self.adapter.handle_update(_update(text="what's left"))
+        self.assertEqual(result["handled"], "agent")
+        self.assertEqual(self.sent[-1][1], "You've got about 11.4 units left.")
+
+    def test_nothing_is_sent_when_no_notifier_is_wired(self):
+        self.linked()
+        self.assertIsNone(self.adapter.notify)
+        result = self.adapter.handle_update(_update(text="what's left"))
+        self.assertEqual(result["handled"], "agent")

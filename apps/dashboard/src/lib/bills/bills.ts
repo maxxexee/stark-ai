@@ -20,9 +20,6 @@ export class Bills {
   }
 
   static status(bill: Bill, state: State): BillStatus {
-    if (bill.needs_confirmation) {
-      return { text: "Saved by Stark, confirm to pay", attention: true };
-    }
     if (
       bill.kind === "electricity" &&
       Bills.meter(state)?.id === bill.id &&
@@ -64,8 +61,8 @@ export class Bills {
     return { text: "Not paid yet", attention: false };
   }
 
-  static isPayable(bill: Pick<Bill, "kind" | "needs_confirmation">): boolean {
-    return bill.kind !== "internet" && bill.kind !== "water" && !bill.needs_confirmation;
+  static isPayable(bill: Pick<Bill, "kind">): boolean {
+    return bill.kind !== "internet" && bill.kind !== "water";
   }
 
   static fixedAmount(bill: Bill): number | null {

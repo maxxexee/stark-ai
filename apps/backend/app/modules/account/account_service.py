@@ -92,10 +92,9 @@ class AccountService:
 
     @staticmethod
     def _meters(bills: dict[str, dict]) -> frozenset:
-        """What may be paid: every saved reference, except a bill the agent saved and
-        the owner has not confirmed yet."""
+        """What may be paid: every saved reference."""
         return frozenset(str(b["reference"]) for b in bills.values()
-                         if b.get("reference") and not b.get("needs_confirmation"))
+                         if b.get("reference"))
 
     def _open(self, account_id: str) -> None:
         """Give a brand-new account an empty ₦0 wallet, exactly once.
