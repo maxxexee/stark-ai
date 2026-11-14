@@ -187,7 +187,12 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 ```
 
 In Telegram: send `link 482913` with the code shown in the app, then ask by text or
-voice note. Voice notes need the word "stark" first, the same rule `/v1/voice`
+voice note. A linked chat gets a menu under the message box (Balance, Add money,
+Pay a bill, Recent payments). A crypto deposit arrives with the address and amount
+in tap-to-copy text and Copy buttons; a bank deposit, with a Pay button. When Stark
+asks something with fixed answers (which network?), the answers are buttons, and a
+tap is read exactly as if it were typed. Don't limit the webhook's
+`allowed_updates` to messages, or taps never arrive. Voice notes need the word "stark" first, the same rule `/v1/voice`
 uses. Without `NEAR_AI_API_KEY` the bot says it cannot hear voice notes rather than
 guessing what you said.
 
