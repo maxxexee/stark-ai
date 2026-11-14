@@ -77,7 +77,9 @@ Two rules shape the whole design:
 
 1. **A question never spends money.** Asking "how much is left?" and paying are
    different actions, enforced in code, not in the prompt.
-2. **Users never see crypto.** Balances, caps and receipts are whole naira. The USDC,
+2. **Users never see the chain.** Balances, caps and receipts are whole naira. Adding
+   money is the one place a coin appears: crypto is the default, sized in the coin the
+   user names, and the rate settles the naira. The USDC,
    the vault and the chain live in this document, not in the interface.
 
 ## What you can say
@@ -326,6 +328,11 @@ voice note button, instead of a web app you have to remember to open.
 - **Replay-safe.** `processed_messages` records update IDs, so a retried webhook cannot
   pay twice. The webhook refuses everything until both the bot token and the secret are
   set.
+- **Buttons, not typing.** A linked chat gets a menu (Balance, Add money, Pay a bill,
+  Recent payments). A crypto deposit arrives with the address and amount in
+  tap-to-copy text and Copy buttons, and no naira; a bank deposit is a Pay button. A
+  question with fixed answers (which network?) shows them as buttons, and a tap goes
+  through the same checks as typed text.
 
 The bot is a channel adapter, nothing more: `app/modules/channel`, `telegram` and
 `whatsapp` share one turn pipeline.
