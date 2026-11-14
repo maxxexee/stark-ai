@@ -10,7 +10,7 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 [**Open the app**](https://dash.hellostark.xyz) · [**Read-only demo**](https://dash.hellostark.xyz/demo) · [**Telegram bot**](https://t.me/hellostarkai_bot) · [**Website**](https://hellostark.xyz)
 
 ![license](https://img.shields.io/badge/license-MIT-1f1f1f?style=flat-square)
-![track](https://img.shields.io/badge/NEAR%20HACKATHON-realworld%20%C2%B7%20security-00a67e?style=flat-square)
+![track](https://img.shields.io/badge/NEAR%20HACKATHON-real--world%20money%20%C2%B7%20AI%20security%20%C2%B7%20private%20AI%20%C2%B7%20agent%20economy-00a67e?style=flat-square)
 ![contract](https://img.shields.io/badge/contract-Rust%20%C2%B7%20near--sdk-b7410e?style=flat-square)
 ![api](https://img.shields.io/badge/api-Python%20%C2%B7%20FastAPI-3776ab?style=flat-square)
 ![web](https://img.shields.io/badge/web-TypeScript%20%C2%B7%20TanStack-3178c6?style=flat-square)
@@ -19,8 +19,37 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 
 ---
 
+## For judges
+
+**Tracks entered**
+
+| Track | What in Stark answers it | Where to check |
+|---|---|---|
+| **Real-World Money** (lead) | USDC on NEAR pays real Nigerian bills (electricity, airtime, data, TV) in naira, by text or voice, on mainnet | The [mainnet vaults](#the-vault) and their `payment_count`; `apps/backend/app/modules/vending/` |
+| **AI Security & Defense** | Spending limits live in a per-user contract, not in the prompt. The agent holds a function-call key that can only call `pay` on one vault. Payment guards run in code below the model, and the model runs in a NEAR AI Private TEE | [`policy.rs`](apps/contracts/vault/src/policy.rs), `payment_gate.py`, [Security model](#security-model) |
+| **Privacy & Private AI** | The agent's model, the payment judge and voice transcription (Whisper) run on NEAR AI Cloud in a Private TEE, so the user's messages, balances and bills are read inside an enclave. A faster non-TEE model was measured and rejected | [The agent](#the-agent), [Design decisions](#design-decisions-and-trade-offs) |
+| **Agent Economy** | An agent that spends for its user on real services, within limits it cannot change, and moves money across chains with NEAR Intents (1Click) | [The agent](#the-agent), [Deposits and withdrawals](#deposits-and-withdrawals) |
+
+**Verify it in five minutes, with no account and no keys**
+
+1. Open the read-only sample at [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo),
+   or `curl https://geddon.hellostark.xyz/v1/demo`.
+2. Read a live mainnet vault. It shows real caps, a real balance and real payments:
+
+   ```sh
+   curl -s https://rpc.mainnet.near.org -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"u-fbda9ededd79777a.funder.moonboys-stark.near","method_name":"get_state","args_base64":"e30="}}' \
+     | python3 -c 'import json,sys; print(bytes(json.load(sys.stdin)["result"]["result"]).decode())'
+   ```
+
+3. Confirm the agent's key can only call `pay`: the same request with
+   `"request_type":"view_access_key_list"` (and no `method_name` or `args_base64`)
+   returns one `FunctionCall` key, `method_names: ["pay"]`.
+4. Message [@hellostarkai_bot](https://t.me/hellostarkai_bot) after signing up at
+   [dash.hellostark.xyz](https://dash.hellostark.xyz) and linking the chat in the app.
+
 ## Contents
 
+- [For judges](#for-judges)
 - [Screenshots](#screenshots)
 - [Why this exists](#why-this-exists)
 - [What you can say](#what-you-can-say)
@@ -37,7 +66,6 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 - [Repository](#repository)
 - [Run it locally](#run-it-locally)
 - [Configuration](#configuration)
-- [Testing](#testing)
 - [Security model](#security-model)
 - [What works today](#what-works-today)
 - [Operations](#operations)
@@ -125,8 +153,8 @@ Two rules shape the whole design:
 - The API contract is written down in [`docs/API.md`](docs/API.md) and frozen.
 - 29 named backend test files, including the guardrails that stop a payment; Rust
   tests for every refusal the contract can produce.
-- Fully offline mode: with no keys set, the server runs on a deterministic model and
-  dry-run payments, so tests need no network and no money.
+- Offline by default: with no keys set, the server runs on a deterministic model and
+  dry-run payments, so tests need no API keys and no money.
 
 ## Architecture
 
@@ -205,7 +233,7 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 |---|---|---|
 | testnet | [`u-e2e541dbcb1.stark-usdc-fcb734.testnet`](https://testnet.nearblocks.io/address/u-e2e541dbcb1.stark-usdc-fcb734.testnet) | Reference vault: USDC, caps, one settled payment |
 | mainnet | [`funder.moonboys-stark.near`](https://nearblocks.io/address/funder.moonboys-stark.near) | Funder and treasury; holds USDC; creates vaults |
-| mainnet | `u-<id>.funder.moonboys-stark.near` | User vaults, live since 2026-11-13 |
+| mainnet | [`u-312d6989246f5965`](https://nearblocks.io/address/u-312d6989246f5965.funder.moonboys-stark.near), [`u-fbda9ededd79777a`](https://nearblocks.io/address/u-fbda9ededd79777a.funder.moonboys-stark.near), [`u-278a146620c99d70`](https://nearblocks.io/address/u-278a146620c99d70.funder.moonboys-stark.near) `.funder.moonboys-stark.near` | User vaults, live since 2026-11-13; 6, 8 and 0 payments on 2026-11-14 |
 
 **State the contract keeps** (`get_state`):
 
@@ -215,8 +243,8 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | `funder` / `treasury` | Where deposits come from and where paid USDC lands |
 | `usdc` | The NEP-141 token this vault holds |
 | `usdc_per_kngn` | The naira rate, funder-set |
-| `rate_ceiling`, `max_usdc_per_kngn` | The owner's rate ceiling, and the highest rate `set_rate` takes today |
-| `monthly_cap_ngn`, `spent_period_ngn`, `period_key` | The cap, the month's spend, the month |
+| `rate_ceiling`, `max_usdc_per_kngn` | The owner's rate ceiling, and the highest rate `set_rate` takes today. Only on vaults deployed from the current code; the live vaults above predate it and cannot be upgraded |
+| `remaining_cap_ngn`, `spent_period_ngn`, `period_key` | What is left of the monthly cap, the month's spend, the month |
 | `balance_usdc`, `balance_ngn` | What is in the vault, in both units |
 | `total_paid_ngn`, `payment_count` | Lifetime totals |
 | `paused` | One flag that stops all payments |
@@ -249,7 +277,7 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | Only listed meters can be paid | `pay()` checks the allowlist | `allowed_meters` in `get_policy` |
 | The server's key can only call `pay` | Each vault has exactly one access key: a function-call key scoped to `pay` on that vault | `view_access_key_list` |
 | That key cannot change the rate or the policy | Both are funder/owner-only | `tests.rs` |
-| The funder cannot inflate the rate | `set_rate` refuses above the owner's ceiling or a rise of more than 5% in a day | `tests.rs` |
+| The funder cannot inflate the rate | `set_rate` refuses above the owner's ceiling or a rise of more than 5% in a day (new vaults only; the backend bounds the rate for all) | `tests.rs` |
 | Nobody can change a vault's code | Code is deployed into the vault, there is no full-access key, and no upgrade method exists | `view_access_key_list` |
 | An over-cap payment waits for the owner | Backend queues it; the owner calls `pay_approved()` | Approvals |
 | A question is never paid | A model call reads every message as PAY, AGAIN or not a payment; anything else, or a failed call, refuses in code | `tests/test_agent.py` |
@@ -334,8 +362,8 @@ voice note button, instead of a web app you have to remember to open.
   question with fixed answers (which network?) shows them as buttons, and a tap goes
   through the same checks as typed text.
 
-The bot is a channel adapter, nothing more: `app/modules/channel`, `telegram` and
-`whatsapp` share one turn pipeline.
+The bot is a channel adapter, nothing more: `app/modules/telegram` and the web app's
+Talk screen share one turn pipeline.
 
 ## Bills, naira and the float
 
@@ -418,7 +446,7 @@ Money is stored as integer naira. There are no floats. Chain writes go through
 | Path | Contents | Stack |
 |---|---|---|
 | [`apps/contracts`](apps/contracts) | The vault: USDC, caps, allowlist, pause, payment records | Rust, near-sdk |
-| [`apps/backend`](apps/backend) | API, agent, bill payment, Telegram, voice, money loop, 36 modules | Python, FastAPI |
+| [`apps/backend`](apps/backend) | API, agent, bill payment, Telegram, voice, money loop, 30 modules | Python, FastAPI |
 | [`apps/dashboard`](apps/dashboard) | The app people use | TanStack Start + Query |
 | [`apps/website`](apps/website) | Marketing site, pre-rendered | React Router |
 | [`packages/ui`](packages/ui) | Design system | shadcn/ui on Base UI, Tailwind v4 |
@@ -499,33 +527,6 @@ Operator limits (caps, holds, thresholds, rate bounds, rate limits) are set on
 `/admin → Limits` and apply within 15 seconds without a deploy. The env var is only the
 default.
 
-## Testing
-
-```sh
-cargo test                      # in apps/contracts/vault
-bun check                       # typecheck + lint + backend tests
-bun smoke                       # HTTP-level end-to-end
-```
-
-29 test files, each named for the rule it protects. The ones worth reading:
-
-| Test | Guards |
-|---|---|
-| `test_agent.py` | A question pays nothing; spend tools withheld; guardrail codes |
-| `test_caps.py` | Monthly and per-payment caps, exactly at the boundary |
-| `test_bill_confirmation.py` | A saved bill is payable at once, with no confirm step |
-| `test_approvals.py` | Over-cap requests: approve settles once, deny never does |
-| `test_controls.py` | Pause stops everything, resume restores it |
-| `test_money.py`, `test_settlement.py` | Float accounting, refunds, idempotent chain ops |
-| `test_linked_chats.py`, `test_tg.py` | Linking, unlinking, replay-safe webhooks |
-| `test_treasury_watch.py` | Low-float and low-treasury alerts |
-| `test_usdc_rate.py` | Rate bounds and stale-rate behaviour |
-| `test_api_surface.py`, `test_openapi.py` | Route surface and documented contract |
-
-`tests/regex_model.py` is the deterministic stand-in model: it pattern-matches a
-transcript into tool calls and stands in for the payment judge, so agent tests need no
-network and no API key. Production has no regex: the judge is a model call.
-
 ## Security model
 
 | Threat | What stops it |
@@ -565,8 +566,8 @@ Last checked **2026-11-14**, against `main` and the live deployments.
 | API | **Live** at `geddon.hellostark.xyz` (`/health`). Swagger is local only. |
 | Sign-in and storage | **Live.** Neon Auth; one wallet and one receipt trail per account in Neon Postgres. |
 | Telegram | **Live** as [@hellostarkai_bot](https://t.me/hellostarkai_bot), text and voice notes. |
-| Bill payment in naira | **Built, not vending in production.** Flutterwave only accepts whitelisted IPs and the production IP is not yet whitelisted, so production has not delivered a token. |
-| Crypto deposits | **Built.** 1Click quotes are live; no user deposit has completed yet. |
+| Bill payment in naira | **Live.** The production IP is whitelisted at Flutterwave, and real bills have been paid end to end in production: USDC out of the vault on chain, naira to the biller, the token or confirmation back in the receipt. |
+| Crypto deposits | **Live.** Real deposits have completed through NEAR Intents (1Click) on mainnet and been credited to the user's vault. |
 
 ## Operations
 
@@ -600,8 +601,9 @@ Last checked **2026-11-14**, against `main` and the live deployments.
 ## Built at NEAR HACKATHON
 
 Everything here was written during the hackathon: first commit **2026-10-20**, the day
-after the announcement. No code comes from an earlier project. Tracks: **`realworld`**
-(lead), **`security`**, **`agents`**.
+after the announcement. No code comes from an earlier project. Tracks: **Real-World
+Money** (lead), **AI Security & Defense**, **Privacy & Private AI**, **Agent Economy** (see
+[For judges](#for-judges)).
 
 Libraries and services: near-sdk (Rust) for the contract; FastAPI and pydantic for the
 API; React, TanStack Start/Router/Query, Tailwind v4 and shadcn/ui on Base UI for the
@@ -618,7 +620,7 @@ speech; the Telegram Bot API. The repository layout follows
 | Every request is 401 | Not signed in, or `NEON_AUTH_BASE_URL` belongs to a different Neon branch than `DATABASE_URL` |
 | Dashboard shows no data | The API is not on `127.0.0.1:8000` |
 | `Please enable IP Whitelisting` from Flutterwave | This machine's IP is not on the dashboard's list, test mode included |
-| Payments succeed but no token | That is the known production state: the biller call is blocked on IP whitelisting |
+| Payments succeed but no token | The biller call failed or is still pending: check the receipt's status and the Flutterwave logs. Locally, with no Flutterwave keys set, payments are dry runs |
 | `float_low` | The Flutterwave float has not settled; see `/admin` |
 | `/docs` is 404 | Expected in production; run locally with `STARK_DOCS=1` |
 

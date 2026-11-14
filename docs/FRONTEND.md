@@ -376,26 +376,25 @@ A payment that was refused gets a plain explanation of the rule that stopped it.
 
 ---
 
-## 7. What is not real yet
+## 7. Live and local behaviour
 
-Design around these. They will become real without any change to the shapes you
-code against.
+Everything below is live in production. The local differences are what you see when the
+API runs without provider keys.
 
-- **Payments are dry run.** Every purchase returns the same sample token:
-  `4821 0937 5512 8846 3019`. Never present it as a live purchase and never put
-  two of them side by side in the same screen or demo.
+- **Payments are live in production; locally they are dry runs.** Production pays real
+  bills through Flutterwave. A local API with no Flutterwave keys returns the same sample
+  token for every purchase, `4821 0937 5512 8846 3019`: never present it as a live
+  purchase and never put two of them side by side in the same screen or demo.
 - **Auth is enforced.** Every `/v1` call needs a Neon Auth session: the dashboard
   signs up and signs in on `/login` (`VITE_NEON_AUTH_URL`), keeps the token, and the
   API answers **401 `unauthorized`** without it. A signed-out visit to an app route
   sends you back to `/login`.
-- **Bills, limits and units reset on server restart.** The wallet, the receipt
-  history and any linked chat persist in Neon Postgres (per account), but a freshly
-  added bill and a patched limit live in memory. A restart returns them to the seed.
-  Keep that in mind during a long demo session, or call reset and rebuild.
-- **Voice takes text, not audio.** The mic button is a real button that posts a
-  transcript for now.
-- **TTS is not chosen.** Replies are text you can read aloud. Do not promise
-  spoken answers until a provider is picked.
+- **Everything an account owns persists.** Bills, limits, the wallet, receipts and
+  linked chats live in Neon Postgres per account and survive a server restart.
+- **Voice is audio.** The mic records a clip, `POST /v1/voice` transcribes it with
+  Whisper on NEAR AI, and the turn runs as if it were typed.
+- **Replies can be spoken.** With an ElevenLabs key set, replies stream as speech
+  (`/v1/speak`); without one they are text only.
 
 ---
 

@@ -35,9 +35,9 @@ Product rules that hold everywhere:
 | Vault contract | Live on testnet; user vaults sit under `stark-usdc-fcb734.testnet` (e.g. `u-e2e541dbcb1.stark-usdc-fcb734.testnet`). Deposits, a repeated deposit sent back, a ₦5,000 `pay` that moved 3.205130 USDC to the treasury, and refusals over the cap and to an unlisted meter all happened on chain. | 2026-11-12 (README) |
 | Rate bound (§5) | **In code, not on chain.** Built and tested on 2026-11-13; `apps/backend/assets/stark_vault.wasm` is rebuilt. Two mainnet vaults read on 2026-11-14 carry different `code_hash`es, so they do not follow one published contract; with no upgrade method, the three existing vaults never get it. Vaults created from the new wasm do (§8.2). | 2026-11-14 |
 | Mainnet | Production runs on mainnet from 2026-11-12, with `funder.moonboys-stark.near` as funder and treasury (there is no `treasury.*` account). Three user vaults, `u-312d6989246f5965`, `u-fbda9ededd79777a` and `u-278a146620c99d70` under the funder, each with deployed code, one `pay`-only key, USDC and real policies; `payment_count` 6, 8 and 0. Their `owner` is still the funder (§5). | 2026-11-14 |
-| Bill payment | Flutterwave is the only provider for bills, bank deposits and bank withdrawals, from one NGN balance. It only accepts calls from whitelisted IPs; **the production IP was whitelisted on 2026-11-13** (owner). No live token is recorded in this file yet: record the first one here (§8.1). | 2026-11-13 |
+| Bill payment | Flutterwave is the only provider for bills, bank deposits and bank withdrawals, from one NGN balance. It only accepts calls from whitelisted IPs; **the production IP was whitelisted on 2026-11-13** (owner). **Live:** real bills have been paid end to end in production, USDC out of the vault on chain and naira to the biller. | 2026-11-14 |
 | Bank deposits | Hosted checkout built. On 2026-11-03 every checkout link showed `Initialization failed` in test mode, and the dashboard's *Enable v3 webhooks*, *Enable webhook retries* and *Settle to my payout balance* were not set. Not rechecked since. | 2026-11-03 |
-| Crypto deposits | NEAR Intents (1Click) quotes are live, mainnet only. No deposit has completed. | 2026-11-12 (README) |
+| Crypto deposits | **Live** on mainnet through NEAR Intents (1Click): real deposits have completed and been credited. | 2026-11-14 |
 | Crypto withdrawals | Built (`wallet/crypto_withdrawal_service.py`); off unless `STARK_TREASURY_NEAR_ACCOUNT` and a full-access `STARK_TREASURY_KEY` are set for the environment. | 2026-11-03 |
 | Agent | NEAR AI. Default model `Qwen/Qwen3.6-35B-A3B-FP8` since 2026-11-13 (`model.py`); `STARK_MODEL` pins another per deploy. No regex left in the agent (§4). | 2026-11-13 |
 | Voice | Whisper Large v3 on NEAR AI (Private TEE) in; ElevenLabs Flash out, streamed. | 2026-11-03 |
@@ -181,10 +181,7 @@ the same `Agent.respond`. A door never branches money logic on its channel.
 
 ## 6. Not built, or not verified
 
-- **No live bill purchase is recorded here.** Every bill shape (result, token, pending)
-  comes from Flutterwave's docs and faked clients until the first live one is checked
-  against `vending.py` (§8.1).
-- **No completed deposit or withdrawal**, bank or crypto (§2).
+- **No completed bank deposit, bank withdrawal or crypto withdrawal** is recorded here (§2).
 - **Global-contract publish and per-user vault creation on mainnet** have not been
   round-tripped; check the publish transaction on the explorer before creating a vault.
 - **A voice note to a real Telegram chat** and a **delivered reminder push** have not
@@ -227,9 +224,8 @@ not retry. AI judges read the README: "do X – see Y" steps, no marketing.
 
 ## 8. Next, in order
 
-1. **First live bill (now unblocked).** Buy one Ikeja prepaid token, check the result,
-   token and pending shapes against `vending/vending.py`, and record the token's receipt
-   id and date in §2. Then one checkout deposit and one bank withdrawal end to end,
+1. **Bank money end to end.** Bill payments and crypto deposits are live (§2). Next, one
+   checkout deposit and one bank withdrawal end to end,
    watching the webhook arrive; set the three Flutterwave dashboard switches in §2 first.
 2. **Ship the rate bound to vaults (owner).** New vaults are deployed from
    `STARK_VAULT_CODE`; once it points at the rebuilt `assets/stark_vault.wasm` (or, for
