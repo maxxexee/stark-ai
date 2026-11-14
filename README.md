@@ -81,12 +81,12 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 
 <img src="docs/screenshots/landing.png" width="900" alt="The Stark landing page">
 
-*[hellostark.xyz](https://hellostark.xyz): one voice note to your agent, and the token is back.*
+*The landing page at [hellostark.xyz](https://hellostark.xyz).*
 
 | The read-only sample account | Sign in |
 |---|---|
 | <img src="docs/screenshots/demo.png" width="430" alt="The demo dashboard"> | <img src="docs/screenshots/login.jpg" width="430" alt="The sign-in page"> |
-| [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo): fake data, no login, a real ₦15,000 approval waiting | No passwords: Google or an email code |
+| [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo): fake data, no login, a ₦15,000 approval waiting | No passwords: Google or an email code |
 
 ---
 
@@ -98,8 +98,8 @@ already out. The money part is easy; the *remembering and retyping* part is not.
 
 Stark replaces the form with a sentence: **"top up my meter with 5,000."** It answers
 questions from your real balance and your real bills, and it pays only when you ask it
-to. Everything it is allowed to do sits in a contract, so a bad prompt, a bug in the
-model or a leaked server key all hit the same wall.
+to. Its limits are in a contract, so the contract refuses an out-of-limit payment
+whether it came from a bad prompt, a model bug or a leaked server key.
 
 Two rules shape the whole design:
 
@@ -107,8 +107,8 @@ Two rules shape the whole design:
    different actions, enforced in code, not in the prompt.
 2. **Users never see the chain.** Balances, caps and receipts are whole naira. Adding
    money is the one place a coin appears: crypto is the default, sized in the coin the
-   user names, and the rate settles the naira. The USDC,
-   the vault and the chain live in this document, not in the interface.
+   user names, and the rate sets the naira amount. The interface never shows USDC, the
+   vault or the chain.
 
 ## What you can say
 
@@ -142,7 +142,7 @@ Two rules shape the whole design:
 - The vault has no upgrade path and no full-access key, so nobody (Stark included)
   can change its code after deployment.
 - Deposits are reference-checked, so a retried transfer cannot credit twice.
-- A failed on-chain payment reverses itself; the USDC does not vanish.
+- If the USDC transfer fails, the contract reverses the payment and the USDC stays in the vault.
 - Rate changes are funder-only and bounded twice: by operator-set bounds in the backend,
   and on chain by the owner's ceiling and a 5% daily rise limit (vaults deployed with
   that code; earlier vaults cannot be upgraded).
@@ -187,7 +187,7 @@ Two rules shape the whole design:
             Stark treasury ───────────────────────▶ the biller
 ```
 
-Three processes, one repo:
+Three parts:
 
 - **Agent**: a tool-calling loop on NEAR AI. The model chooses *which tool* to call;
   it never gets to name its own amount, its own meter or its own recipient.
@@ -265,7 +265,7 @@ One contract per user, under the funder account: `u-<hex>.<funder>`.
 | `propose_owner` / `accept_owner` | owner / nominee | Hand a vault to the user's own account |
 | `get_state`, `get_policy`, `get_payment`, `is_applied`, `can_pay` | anyone | Read-only |
 
-**Refusals are codes, not vibes:** `paused`, `over_cap`, `over_per_payment_cap`,
+The contract refuses with a code: `paused`, `over_cap`, `over_per_payment_cap`,
 `meter_not_allowed`, insufficient balance. The app maps them to plain English.
 
 ### How the limits are enforced
@@ -300,8 +300,8 @@ rules), [`lib.rs`](apps/contracts/vault/src/lib.rs) (money and state) and
 
 ## The agent
 
-A tool loop rather than a chatbot with a signing key. The model sees a state snapshot,
-picks from seven tools, and the backend decides whether the resulting action is legal.
+The agent is a tool loop. The model sees a state snapshot and picks from seven tools,
+and the backend decides whether the resulting action is allowed.
 
 | Tool | Spends money? | Purpose |
 |---|---|---|
@@ -328,9 +328,8 @@ Voice in is `openai/whisper-large-v3`. Voice out is ElevenLabs Flash when keyed,
 plain text otherwise. A question takes 2–3 seconds; a payment 5–15, because it makes
 several tool calls.
 
-**Latency is a design constraint, not an accident.** The state snapshot (~2KB) is
-cheaper than a round trip, so it is appended to the prompt and the read tools are
-withheld. If the snapshot fails, every tool comes back: a wrong number is worse than a
+**A snapshot instead of read tools.** The state snapshot (~2KB) is cheaper than a tool
+round trip, so the backend appends it to the prompt and withholds the read tools. If the snapshot fails, every tool comes back: a wrong number is worse than a
 slow one.
 
 **The prompt is not a security boundary.** Every rule that matters is re-checked below
@@ -339,10 +338,10 @@ and the contract re-checks caps and the allowlist on chain regardless.
 
 ## Telegram
 
-The bot exists so Stark lives where the bill does, a chat you already have open with a
-voice note button, instead of a web app you have to remember to open.
+People already send voice notes in chat apps, so Stark answers in Telegram as well as
+in the web app.
 
-- **One door, one brain.** `@hellostarkai_bot` calls the same agent, the same tools and
+- **Same agent as the web app.** `@hellostarkai_bot` calls the same agent, the same tools and
   the same vault as the web app. There is no second implementation and no second balance.
 - **Linking is explicit.** The app issues a short code (`POST /v1/link/code`); sending
   it to the bot binds that chat to that account. Unlinked chats get nothing, not even a
@@ -356,13 +355,13 @@ voice note button, instead of a web app you have to remember to open.
 - **Replay-safe.** `processed_messages` records update IDs, so a retried webhook cannot
   pay twice. The webhook refuses everything until both the bot token and the secret are
   set.
-- **Buttons, not typing.** A linked chat gets a menu (Balance, Add money, Pay a bill,
+- **Buttons.** A linked chat gets a menu (Balance, Add money, Pay a bill,
   Recent payments). A crypto deposit arrives with the address and amount in
   tap-to-copy text and Copy buttons, and no naira; a bank deposit is a Pay button. A
   question with fixed answers (which network?) shows them as buttons, and a tap goes
   through the same checks as typed text.
 
-The bot is a channel adapter, nothing more: `app/modules/telegram` and the web app's
+The bot is a channel adapter: `app/modules/telegram` and the web app's
 Talk screen share one turn pipeline.
 
 ## Bills, naira and the float
@@ -377,7 +376,7 @@ user's vault ──USDC──▶ Stark treasury ──Flutterwave──▶ bille
   card, USSD), withdrawals and the bill catalogue.
 - **The float** is Stark's Flutterwave naira balance. A deposit is spendable at once but
   reaches the float only when Flutterwave settles it, so a payment the float cannot
-  cover is refused with `float_low` **before anything is signed**.
+  cover is refused with `float_low` before anything is signed.
 - **Operator alerts** fire on the admin page when the float drops below
   `STARK_FLOAT_LOW_NGN`, when treasury USDC drops below `STARK_TREASURY_LOW_USDC`, or
   when coverage goes negative.
@@ -396,7 +395,7 @@ user's vault ──USDC──▶ Stark treasury ──Flutterwave──▶ bille
   rate covers 15 minutes.
 - **Withdrawals** go either to a Nigerian bank account (Flutterwave transfer, with
   account-name resolution and daily limits) or as USDC through a 1Click swap.
-- Crypto withdrawals need a **full-access treasury key** (`ft_transfer` requires a
+- Crypto withdrawals need a full-access treasury key (`ft_transfer` requires a
   1-yocto deposit that a function-call key cannot attach), so the treasury balance is
   kept small and every withdrawal has a cap.
 
@@ -424,8 +423,8 @@ Telegram webhook needs `Authorization: Bearer <Neon Auth token>`. The contract i
 | Operator | `GET/PATCH /v1/admin/*` (`X-Stark-Admin-Key`), `GET /v1/turnlog` |
 | Ops | `GET /` and `GET /health`, `POST /v1/telemetry` |
 
-Swagger is **local only** (`STARK_DOCS=1` → `/docs`, `/redoc`, `/docs/openapi.json`).
-Production serves no spec, deliberately. Error bodies are
+Swagger is local only (`STARK_DOCS=1` → `/docs`, `/redoc`, `/docs/openapi.json`).
+Production serves no spec. Error bodies are
 `{code, message, detail}`; codes are stable and documented, e.g. `unauthorized`,
 `float_low`, `over_cap`, `rate_limited` (with `retry_after_seconds`).
 
@@ -478,8 +477,7 @@ The API needs `DATABASE_URL` (Neon pooler URL; the schema creates itself) and
 `infisical login` once, and the `dev` scripts load them.
 
 **With nothing else set, the server runs offline:** payments are dry runs, nothing
-reaches a chain, and a deterministic model stands in for the LLM. That is the default
-developer experience and what the test suite uses.
+reaches a chain, and a deterministic model stands in for the LLM. The test suite runs this way.
 
 **Contract**
 
@@ -490,7 +488,7 @@ cargo near build non-reproducible-wasm
 ```
 
 Deploying a vault on testnet points `STARK_VAULT_CODE` at the wasm (~2 NEAR of storage
-per user). On mainnet the code is published **once** as a global contract and vaults
+per user). On mainnet the code is published once as a global contract and vaults
 reference `global:<funder>`:
 
 ```sh
@@ -507,7 +505,7 @@ bun smoke    # end-to-end checks against a running API
 ## Configuration
 
 Everything is optional except the two Neon values; all of it is documented inline in
-[`apps/backend/.env.example`](apps/backend/.env.example). The shape:
+[`apps/backend/.env.example`](apps/backend/.env.example).
 
 | Variable | Effect when unset |
 |---|---|
@@ -515,7 +513,7 @@ Everything is optional except the two Neon values; all of it is documented inlin
 | `NEAR_AI_API_KEY`, `NEAR_AI_MODEL`, `NEAR_AI_STT_MODEL` | Deterministic model, no voice |
 | `ELEVENLABS_API_KEY` (+ voice/model IDs) | Replies are text |
 | `FLW_SECRET_KEY`, `FLW_SECRET_HASH`, `STARK_APP_URL` | Nothing can be sold or withdrawn (501); test top-ups only |
-| `STARK_FUNDER_ACCOUNT`, `STARK_FUNDER_KEY`, `STARK_AGENT_KEY`, `STARK_VAULT_CODE` | Payments book off chain, as they always did offline |
+| `STARK_FUNDER_ACCOUNT`, `STARK_FUNDER_KEY`, `STARK_AGENT_KEY`, `STARK_VAULT_CODE` | Payments are booked off chain only |
 | `STARK_NETWORK`, `STARK_USDC_TOKEN`, `STARK_BROADCAST` | testnet, `usdc.fakes.testnet`, broadcast off |
 | `STARK_TREASURY_NEAR_ACCOUNT`, `STARK_TREASURY_KEY`, `ONECLICK_API_KEY` | Crypto deposits/withdrawals off |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` | The webhook refuses every request |
@@ -542,16 +540,15 @@ default.
 | Charged-back card money | Card funds are held 72h before withdrawal |
 | Operator fat-fingers a rate | Rate is bounded and bounded per move; stale rates expire in 15 minutes; on chain, the owner's ceiling and a 5% daily rise limit |
 
-**Honest caveats**
+**Known limits**
 
 - On mainnet, each vault's `owner` is currently the funder account, not the user's own
   account. `propose_owner`/`accept_owner` exists but has not been run, so owner powers
   (policy, withdraw) sit with the team. The spend rules that protect the user are not
-  owner powers, and they bind the owner too via `pay_approved`, but this is worth
-  knowing before handing someone a vault.
+  owner powers, and they bind the owner too via `pay_approved`.
 - The treasury holds a full-access key for crypto withdrawals and refunds. It is capped
   and kept small, but it is a hot key.
-- The float is a custodial balance at Flutterwave by necessity, not by preference.
+- The float is a custodial naira balance at Flutterwave, because billers only take naira.
 
 ## What works today
 
@@ -589,14 +586,15 @@ Last checked **2026-11-14**, against `main` and the live deployments.
   caps in naira and converts once, at payment time, so rounding happens in one place.
 - **Why USDC, not a naira stablecoin?** USDC on NEAR is liquid and has a real treasury
   flow; billers still need naira, so the swap happens once, off chain.
-- **Why Telegram?** The bill arrives in a chat, so the agent should live there too. It
-  costs one webhook and reuses the whole turn pipeline.
-- **Why is the model not a TEE requirement?** It is: the default model is served in a
-  Private TEE. A faster non-TEE model was measured and rejected.
+- **Why Telegram?** People already use chat apps for voice notes. The bot costs one
+  webhook and reuses the whole turn pipeline.
+- **Why a TEE model?** The prompt carries the user's balance, bills and messages, so the
+  default model runs in a Private TEE. A non-TEE model of the same speed was measured and
+  rejected (see [The agent](#the-agent)).
 - **Cost.** A per-user vault costs ~2 NEAR of storage on testnet; on mainnet the code is
   published as a global contract so each vault pays only for its own state.
 - **What we did not build.** No card issuance, no credit, no multi-user households, no
-  on-chain biller registry. Each is a real product; none is needed for the demo.
+  on-chain biller registry.
 
 ## Built at NEAR HACKATHON
 
