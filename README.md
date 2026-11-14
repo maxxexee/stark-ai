@@ -1,11 +1,16 @@
 # Stark
 
 Stark is an AI agent that pays everyday bills when you ask by voice or chat. It pays
-Nigerian prepaid electricity, airtime, data and TV. Your money is USDC in your own NEAR
-smart contract, and that contract enforces your spending limits.
+Nigerian prepaid electricity, airtime, data and TV. Your money is USDC in a NEAR vault
+contract of your own, and that contract enforces your spending limits.
 
-Built for NEAR HACKATHON, 2026-11-01 to 2026-11-14. Tracks: `realworld` (lead),
-`security` and `agents`.
+Stark is custodial today. Users sign in with email and hold no NEAR key, so Stark's
+funder account is each vault's owner and runs the treasury that pays billers. The vault
+limits what Stark's keys can do (see below), and ownership can be handed to the user's
+own account, but no user has taken it yet.
+
+Built for NEAR HACKATHON, 2026-11-01 to 2026-11-14. Tracks: `realworld` (lead) and
+`security`.
 
 ## How the limits are enforced
 
@@ -19,9 +24,10 @@ the contract refuses any payment that breaks a rule, whatever the agent was told
 | Only meters on the list can be paid | `pay()` checks the list. | `allowed_meters` in `get_policy` |
 | The server's key can only call `pay` | Each vault has one access key, a function-call key limited to `pay`. | `view_access_key_list` on the vault |
 | That key can't change the naira rate | Only the funder can call `set_rate()`. | `apps/contracts/vault/src/tests.rs` |
+| The rate can't be used to drain a vault | Caps are in naira, so the rate decides how much USDC leaves. `set_rate()` refuses a rate above the owner's `set_rate_ceiling()`, or one more than 5% above the day's opening rate, even when the funder signs it. | `max_usdc_per_kngn` in `get_state`; the rate tests in `tests.rs` |
 | Nobody can change a vault's code, Stark included | The code is deployed into each vault, the vault has no full-access key, and the contract has no upgrade method. | `view_access_key_list` shows a single `FunctionCall` key |
 | A payment over a limit waits for the owner | The backend queues it, and the owner approves it with `pay_approved()`. | Approvals, in the app |
-| A question is never paid | The agent gets no tools on a question, and `pay_bill` refuses a question again in code. | `apps/backend/tests/test_agent.py` |
+| A question is never paid | Before `pay_bill` runs, a second model call with no tools, shown only the last exchange, must answer `PAY`. Any other answer, or none, refuses with `not_a_payment_request`. | `apps/backend/app/modules/agent/payment_intent.py`, `tests/test_agent.py` |
 | One switch stops all payments | `pause()` in the contract and in the app | Settings, in the app |
 
 A leaked server key cannot withdraw, change the policy or pay another contract. NEAR
@@ -61,11 +67,11 @@ Last checked 2026-11-12.
 |---|---|
 | Vault contract | Live on testnet and holding USDC. Each user's vault sits under `stark-usdc-fcb734.testnet`. On chain, a deposit landed, a repeated deposit was sent back, a ₦5,000 `pay` moved 3.205130 USDC to the treasury, and payments over the cap or to an unlisted meter were refused. |
 | Mainnet | Production runs on NEAR mainnet from 2026-11-12, with `funder.moonboys-stark.near` as the funder and treasury. No user vault exists on mainnet yet. |
-| Agent model | NEAR AI, in a Private TEE throughout. Whisper Large v3 transcribes voice, and `deepseek-ai/DeepSeek-V4.1-Flash-1017` answers. A question takes 2 to 3 seconds. A payment takes 5 to 15 seconds, because it makes several tool calls. |
+| Agent model | NEAR AI. Whisper Large v3 transcribes voice in a Private TEE. The chat model defaults to `Qwen/Qwen3.6-35B-A3B-FP8`, and `STARK_MODEL` pins another per deploy. A payment makes a second, tool-free model call that must agree the user asked to pay. |
 | Web app, API and website | Deployed at [dash.hellostark.xyz](https://dash.hellostark.xyz), [geddon.hellostark.xyz/docs](https://geddon.hellostark.xyz/docs) and [hellostark.xyz](https://hellostark.xyz). |
 | Sign-in and storage | Live. Neon Auth signs people in, and each account has its own wallet and receipts in Neon Postgres. |
 | Telegram | Live as `@hellostarkai_bot`, for text and voice notes. |
-| Bill payment in naira | Built. Flutterwave pays the biller. It only accepts calls from whitelisted IPs, and the production server's IP is not whitelisted yet, so production has not vended a token. |
+| Bill payment in naira | Built. Flutterwave pays the biller. It only accepts calls from whitelisted IPs; the production server's IP was whitelisted on 2026-11-13. |
 | Crypto deposits | Built. NEAR Intents (1Click) quotes are live. No deposit has completed yet. |
 
 When a bill is paid, its USDC moves on chain from the user's vault to Stark's treasury,
@@ -87,8 +93,8 @@ The API needs `DATABASE_URL`, the pooler URL of a Neon Postgres branch (the sche
 creates itself), and `NEON_AUTH_BASE_URL`, the same branch's Auth URL. See
 [`apps/backend/.env.example`](apps/backend/.env.example). The team keeps both in
 Infisical: run `infisical login` once, and the `dev` scripts load them. With nothing
-else set, payments are dry runs, nothing reaches a chain, and a fixed script stands in
-for the model.
+else set, payments are dry runs and nothing reaches a chain. Without `NEAR_AI_API_KEY`
+the agent answers every turn by saying it lost connection, and pays nothing.
 
 To check your setup:
 

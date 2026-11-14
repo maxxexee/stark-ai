@@ -1,6 +1,6 @@
 """The Telegram door: verify, identify, gate, answer (M4).
 
-One brain, many doors (HANDOFF §8A). This file is transport and identity only —
+One brain, many doors (HANDOFF §5, Doors and identity). This file is transport and identity only —
 every utterance that passes the gates ends in `Agent.respond`, the same call
 `/v1/voice` uses, and the policy gate sits inside that agent. Nothing here may
 spend money or read state on its own.

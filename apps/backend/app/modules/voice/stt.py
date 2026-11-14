@@ -5,8 +5,8 @@ there and `POST /v1/audio/transcriptions` exists (2026-10-22). The endpoint was
 called live on 2026-10-22 with real speech and returned real transcripts, so the
 request shape and the parsing are verified — for WAV. The MIME-named file part
 (2026-10-24) is covered against a loopback server in `test_live_paths.py`, not
-against NEAR AI itself, so a browser WebM in production is still the unproven
-combination (HANDOFF §10).
+against NEAR AI itself. NEAR AI refuses WebM, so `hear` decodes it to WAV with
+ffmpeg first; on 2026-10-24 the same sentence came back right as WAV, OGG and WebM.
 
 No key configured → `transcribe` returns `(None, "no_key")` and the caller
 answers with a plain sentence. It never invents a transcript, because a

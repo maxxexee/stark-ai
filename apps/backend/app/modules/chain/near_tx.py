@@ -6,7 +6,7 @@ key. It signs a single `pay(meter, amount_ngn)` function call with a
 chain enforces the caps; the key can do nothing else.
 
 That is why this module exists at all: `near-cli` and `cargo-near` are not
-installed, and the project is stdlib-only on purpose (see HANDOFF §1). So the
+installed on the server, and the signing path needs no SDK. So the
 whole path is here in plain Python:
 
     borsh transaction -> ed25519 signature -> base64 -> JSON-RPC broadcast
@@ -16,9 +16,8 @@ Nothing in this module touches the network unless you call `NearRpc`.
 **Layout confidence.** The borsh layout below is transcribed from
 `near-primitives` (`TransactionV0`, `Action::FunctionCall`) and is covered by
 tests that pin byte offsets, the U128-as-string argument encoding, and
-`tx_hash == sha256(borsh(transaction))`. It has *not* been round-tripped against
-a live RPC — no funded account existed when it was written. Do that before
-trusting a mainnet run; HANDOFF §10 records it as unverified.
+`tx_hash == sha256(borsh(transaction))`. A `pay()` signed here was accepted on
+chain on 2026-11-03; the global-contract actions are still unverified (HANDOFF §6).
 """
 
 from __future__ import annotations

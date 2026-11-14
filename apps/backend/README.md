@@ -67,7 +67,7 @@ app/
     state/  suggestion/  GET /v1/state; the computed suggestion feed
     telemetry/           readings (server-stamped) and the meter maths
     voice/               /v1/voice, /v1/speak: stt, tts, audio, the wake rule
-    agent/               tool schema, routing, policy gate, model loop; the per-account toolbox
+    agent/               model loop, prompt, tools, payment gate, intent judge; the per-account toolbox
     chain/               borsh + ed25519 + base58 + RPC: builds and signs pay()
     flutterwave/         the one naira provider: client, webhook (checkout, bills, transfers)
     vending/             bill catalogue and kind → biller/item; buys through Flutterwave
@@ -113,39 +113,46 @@ the numbers already in the design. Shapes and error codes are in
 
 ## Agent
 
-The voice endpoint is the agent. One loop, two models:
+The voice endpoint is the agent. One loop, and two model calls that start together:
 
 ```
-transcript → model picks a tool → policy gate → sign pay() → book the payment → reply
+transcript ─┬─ model picks a tool ─┬─ payment gate → sign pay() → book the payment → reply
+            └─ intent judge ───────┘
 ```
 
-- **The policy gate is code, not a prompt.** `Agent._pay_bill` checks the per-payment
-  cap, the monthly cap, the meter allowlist and the balance before anything is signed or
-  charged. A model that ignores every instruction still cannot overspend.
+- **The policy gate is code, not a prompt.** `PaymentGate.pay` (`payment_gate.py`)
+  checks the per-payment cap, the monthly cap, the meter allowlist and the balance
+  before anything is signed or charged. A model that ignores every instruction still
+  cannot overspend.
 - **Same rules as the contract.** `policy.py` mirrors [`policy.rs`](../contracts/vault/src/policy.rs),
   and a test reads the Rust source and fails if a code or sentence drifts.
-- **No key needed.** Without `NEAR_AI_API_KEY` the server uses a deterministic model that
-  emits the same tool calls a real one would. The loop, the tools and the gate are the
-  same code either way, and the tests need no network.
-- **A question never spends.** Two rules in `agent.py` run before the model chooses.
-  A turn that opens like a read question, asks "if / what if / should I / why /
-  explain" or sounds confused is offered **no tools at all**, and `pay_bill` itself
-  refuses such a transcript with `not_a_payment_request`. Both came from a failure on
-  2026-10-24: with `pay_bill` the only tool offered, "if I pay DStv and top up 5
-  thousand, how much is left?" **paid the airtime**, and "I'm confused, DStv says I
-  owe, what should I do?" tried to pay DStv. "Can you pay my DStv" still pays, because
-  it grants permission, and a bare "yes" still confirms.
-- **An unpriced charge asks instead of guessing.** Two more refusals sit in `_pay_bill`,
+- **A key is needed.** Without `NEAR_AI_API_KEY` every turn fails before any request,
+  the user hears that Stark lost connection, and nothing is paid. The tests drive the
+  same loop, tools and gate with scripted models (`tests/regex_model.py`) and need no
+  network.
+- **A question never spends.** The first gate in `pay_bill` is a second model call
+  (`payment_intent.py`): no tools, shown only Stark's last reply and the user's message,
+  and it must answer one word. `PAY` lets the payment go on, `AGAIN` also lifts the
+  duplicate check below, and anything else, including no answer, refuses with
+  `not_a_payment_request`. A failed call refuses too. It starts with the turn, beside
+  the main model call, so a payment does not wait for two rounds in a row. It replaced a
+  set of regexes after a failure on 2026-10-24: with `pay_bill` on offer, "if I pay
+  DStv and top up 5 thousand, how much is left?" **paid the airtime**, and "I'm
+  confused, DStv says I owe, what should I do?" tried to pay DStv. "Can you pay my DStv"
+  still pays, because it grants permission, and a bare "yes" pays only when Stark has
+  just offered to. Checked live on 2026-11-13: 42 of 42 phrasings, including pidgin the
+  prompt was not written against.
+- **An unpriced charge asks instead of guessing.** Two more refusals sit in the gate,
   both written after a live session on 2026-10-24 where "recharge my airtime number"
   bought ₦1,000 **twice, 29 seconds apart**, with the model choosing the figure both
   times. With no amount spoken and no plan price, it refuses with `amount_required`
   ("How much would you like to pay? Nothing has been charged yet."), and a figure the
   user did not say — "pay 500" sent as ₦5,000 — refuses with `amount_mismatch`
   (2026-11-12; every figure in the transcript counts, so "home 5000 and office 3000"
-  still pays both). The same bill for
-  the same figure, delivered or pending within five minutes, refuses with
-  `duplicate_payment` unless the transcript says again / yes / confirm, so a refused
-  repeat can still be confirmed. A plan-priced bill needs no figure because the plan
+  still pays both; `spoken_amounts.py` reads the figures by splitting words, not by
+  pattern). The same bill for the same figure, delivered or pending within five minutes,
+  refuses with `duplicate_payment` unless the intent judge answered `AGAIN`, so a
+  refused repeat can still be confirmed. A plan-priced bill needs no figure because the plan
   sets it, and seeded demo receipts (`seed-*`) do not count as recent payments.
 - **It says what it cannot do.** The prompt forbids implying a message was sent. There
   is no forwarding to Telegram, email or anywhere else, and the model says so instead
@@ -206,10 +213,10 @@ and refunds reach the vault through an outbox (`chain_ops`) the money loop retri
 `python -m app.modules.treasury.treasury_service` prints what Stark owes against
 what it holds (the Flutterwave NGN balance and treasury USDC).
 
-**Limits:** the borsh layout has never been round-tripped against a live RPC.
-The NEAR AI model and Whisper *have* run live (2026-10-22). `/v1/voice` takes real
+**Limits:** the borsh layout was round-tripped on 2026-11-03, when a `pay()` signed here
+was accepted on chain; the global-contract actions have not been. The NEAR AI model and Whisper *have* run live (2026-10-22). `/v1/voice` takes real
 audio, as base64 `audio` in JSON or a multipart file part, and `transcript_hint` is
-kept only as a probe for tests (2026-10-24). See [`HANDOFF.md`](../../docs/HANDOFF.md) §10.
+kept only as a probe for tests (2026-10-24). See [`HANDOFF.md`](../../docs/HANDOFF.md) §6.
 
 ## What it can answer
 
