@@ -78,9 +78,12 @@ nothing changes until that account calls `accept_owner()`; a new proposal replac
 last, and `get_pending_owner` shows the one in flight. A mistyped account id can never
 accept, so the vault cannot be handed to an account nobody holds. (`set_owner` is gone.)
 
-**Upgrading existing vaults.** Vaults created from the global contract run whatever code
-is published under the funder's id, so a change reaches them only once it is published
-again (HANDOFF §8.2):
+**New code and existing vaults.** A vault has no upgrade method. One that references
+`global:<funder>` runs whatever is published under the funder's id, so republishing
+reaches it. One created with `STARK_VAULT_CODE=<path>`, or pinned to a code hash, keeps
+its code for good. The mainnet vaults checked on 2026-11-14 carry different code hashes,
+so they are pinned: the rate bound reaches only vaults created after it ships (HANDOFF
+§8.2). To publish for global-reference vaults:
 
 ```sh
 cd apps/backend
@@ -88,8 +91,8 @@ STARK_FUNDER_ACCOUNT=... STARK_FUNDER_KEY=... STARK_AGENT_KEY=... STARK_BROADCAS
   python -m app.modules.chain.vault_chain publish assets/stark_vault.wasm
 ```
 
-Vaults created with `STARK_VAULT_CODE=<path>` carry their own copy and keep the old code
-until each is redeployed. The contract state layout is unchanged (the pending owner sits
+Vaults created with `STARK_VAULT_CODE=<path>` carry their own copy, and with no
+full-access key they cannot be redeployed. The contract state layout is unchanged (the pending owner sits
 under its own storage key), so existing state reads as before.
 
 ```
