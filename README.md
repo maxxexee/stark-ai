@@ -605,12 +605,22 @@ after the announcement. No code comes from an earlier project. Tracks: **Real-Wo
 Money** (lead), **AI Security & Defense**, **Privacy & Private AI**, **Agent Economy** (see
 [For judges](#for-judges)).
 
-Libraries and services: near-sdk (Rust) for the contract; FastAPI and pydantic for the
-API; React, TanStack Start/Router/Query, Tailwind v4 and shadcn/ui on Base UI for the
-web; NEAR AI Cloud for the model and Whisper; NEAR Intents (1Click) for crypto deposits
-and withdrawals; Neon for Postgres and sign-in; Flutterwave for naira; ElevenLabs for
-speech; the Telegram Bot API. The repository layout follows
-[midday](https://github.com/midday-ai/midday). AI coding assistants were used.
+**Libraries and services**
+
+| Part | Used for |
+|---|---|
+| near-sdk (Rust) | The vault contract |
+| FastAPI and pydantic | The API |
+| React, TanStack Start, Router and Query | The web app |
+| Tailwind v4 and shadcn/ui on Base UI | The design system |
+| NEAR AI Cloud | The agent's model and Whisper transcription, in a Private TEE |
+| NEAR Intents (1Click) | Crypto deposits and withdrawals |
+| Neon | Postgres and sign-in |
+| Flutterwave | Naira: bill payments, bank deposits and withdrawals |
+| ElevenLabs | Spoken replies |
+| Telegram Bot API | The Telegram bot |
+
+AI coding assistants were used.
 
 ## Troubleshooting
 
