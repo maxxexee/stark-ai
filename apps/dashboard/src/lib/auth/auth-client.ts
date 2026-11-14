@@ -1,11 +1,6 @@
 import { type SessionStore, sessionStore } from "@/lib/auth/session-store";
 import type { AuthUser, Session } from "@/lib/auth/types";
 
-/**
- * Talks from the browser straight to Neon Auth (Better Auth at `VITE_NEON_AUTH_URL`) and saves each
- * sign-in with its method. Requests send credentials because Neon keeps the OAuth state in a cookie
- * on its own origin.
- */
 export class AuthClient {
   private static readonly VERIFIER_PARAM = "neon_auth_session_verifier";
   private static readonly CALLBACK_PATH = "/auth/callback";
@@ -33,10 +28,6 @@ export class AuthClient {
     return this.sessions.save(session, "email");
   }
 
-  /**
-   * Navigates away to Google and comes back at `/auth/callback`, so it only settles here if the
-   * request itself failed.
-   */
   async signInWithGoogle(): Promise<void> {
     const callbackURL = `${window.location.origin}${AuthClient.CALLBACK_PATH}`;
     const data = await this.post<{ url?: string }>("/sign-in/social", {
@@ -50,7 +41,6 @@ export class AuthClient {
     window.location.assign(data.url);
   }
 
-  /** Trade the single-use verifier Neon put on the callback URL for a session. */
   async sessionFromCallback(search: string): Promise<Session | null> {
     const param = AuthClient.VERIFIER_PARAM;
     const verifier = new URLSearchParams(search).get(param);

@@ -28,7 +28,6 @@ function Talk() {
   return (
     <div className="talk-scope dark relative flex min-h-dvh flex-col gap-6 overflow-hidden bg-canvas px-4 pt-6 pb-8 text-fg sm:px-10 lg:gap-0 lg:px-16">
       <TalkGlow live={live} />
-
       <TalkHeader />
 
       <div className="relative mx-auto flex w-full max-w-120 flex-1 flex-col gap-5 lg:grid lg:max-w-6xl lg:grid-cols-[1fr_minmax(0,440px)] lg:items-center lg:gap-16 lg:py-10">

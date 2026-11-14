@@ -2,7 +2,6 @@ import type { Session, SignInMethod } from "@/lib/auth/types";
 
 export class SessionStore {
   private static readonly TOKEN_KEY = "stark.session";
-  /** Outlives sign-out on purpose, so `/login` can point at it next time. */
   private static readonly METHOD_KEY = "stark.lastMethod";
 
   token(): string | null {

@@ -12,7 +12,6 @@ export const Route = createFileRoute("/login")({
   component: LogIn,
 });
 
-/** The last-used method is read after mount, so the first render matches the server's. */
 function LogIn() {
   const [withEmail, setWithEmail] = useState(false);
   const [lastUsed, setLastUsed] = useState<SignInMethod | null>(null);
