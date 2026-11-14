@@ -10,7 +10,7 @@ setApiBaseUrl(import.meta.env.VITE_STARK_API_URL ?? "");
 setAuthToken(sessionStore.token());
 
 export function getRouter() {
-  const signOutOnUnauthorized = (error: Error) => {
+  const handleSignOutOfAuthorizedUser = (error: Error) => {
     if (!(error instanceof ApiError) || error.status !== 401 || !sessionStore.token()) return;
     sessionStore.forget();
     setAuthToken(null);
@@ -19,8 +19,8 @@ export function getRouter() {
   };
 
   const queryClient = new QueryClient({
-    queryCache: new QueryCache({ onError: signOutOnUnauthorized }),
-    mutationCache: new MutationCache({ onError: signOutOnUnauthorized }),
+    queryCache: new QueryCache({ onError: handleSignOutOfAuthorizedUser }),
+    mutationCache: new MutationCache({ onError: handleSignOutOfAuthorizedUser }),
     defaultOptions: {
       queries: { staleTime: 15_000, retry: 1, refetchOnWindowFocus: true },
     },
