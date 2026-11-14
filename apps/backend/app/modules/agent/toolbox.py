@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -20,7 +22,9 @@ class ToolBox(Protocol):
     def add_bill(self, dto: CreateBillDto) -> dict: ...
     def find_plans(self, kind: str, provider: str) -> list[dict]: ...
     # A deposit in `DepositService.shape`: its `pay` is the link or the address.
-    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str) -> dict: ...
+    # A crypto deposit is sized in naira or, when `amount_crypto` is set, in the coin.
+    def add_money(self, method: str, amount_ngn: int, asset: str, chain: str,
+                  amount_crypto: Decimal | None = None) -> dict: ...
     # A payment over a limit, filed for the owner to approve in the app. Returns
     # the request with its `window_minutes`.
     def request_approval(self, bill_id: str, amount_ngn: int, reason: str) -> dict: ...

@@ -127,21 +127,27 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Start adding money to the balance. Bank gives a checkout link for "
                 "bank transfer, card or USSD; crypto gives an address to send a coin "
-                "to. Nothing is taken until the user pays."
+                "to. Nothing is taken until the user pays. For crypto, pass the "
+                "amount in the coin when that is how they said it."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "method": {"type": "string", "enum": ["bank", "crypto"]},
                     "amount_ngn": {"type": "integer",
-                                   "description": "Whole naira to add, e.g. 20000."},
+                                   "description": "Whole naira to add, e.g. 20000. "
+                                                  "Only when they said a naira figure."},
+                    "amount_crypto": {"type": "string", "description": (
+                        "Crypto only: how much of the coin they said, e.g. \"2\" for "
+                        "2 USDC. Never convert it to naira yourself.")},
                     "asset": {"type": "string",
-                              "description": "Crypto only: the coin, e.g. USDT, USDC."},
+                              "description": "Crypto only: the coin, e.g. USDT, USDC. "
+                                             "USDC when they did not say."},
                     "chain": {"type": "string", "description": (
                         "Crypto only: the network they named, e.g. tron, sol, eth. "
                         "Leave empty if they did not say.")},
                 },
-                "required": ["method", "amount_ngn"],
+                "required": ["method"],
                 "additionalProperties": False,
             },
         },
