@@ -4,7 +4,7 @@
 
 **An AI agent that pays your bills when you ask, and cannot spend past the limits you set.**
 
-Nigerian prepaid electricity, airtime, data and TV — by text or voice, in naira.
+Nigerian prepaid electricity, airtime, data and TV, by text or voice, in naira.
 Your money is USDC in a NEAR smart contract that holds the rules.
 
 [**Open the app**](https://dash.hellostark.xyz) · [**Read-only demo**](https://dash.hellostark.xyz/demo) · [**Telegram bot**](https://t.me/hellostarkai_bot) · [**Website**](https://hellostark.xyz)
@@ -53,19 +53,19 @@ Your money is USDC in a NEAR smart contract that holds the rules.
 
 <img src="docs/screenshots/landing.png" width="900" alt="The Stark landing page">
 
-*[hellostark.xyz](https://hellostark.xyz) — one voice note to your agent, and the token is back.*
+*[hellostark.xyz](https://hellostark.xyz): one voice note to your agent, and the token is back.*
 
 | The read-only sample account | Sign in |
 |---|---|
 | <img src="docs/screenshots/demo.png" width="430" alt="The demo dashboard"> | <img src="docs/screenshots/login.jpg" width="430" alt="The sign-in page"> |
-| [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo) — fake data, no login, a real ₦15,000 approval waiting | No passwords: Google or an email code |
+| [dash.hellostark.xyz/demo](https://dash.hellostark.xyz/demo): fake data, no login, a real ₦15,000 approval waiting | No passwords: Google or an email code |
 
 ---
 
 ## Why this exists
 
 Paying for prepaid electricity in Nigeria means opening an app, remembering a 13-digit
-meter number, and topping up by hand — usually at night, usually when the lights are
+meter number, and topping up by hand, usually at night, usually when the lights are
 already out. The money part is easy; the *remembering and retyping* part is not.
 
 Stark replaces the form with a sentence: **"top up my meter with 5,000."** It answers
@@ -102,14 +102,14 @@ Two rules shape the whole design:
 - Saved bills with short names ("Home meter"), so a number is typed once.
 - Approvals: anything over a limit becomes a request you accept or deny.
 - Receipts that name the bill, link the on-chain transaction, and survive a restart.
-- Telegram, because that is where people already are — no second app to install.
+- Telegram, because that is where people already are, so no second app to install.
 - One switch that stops every payment, in the app and in the contract.
 
 **For whoever is trusting it with money**
 
 - Caps are in the contract: monthly, per payment, per meter allowlist.
 - The server's key is a function-call key that may only call `pay()` on one vault.
-- The vault has no upgrade path and no full-access key, so nobody — Stark included —
+- The vault has no upgrade path and no full-access key, so nobody (Stark included)
   can change its code after deployment.
 - Deposits are reference-checked, so a retried transfer cannot credit twice.
 - A failed on-chain payment reverses itself; the USDC does not vanish.
@@ -157,11 +157,11 @@ Two rules shape the whole design:
 
 Three processes, one repo:
 
-- **Agent** — a tool-calling loop on NEAR AI. The model chooses *which tool* to call;
+- **Agent**: a tool-calling loop on NEAR AI. The model chooses *which tool* to call;
   it never gets to name its own amount, its own meter or its own recipient.
-- **Money loop** — a background pass that verifies open deposits, watches the
+- **Money loop**: a background pass that verifies open deposits, watches the
   Flutterwave float and treasury USDC, settles bills, and raises operator alerts.
-- **Vault** — one contract per user. It is the only thing that can move that user's
+- **Vault**: one contract per user. It is the only thing that can move that user's
   USDC, and it moves it only to the treasury.
 
 ## Anatomy of one payment
@@ -188,7 +188,7 @@ turn 1  "top up my meter with 5,000"
 
 Step 4 is the part that is easy to get wrong. Measured on 2026-10-24: "recharge my
 airtime number" bought ₦1,000 twice, 29 seconds apart, because the model picked the
-number. The guard now requires the amount to be one the user actually said — "pay 500"
+number. The guard now requires the amount to be one the user actually said, so "pay 500"
 can never become ₦5,000.
 
 ## The vault
@@ -277,7 +277,7 @@ picks from seven tools, and the backend decides whether the resulting action is 
 | `add_money` | no | Start a deposit (crypto or bank) |
 
 **Models.** NEAR AI Cloud, in a Private TEE. The default is
-`Qwen/Qwen3.6-35B-A3B-FP8` — 1.4s a turn, measured 2026-11-13, with the same tool calls
+`Qwen/Qwen3.6-35B-A3B-FP8`: 1.4s a turn, measured 2026-11-13, with the same tool calls
 as slower models on a six-turn probe. Same day, same prompt:
 
 | Model | Time per turn | Note |
@@ -293,7 +293,7 @@ several tool calls.
 
 **Latency is a design constraint, not an accident.** The state snapshot (~2KB) is
 cheaper than a round trip, so it is appended to the prompt and the read tools are
-withheld. If the snapshot fails, every tool comes back — a wrong number is worse than a
+withheld. If the snapshot fails, every tool comes back: a wrong number is worse than a
 slow one.
 
 **The prompt is not a security boundary.** Every rule that matters is re-checked below
@@ -302,17 +302,17 @@ and the contract re-checks caps and the allowlist on chain regardless.
 
 ## Telegram
 
-The bot exists so Stark lives where the bill does — a chat you already have open, with a
-voice note button — instead of a web app you have to remember to open.
+The bot exists so Stark lives where the bill does, a chat you already have open with a
+voice note button, instead of a web app you have to remember to open.
 
 - **One door, one brain.** `@hellostarkai_bot` calls the same agent, the same tools and
   the same vault as the web app. There is no second implementation and no second balance.
 - **Linking is explicit.** The app issues a short code (`POST /v1/link/code`); sending
-  it to the bot binds that chat to that account. Unlinked chats get nothing — not even a
-  balance — and a code expires and is attempt-limited.
+  it to the bot binds that chat to that account. Unlinked chats get nothing, not even a
+  balance, and a code expires and is attempt-limited.
 - **Nothing is shared by default.** A code links one chat. `GET /v1/link/identities`
   lists what is linked; `DELETE` unlinks it.
-- **Voice notes work.** Telegram's audio is fetched, transcribed, and answered — the
+- **Voice notes work.** Telegram's audio is fetched, transcribed, and answered on the
   same path as browser voice.
 - **Reminders go to the right chats.** Renewal reminders are per account, about that
   account's own bills, to that account's linked chats. There is no bot owner.
@@ -354,8 +354,8 @@ user's vault ──USDC──▶ Stark treasury ──Flutterwave──▶ bille
   rate covers 15 minutes.
 - **Withdrawals** go either to a Nigerian bank account (Flutterwave transfer, with
   account-name resolution and daily limits) or as USDC through a 1Click swap.
-- Crypto withdrawals need a **full-access treasury key** — `ft_transfer` requires a
-  1-yocto deposit that a function-call key cannot attach — so the treasury balance is
+- Crypto withdrawals need a **full-access treasury key** (`ft_transfer` requires a
+  1-yocto deposit that a function-call key cannot attach), so the treasury balance is
   kept small and every withdrawal has a cap.
 
 ## API
@@ -366,8 +366,8 @@ Telegram webhook needs `Authorization: Bearer <Neon Auth token>`. The contract i
 
 | Group | Routes |
 |---|---|
-| Sample | `GET /v1/demo` — read-only account, no sign-in |
-| State | `GET /v1/state` — everything the dashboard needs in one call |
+| Sample | `GET /v1/demo`: read-only account, no sign-in |
+| State | `GET /v1/state`: everything the dashboard needs in one call |
 | Bills | `GET/POST /v1/bills`, `GET/PATCH/DELETE /v1/bills/{id}`, `POST /v1/bills/{id}/confirm` |
 | Payees | `GET /v1/payees`, `GET /v1/plans`, `GET /v1/suggestions` |
 | Money | `GET /v1/wallet`, `/methods`, `/rates`, `/crypto-assets`; `POST /v1/wallet/topup` |
@@ -404,7 +404,7 @@ Money is stored as integer naira. There are no floats. Chain writes go through
 | Path | Contents | Stack |
 |---|---|---|
 | [`apps/contracts`](apps/contracts) | The vault: USDC, caps, allowlist, pause, payment records | Rust, near-sdk |
-| [`apps/backend`](apps/backend) | API, agent, bill payment, Telegram, voice, money loop — 36 modules | Python, FastAPI |
+| [`apps/backend`](apps/backend) | API, agent, bill payment, Telegram, voice, money loop, 36 modules | Python, FastAPI |
 | [`apps/dashboard`](apps/dashboard) | The app people use | TanStack Start + Query |
 | [`apps/website`](apps/website) | Marketing site, pre-rendered | React Router |
 | [`packages/ui`](packages/ui) | Design system | shadcn/ui on Base UI, Tailwind v4 |
@@ -468,7 +468,7 @@ Everything is optional except the two Neon values; all of it is documented inlin
 
 | Variable | Effect when unset |
 |---|---|
-| `DATABASE_URL`, `NEON_AUTH_BASE_URL` | **Required** — the server refuses to start |
+| `DATABASE_URL`, `NEON_AUTH_BASE_URL` | **Required**: the server refuses to start |
 | `NEAR_AI_API_KEY`, `NEAR_AI_MODEL`, `NEAR_AI_STT_MODEL` | Deterministic model, no voice |
 | `ELEVENLABS_API_KEY` (+ voice/model IDs) | Replies are text |
 | `FLW_SECRET_KEY`, `FLW_SECRET_HASH`, `STARK_APP_URL` | Nothing can be sold or withdrawn (501); test top-ups only |
@@ -518,7 +518,7 @@ transcript into tool calls, so agent tests need no network and no API key.
 | The model invents a payee | The contract pays from your vault to the treasury only; the biller is chosen by the backend, not the model |
 | A leaked agent key | Function-call key scoped to `pay` on one vault, with a NEAR allowance; no withdraw, no policy, no rate |
 | A leaked backend session | Every `/v1` route checks a Neon Auth token against the provider's JWKS |
-| Malicious vault code | No upgrade method, no full-access key — the deployed code is the code |
+| Malicious vault code | No upgrade method, no full-access key, so the deployed code is the code |
 | Replayed deposit | Each deposit's reference is applied once; a repeat is returned untouched |
 | Dust/storage attack on a vault | Only funder and treasury may deposit, with a bounded `msg` |
 | Replayed Telegram update | `processed_messages` on update ID |
@@ -554,13 +554,13 @@ Last checked **2026-11-14**, against `main` and the live deployments.
 
 ## Operations
 
-- **`/admin`** — float, treasury, coverage, alerts, limits, fees, pots. Needs
+- **`/admin`**: float, treasury, coverage, alerts, limits, fees, pots. Needs
   `X-Stark-Admin-Key`.
-- **Operator limits** — caps, holds, thresholds, rate bounds, per-minute rate limits.
+- **Operator limits**: caps, holds, thresholds, rate bounds, per-minute rate limits.
   Live within 15 seconds, no deploy.
-- **Turn log** — `STARK_TURN_LOG=1` writes one JSON line per turn (transcript, reply,
+- **Turn log**: `STARK_TURN_LOG=1` writes one JSON line per turn (transcript, reply,
   actions, per-stage timings) plus the uploaded clip; read it at `GET /v1/turnlog`.
-- **Alerts** — low float, low treasury, negative coverage, raised to the admin page and
+- **Alerts**: low float, low treasury, negative coverage, raised to the admin page and
   cleared when they recover.
 
 ## Design decisions and trade-offs
@@ -601,7 +601,7 @@ speech; the Telegram Bot API. The repository layout follows
 | `Address already in use` | An old process holds the port: `lsof -nP -iTCP:8000 -sTCP:LISTEN` |
 | Every request is 401 | Not signed in, or `NEON_AUTH_BASE_URL` belongs to a different Neon branch than `DATABASE_URL` |
 | Dashboard shows no data | The API is not on `127.0.0.1:8000` |
-| `Please enable IP Whitelisting` from Flutterwave | This machine's IP is not on the dashboard's list — test mode included |
+| `Please enable IP Whitelisting` from Flutterwave | This machine's IP is not on the dashboard's list, test mode included |
 | Payments succeed but no token | That is the known production state: the biller call is blocked on IP whitelisting |
 | `float_low` | The Flutterwave float has not settled; see `/admin` |
 | `/docs` is 404 | Expected in production; run locally with `STARK_DOCS=1` |

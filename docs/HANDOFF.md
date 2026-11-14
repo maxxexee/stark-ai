@@ -1,4 +1,4 @@
-# Stark — handoff
+# Stark: handoff
 
 **Written 2026-10-20, last resumed 2026-11-03 (money flow, crypto withdrawals, live
 rails).** If you are an agent picking this up, read §0 (newest first) and then §1–3
@@ -18,7 +18,7 @@ a status. Where a line below disagrees with the code or with mainnet, the code w
 - **Per-user vaults exist on mainnet.** `u-312d6989246f5965`, `u-fbda9ededd79777a` and
   `u-278a146620c99d70`, all `.<funder>.moonboys-stark.near`: each has deployed code, a
   single `pay`-only function-call key, USDC and real policies. `payment_count` is 6, 8
-  and 0. §0 and §9 below still say none exists — that is history now.
+  and 0. §0 and §9 below still say none exists, that is history now.
 - Those three vaults' `owner` is still the funder account. Owner powers (limits,
   allowlist, `pause`, `withdraw`) have **not** been handed to their users: `accept_owner`
   has not run.
@@ -33,7 +33,7 @@ a status. Where a line below disagrees with the code or with mainnet, the code w
 
 ---
 
-## 0. Resume here — state as of 2026-11-03 (history; read the 2026-11-14 block above first)
+## 0. Resume here: state as of 2026-11-03 (history; read the 2026-11-14 block above first)
 
 **Later on 2026-11-03: Bachs and VTpass were replaced by Flutterwave.** One Flutterwave
 account now collects deposits (hosted checkout), pays bills and sends withdrawals, from
@@ -69,7 +69,7 @@ Verified on 2026-11-03 against the live services, not assumed:
 | Vault contract | **Deployed** at `stark-vault.testnet`; a `pay()` signed by `near_tx` was accepted on chain (commit `f2e8c61`). `stark-vault.testnet` and `stark-agent.testnet` each hold ~10 testnet NEAR. Per-user vaults (`u-<hex>.stark-vault.testnet`) are code + tests only: `STARK_FUNDER_KEY` / `STARK_AGENT_KEY` are not on this machine, so none has been created live. |
 | Telegram | **Live.** `@hellostarkai_bot`, webhook `https://geddon.hellostark.xyz/v1/tg/webhook`, no delivery errors. §9's "never live" is stale. |
 | Bachs (NGN rail) | **Sandbox configured**: a scoped key (`balance:read`, `payments:*`, `payouts:*`) and a webhook to `/v1/bachs/webhook` for `collection.succeeded/failed`, `payout.paid/failed`, both in `apps/backend/.env`. Balance and bank list read live. No event has been delivered yet. Live mode is blocked on the owner's business details + liveness check in the Bachs dashboard. |
-| 1Click (Intents) | Token list and quotes read live. A withdrawal quote (USDC on NEAR → USDT on Tron) prices correctly once `refundTo` is a **real** mainnet account — `stark-treasury.near` is a placeholder and makes 1Click answer a bare 400. Small amounts are refused ("too low for bridge", ~1.9 USDC for Tron). Fees on a ₦20k payout were ~6.5% without a partner key. |
+| 1Click (Intents) | Token list and quotes read live. A withdrawal quote (USDC on NEAR → USDT on Tron) prices correctly once `refundTo` is a **real** mainnet account, `stark-treasury.near` is a placeholder and makes 1Click answer a bare 400. Small amounts are refused ("too low for bridge", ~1.9 USDC for Tron). Fees on a ₦20k payout were ~6.5% without a partner key. |
 | Privacy tier | From near.ai/models: **Whisper Large v3 is Private TEE** (voice-in is private). **Gemini 2.5 Flash Lite is Incognito** (runs at Google). Decision: keep Gemini for speed and do not claim the chat path is private. Measured alternative: DeepSeek V4.1 Flash (Private TEE) is 2.7s / 4.1s vs Gemini's 1.5s / 1.4s; GLM 5.3 Flash failed to call the tool. |
 | VTpass | Unchanged: purchases still `028` until VTpass whitelists the products. |
 
@@ -93,7 +93,7 @@ live; get VTpass to whitelist products.
 
 ---
 
-## 0. Resume here — state as of 2026-10-24 (M2 + M3 + M4 built, reminders, real audio in)
+## 0. Resume here: state as of 2026-10-24 (M2 + M3 + M4 built, reminders, real audio in)
 
 ### The intelligence layer, probed (2026-10-24)
 
@@ -109,7 +109,7 @@ thousand, how much is left?" **paid ₦5,000 of airtime**, and "I'm confused, DS
 owe, what should I do?" tried to pay DStv. Three defences now, and the first two are
 code rather than prompt:
 
-1. `_tools_for(has_snapshot, transcript)` offers **no tools at all** on a question —
+1. `_tools_for(has_snapshot, transcript)` offers **no tools at all** on a question:
    read questions (what/read/show/when/how…), hypotheticals (if/what if/how much
    would), advice (should I/confused/why/explain). Nothing to call, nothing to spend.
 2. `asks_instead_of_paying()` is also checked inside `pay_bill`
@@ -142,24 +142,23 @@ Three things that were promised in copy are now code, and one lie was deleted.
 
 **Reminders (`reminders.py`).** A bill can carry `renews_on` (additive `Bill` field,
 `PATCH /v1/bills/{id}` sets, `""` clears, nonsense is 400 `bad_renews_on`). Every bill
-inside a **7-day window** appears in `state.due_soon` — including overdue inside that
-window, which is the loudest reminder there is — and `/v1/suggestions` renders it as
+inside a **7-day window** appears in `state.due_soon`, including overdue inside that
+window, which is the loudest reminder there is, and `/v1/suggestions` renders it as
 `bill_due`. A background loop (`start_reminder_loop`, `STARK_REMINDER_TICK`, default
 300s) pushes the same line to linked Telegram chats **only when a bot token exists**;
 the claim is logged in memory so one renewal is never nudged twice in a run. Nothing
 depends on the thread: the same facts are in `/v1/state` and the agent's snapshot.
 
-**Suggestions are computed (`suggestions.py`).** The old hardcoded list is gone —
-including `"Your AC is 78% of your usage"`, which no data ever supported. Each line
+**Suggestions are computed (`suggestions.py`).** The old hardcoded list is gone, including `"Your AC is 78% of your usage"`, which no data ever supported. Each line
 now needs the data behind it: meter runway from ≥2 delivered electricity top-ups on
 different days (`units_low`), else from the state's own estimate (`units_low_estimate`,
 worded as an estimate); ≥80% of the monthly cap (`cap_near`); ≥2 devices reporting
 telemetry in 24h with one at ≥60% of average load (`load_imbalance`); renewals inside
-the window (`bill_due`). **No data, no line** — an empty list is honest, so no check
+the window (`bill_due`). **No data, no line**: an empty list is honest, so no check
 asserts a minimum length. Capped at 4, worst first.
 
-**M4 finished: real audio in.** `/v1/voice` accepts the clip itself — base64 `audio`
-(+`audio_type`) or a multipart `audio` part, ≤8MB — and sends it to Whisper before the
+**M4 finished: real audio in.** `/v1/voice` accepts the clip itself, base64 `audio`
+(+`audio_type`) or a multipart `audio` part, ≤8MB, and sends it to Whisper before the
 wake gate and agent. The response carries `stt: ok|failed|no_key`; when nothing was
 heard the transcript is `""`, the agent is never called and the reply says so. A
 transcript is never invented. `transcript_hint` stays as a probe for tests only, and
@@ -169,11 +168,11 @@ recorded, not `audio.wav` regardless (which mis-decoded a webm).
 
 **Two bugs found on the way out, both measured.** (1) `GET /v1/speak/stream` fell
 through to the JSON sender after streaming, so it wrote the audio, threw
-`UnboundLocalError: payload`, and appended/500'd behind a valid clip — the smoke
+`UnboundLocalError: payload`, and appended/500'd behind a valid clip, the smoke
 check passed because it only looked at the first bytes. Fixed in the dispatcher, and
 the smoke check now asserts no error body trails the audio. (2) The provider **refuses
 WebM as a container** (HTTP 400 "audio could not be processed", any filename), which
-is exactly what a Chrome `MediaRecorder` produces — so the browser path could never
+is exactly what a Chrome `MediaRecorder` produces, so the browser path could never
 transcribe as first written. `stt.hear` now decodes non-WAV/OGG clips to 16 kHz mono
 WAV with `ffmpeg` before sending. Verified live 2026-10-24: the same spoken sentence
 sent as WAV, OGG/Opus and WebM all return the right transcript. **`ffmpeg` is now a
@@ -184,7 +183,7 @@ requirement for voice input, not just Telegram**; without it a WebM comes back
 (so no reminder has been pushed, and the webhook still refuses every real update),
 VTpass is still fixture-backed (§10.1), and none of this is deployed.
 
-### M4 — Telegram door, audio pipeline, identity linking
+### M4: Telegram door, audio pipeline, identity linking
 
 `/v1/voice` is no longer the only way in. A Telegram bot now runs the same agent
 behind the same policy gate, and the §8A identity design is real code:
@@ -203,16 +202,16 @@ Telegram update → webhook secret → dedupe → identity gate → wake gate (v
 | API smoke | `python3 smoke_test.py` (server running) | **50/50, all good** |
 
 New files: `telegram.py` (the adapter), `identities.py` (link codes, identities,
-dedupe — same Postgres database as the receipts), `audio.py` (ffmpeg → 16 kHz mono WAV),
+dedupe, same Postgres database as the receipts), `audio.py` (ffmpeg → 16 kHz mono WAV),
 `stt.py` (Whisper client), `test_tg.py`.
 
 **It fails closed, on purpose.** With no secrets the webhook refuses every update:
 
 | Env var | Without it |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | adapter is `disabled` — every update is `401 webhook_unconfigured` |
-| `TELEGRAM_WEBHOOK_SECRET` | same — an unauthenticated webhook is a wallet anyone can talk to |
-| `NEAR_AI_API_KEY` | voice notes get "I cannot hear voice notes right now — text is working", never a guessed transcript |
+| `TELEGRAM_BOT_TOKEN` | adapter is `disabled`, every update is `401 webhook_unconfigured` |
+| `TELEGRAM_WEBHOOK_SECRET` | same, an unauthenticated webhook is a wallet anyone can talk to |
+| `NEAR_AI_API_KEY` | voice notes get "I cannot hear voice notes right now, text is working", never a guessed transcript |
 | `STARK_TG_OWNER_ID` | link codes bind to `user_tunde` (the single demo user) |
 
 To go live: create a bot with BotFather, then
@@ -224,17 +223,17 @@ the webhook at `/v1/tg/webhook` with `secret_token` set to that same value.
 - **Verify before parsing.** The raw body is checked against the secret header in
   constant time before any JSON is read (§8A).
 - **An unlinked chat never reaches the agent.** It gets link instructions and
-  nothing else — no balance, no bills, no payment.
+  nothing else, no balance, no bills, no payment.
 - **Link codes** are 6 digits, single-use, 10-minute TTL, stored hashed, with 5
   attempts per sender per 10 minutes.
 - **Dedupe** on `message_id`: Telegram re-delivers updates, and a second delivery
   cannot pay twice.
 - **The wake gate applies to voice, not typing.** A voice note must open with an
-  attempt at the wake word — the same rule `/v1/voice` uses — because a note can be
+  attempt at the wake word, the same rule `/v1/voice` uses, because a note can be
   recorded by accident. The rule lives in **one place (`wake.py`)** and tolerates
   what recognizers do to "stark": reported transcripts of `start`, `stock`, `starn`
   and `stop` are treated as the address and rewritten to `Stark, …` before the
-  agent sees them (2026-10-24 — before this, saying the wake word through an accent
+  agent sees them (2026-10-24, before this, saying the wake word through an accent
   got you silence, which is worse than a false wake). The attempt has to open the
   utterance, possibly after filler (`hey`, `um`, `so`), so "I start the car" is not
   a wake word. Ordinary speech is still ignored. A typed message in a DM is
@@ -249,10 +248,10 @@ transport and transcription are injected.
 ### Talk screen is hands-free (2026-10-24)
 
 The mic no longer needs a tap per question. One wake ("Hey Stark", or a near-miss
-the server accepts) opens a session that **has no idle timeout** — after each answer
+the server accepts) opens a session that **has no idle timeout**: after each answer
 the recognizer restarts itself, so a follow-up needs no wake word, and a pause does
 not end it. It sleeps only on an explicit dismissal ("go to sleep", "stop
-listening", "that's all", "I'm done" — `isSleepIntent`, checked client-side before
+listening", "that's all", "I'm done", `isSleepIntent`, checked client-side before
 any API call), a tap on the orb, a real microphone error, or the tab going hidden.
 *2026-10-24, second pass:* the first version refreshed a 20-second window on every
 exchange, which measured a long answer plus a moment's thought as "gone quiet" and
@@ -264,7 +263,7 @@ What it deliberately does *not* do:
   reply), and it does not listen while a request is in flight. Both resume when
   the clip ends or the words land.
 - **The session is client-side.** Continuation turns are prefixed `Stark, …` by the
-  Talk screen — the same thing typing and `?q=` do — so the server's wake gate is
+  Talk screen, the same thing typing and `?q=` do, so the server's wake gate is
   unchanged and still refuses anything raw. No session token, no new endpoint.
 - `console.debug("[wake] ignored: …")` in DEV logs transcripts the gate refused:
   that log is the feed for `wake.py`'s alias set. Add to it only what was actually
@@ -272,7 +271,7 @@ What it deliberately does *not* do:
 
 ### Frontend contract breadth (2026-10-22)
 
-### M3 — vending and persisted receipts (latest)
+### M3: vending and persisted receipts (latest)
 
 **What changed.** The payment path now buys instead of pretending to:
 
@@ -291,7 +290,7 @@ policy check → sign pay() → record the intent → VTpass buy → charge → 
 New files: `receipts.py` (SQLite store), `vending.py` (bill → vendor), `catalog.py`
 (VTpass products, plans and prices from captured fixtures), `payments.py` (the
 two-phase service), `test_vending.py`. `server.py` no longer keeps balance or activity
-in memory — both come from the store, so a restart cannot leave history and balance
+in memory, both come from the store, so a restart cannot leave history and balance
 disagreeing.
 
 **The three decisions that matter**
@@ -321,13 +320,13 @@ captured from the sandbox into `fixtures/` (§10.16 covers the holes).
 
 A plan is a fixed price, so a plan bill carries `plan` + `plan_price_ngn` and any
 other amount is refused (agent and gateway both). **The per-payment cap moved from
-₦5,000 to ₦10,000** because DStv Compact is ₦7,900 — a ₦5,000 cap made the TV bill
+₦5,000 to ₦10,000** because DStv Compact is ₦7,900, a ₦5,000 cap made the TV bill
 impossible to pay.
 
 ### Frontend contract breadth (2026-10-22, latest)
 
 The design screens needed routes the frozen contract did not have. Nine were added,
-all **additive** — no existing field, shape or status code changed:
+all **additive**: no existing field, shape or status code changed:
 
 | Screen | Routes |
 |---|---|
@@ -340,7 +339,7 @@ These are real against the stub, not mocked handlers: adding or deleting a bill
 re-scopes the agent's meter allowlist; `PATCH /v1/limits` replaces the agent's own
 `Limits` object in the same process, so the next voice turn is refused at the new
 cap; top-up and withdraw write ledger rows through the SQLite store. Plans come from
-the captured VTpass catalogue, and the client never sends a price — `plan_price_ngn`
+the captured VTpass catalogue, and the client never sends a price, `plan_price_ngn`
 is resolved server-side.
 
 `POST /v1/payments` now enforces the **per-payment** cap as well as the monthly one,
@@ -349,7 +348,7 @@ in the same order as the agent (§10.13). 50 smoke checks cover the new routes.
 Bills and limits are stored in Postgres (`bills`, `account_limits`), and `units_left`
 is worked out from delivered receipts, so all three survive a restart (2026-11-11).
 
-### M2 — the agent server
+### M2: the agent server
 
 **M2, the agent server, is built and green.** `/v1/voice` no longer returns canned
 regex strings: it runs a real tool-using loop with a hard policy gate in front of
@@ -378,13 +377,13 @@ transcript → model picks a tool → policy gate → sign pay() → book the pa
 - `policy.py` mirrors `contracts/vault/src/policy.rs`, and a test reads the Rust
   source and fails if a code or sentence drifts.
 - Signing is stdlib only: hand-rolled borsh, RFC 8032 ed25519, base58. **Dry by
-  default** — a signature is built, nothing is broadcast (`STARK_BROADCAST=1` sends).
+  default**: a signature is built, nothing is broadcast (`STARK_BROADCAST=1` sends).
 - With no `NEAR_AI_API_KEY` the server uses a deterministic model that emits the
   same tool calls. The key stays a config value, so the tests are hermetic.
 
 **What M2 does not do:** it does not call VTpass (that is M3), it does not broadcast
 anything by default, and its two network-facing pieces have never run against a live
-service — see §10.11 and §10.12.
+service, see §10.11 and §10.12.
 
 ---
 
@@ -404,7 +403,7 @@ by the resume session; nothing is inherited on faith.
 The wasm row is new and it matters: **`cargo-near` is not needed to produce a deployable
 artifact.** Plain `cargo` in release mode emits `stark_vault.wasm`; `cargo near` would only
 add the ABI JSON and the `near deploy` convenience. §1 previously said "install cargo-near
-before anyone says deploy" — that claim was too strong and is corrected there.
+before anyone says deploy", that claim was too strong and is corrected there.
 
 **Toolchain verdict: do not install Rust.** The toolchain is present at
 `/Users/mac/.rustup/toolchains/stable-aarch64-apple-darwin` (cargo 1.97.1). The failed
@@ -415,21 +414,21 @@ trap biting again, not a broken install.
 **Repo drift was found and fixed.** `/Users/mac/stark` is *not* a git repository; the git
 repository is `/Users/mac/stark-ai` with the project under `stark/`. The M1 contract had
 been built only in `/Users/mac/stark`, so **the pushed repo did not contain `contracts/`
-at all** — the public repo was missing the single never-cut deliverable. The working tree
+at all**: the public repo was missing the single never-cut deliverable. The working tree
 of `/Users/mac/stark-ai/stark/` has now been resynced (contract, `.gitignore`, README,
 this file) and re-verified there: 38/38 Rust tests and 30/30 Python tests green *in the
-repo copy*. It is **uncommitted and unpushed** — that needs the human (§13 item 4).
+repo copy*. It is **uncommitted and unpushed**: that needs the human (§13 item 4).
 
 **What is actually blocked, in priority order.** All four need the human; none are code:
 
-1. **VTpass sandbox credentials** — still the kill-switch (§10.1). No amount of local
+1. **VTpass sandbox credentials**: still the kill-switch (§10.1). No amount of local
    work substitutes for one real `DELIVERED` token.
-2. ~~**NEAR AI API key**~~ — **supplied 2026-10-22.** A real chat turn (with a tool
+2. ~~**NEAR AI API key**~~, **supplied 2026-10-22.** A real chat turn (with a tool
    call) and real Whisper transcripts are verified (§10.12).
-3. **A funded NEAR testnet account** — unblocks the M1 deploy. The wasm is built; the
+3. **A funded NEAR testnet account**: unblocks the M1 deploy. The wasm is built; the
    deploy still needs an account with storage deposit plus `near-cli`/`cargo-near`.
    Note `near` CLI is **not installed** (checked this session).
-4. **Authorization to push** the vault commit — §13 item 4.
+4. **Authorization to push** the vault commit, §13 item 4.
 
 Everything else in the queue is code, and the next code item is **M2** (§8).
 
@@ -442,20 +441,20 @@ These cost real time. Each one was hit and diagnosed once already.
 | Trap | Detail |
 |---|---|
 | **`$HOME` is redirected** | The shell's `$HOME` is `/Users/mac/.freebuff-profiles/last`, **not** `/Users/mac`. Any `~/Desktop` or `~/...` path resolves to a near-empty shadow directory. **Use absolute `/Users/mac/...` paths.** This caused a whole session of "the file doesn't exist" conclusions that were wrong. |
-| **The design source is not in this repo** | It lives at `/Users/mac/Desktop/export/` — 24 artboards, 5 conversation transcripts, 2 docs, 12 reference images. Also `/Users/mac/Desktop/stRKREADME.md`, byte-identical to `export/README.md`. |
-| **`/Users/mac/stark-ai` is this repo** | The monorepo lives here: `apps/` and `docs/` at the root, remote `maxxexee/stark-ai`. An earlier version of this file called it "an unrelated landing page" — that was a different path and is no longer true. |
+| **The design source is not in this repo** | It lives at `/Users/mac/Desktop/export/`, 24 artboards, 5 conversation transcripts, 2 docs, 12 reference images. Also `/Users/mac/Desktop/stRKREADME.md`, byte-identical to `export/README.md`. |
+| **`/Users/mac/stark-ai` is this repo** | The monorepo lives here: `apps/` and `docs/` at the root, remote `maxxexee/stark-ai`. An earlier version of this file called it "an unrelated landing page", that was a different path and is no longer true. |
 | **Only Python 3.14.7 exists** | `/opt/homebrew/bin/python3.14`. FastAPI + pydantic fail dependency resolution on it (pip backtracks until it times out). This is why everything here is **stdlib-only**. If you need FastAPI later, install Python 3.13 first or budget an hour. |
 | **Background server lifecycle** | `nohup ... &` inside a tool call gets killed when that call's shell is cleaned up. Run `python3 server.py` as a *managed* background process instead. |
 | **`pgrep -f "python3 -u server.py"` gives a false negative** | The process's `argv[0]` is the full framework path, so the pattern doesn't match even while the server is serving. Use `lsof -tiTCP:8000 -sTCP:LISTEN` instead. |
 | **rustup needs `RUSTUP_HOME` for the same reason** | `cargo` reports "no default toolchain" even though `/Users/mac/.rustup/toolchains/stable-aarch64-apple-darwin` exists. Always prefix Rust commands with `RUSTUP_HOME=/Users/mac/.rustup CARGO_HOME=/Users/mac/.cargo PATH=/Users/mac/.cargo/bin:$PATH`. |
-| **Do not `rustup default stable`** | With the redirected `$HOME` it downloads six components into `/Users/mac/.freebuff-profiles/.../.rustup`, dies on a DNS error for `rust-docs`, and **rolls back** — it looks like a broken toolchain and is not. The toolchain is already installed; just set `RUSTUP_HOME`. |
+| **Do not `rustup default stable`** | With the redirected `$HOME` it downloads six components into `/Users/mac/.freebuff-profiles/.../.rustup`, dies on a DNS error for `rust-docs`, and **rolls back**: it looks like a broken toolchain and is not. The toolchain is already installed; just set `RUSTUP_HOME`. |
 | **A second copy of the project exists** | `/Users/mac/stark-ai` is the actual git repo, with the monorepo at the root (`apps/`, `docs/`) and a pre-monorepo snapshot in `stark/`. `/Users/mac/stark` is an unversioned copy that is **stale**. Edits made only there do **not** reach the public repo; that is how `contracts/` went missing from the push on 2026-10-20. Edit the repo copy only, and never rsync the stale copy over it (§12). |
 | **crates.io 403s curl but not cargo** | `curl https://crates.io/...` returns 403 with curl's default UA. Send `-A "cargo"`. Cargo itself is unaffected. |
 | **near-sdk 5 refuses a plain `cargo build`** | It `compile_error!`s unless it can prove this is not an on-chain build. The fix used here is target-specific deps: the wasm branch uses plain `near-sdk`, the non-wasm branch adds `features = ["unit-testing"]`. |
 | **`#[near]` on a plain struct derives borsh only** | JSON returns compile fine in host tests (the wasm wrapper is `cfg`'d out there) and then fail `--target wasm32-unknown-unknown` with `no Serialize`. Derive `near_sdk::serde::{Serialize, Deserialize}` explicitly, with `#[serde(crate = "near_sdk::serde")]`. |
-| **`wasm32-unknown-unknown` had to be added** | Installed now. The deployable `.wasm` comes from plain `cargo build --target wasm32-unknown-unknown --release` (203 KB, verified) — `cargo-near` is **not** required to build it and is **not installed**; it only adds the ABI JSON and the `near deploy` convenience. |
+| **`wasm32-unknown-unknown` had to be added** | Installed now. The deployable `.wasm` comes from plain `cargo build --target wasm32-unknown-unknown --release` (203 KB, verified), `cargo-near` is **not** required to build it and is **not installed**; it only adds the ABI JSON and the `near deploy` convenience. |
 | **`DATABASE_URL` is not optional** | Since the auth/storage switch the backend refuses to start without a Neon Postgres pooler URL (`sslmode=require`); the schema creates itself on first boot. Copy `.env.example` → `.env` first. |
-| **Neon Auth refuses a request with no `Origin`** | Sign-up/sign-in must send `Origin: http://localhost:5174` — a browser always sends one, and without it the provider answers 400. The session token comes back as `token`; the backend verifies it against `<auth-url>/.well-known/jwks.json`. |
+| **Neon Auth refuses a request with no `Origin`** | Sign-up/sign-in must send `Origin: http://localhost:5174`, a browser always sends one, and without it the provider answers 400. The session token comes back as `token`; the backend verifies it against `<auth-url>/.well-known/jwks.json`. |
 | **`bun` was missing for `turbo build`** | `npm run build` fails with `Unable to find package manager binary` until bun exists: `npm i -g bun`. |
 
 ---
@@ -476,7 +475,7 @@ Constraints carried from the design work:
 - Crimson Pro headings, Inter body
 - **No sliders anywhere.** No crypto jargon in user-facing app copy. Naira only.
 - 3-step setup, phone version of every screen
-- 3 jargon leaks remain in the design source — see §10
+- 3 jargon leaks remain in the design source, see §10
 
 ---
 
@@ -492,13 +491,13 @@ Re-read that file before submitting; it warns dates and rules may change.
 | Repo | **public** at `github.com/maxxexee/stark-ai`, branch `main` (the old `geekman58748` URL redirects). Layout and drift risk in §12 |
 | Demo | human must publish a public X post with video/screenshots |
 
-**Tracks we picked** — use the ids, not the display names:
+**Tracks we picked**: use the ids, not the display names:
 
-1. **`realworld`** (lead) — stablecoin rails for everyday payments
-2. **`security`** — spending limits, policy engines, function call keys, TEE attestation.
+1. **`realworld`** (lead): stablecoin rails for everyday payments
+2. **`security`**: spending limits, policy engines, function call keys, TEE attestation.
    The vault + capped function-call key + TEE inference is a textbook fit, and probably
    less crowded than `agents`.
-3. **`agents`** — partial: Stark spends but does not earn or negotiate.
+3. **`agents`**: partial. Stark spends but does not earn or negotiate.
 
 Deliberately **not** claimed: `privacy` (a weak fourth claim dilutes the README).
 
@@ -510,7 +509,7 @@ Deliberately **not** claimed: `privacy` (a weak fourth claim dilutes the README)
 - `size` must be exactly one of `1`, `2 - 4`, `4 - 6`, `6 - 8`, `8+`.
 - `requestId` is a UUID generated once and **reused on retries**.
 - **AI judges** (Claude Code, Codex) read the README. Write "do X – see Y" steps; no marketing.
-- `403` means submissions aren't open — do not retry. `409` means already submitted.
+- `403` means submissions aren't open; do not retry. `409` means already submitted.
 
 ---
 
@@ -518,7 +517,7 @@ Deliberately **not** claimed: `privacy` (a weak fourth claim dilutes the README)
 
 The API is FastAPI (`apps/backend/requirements.txt`; `bun run setup` in
 `apps/backend` makes the `.venv`), laid out one module per feature after
-awesome-nest-boilerplate — see `apps/backend/README.md` § Layout. Swagger UI exists only
+awesome-nest-boilerplate, see `apps/backend/README.md` § Layout. Swagger UI exists only
 when the server is started with `STARK_DOCS=1`; the deployed hosts return 404 on `/docs`.
 The contract is Rust, which needs `RUSTUP_HOME` set (§1).
 
@@ -538,10 +537,10 @@ apps/backend/
 apps/contracts/
   vault/                       NEAR contract: caps, allowlist, owner withdraw
 docs/
-  API.md                      THE CONTRACT — frozen, additive changes only
+  API.md                      THE CONTRACT, frozen, additive changes only
 docs/FRONTEND.md               screen-by-screen build guide for the dashboard
 docs/HANDOFF.md                this file
-README.md                      product intro, architecture, run instructions — rewritten 2026-11-14
+README.md                      product intro, architecture, run instructions, rewritten 2026-11-14
 ```
 
 ### Run it
@@ -601,7 +600,7 @@ Full detail in [`docs/API.md`](API.md). 54 route-plus-method pairs are mounted, 
 | POST | `/v1/tg/webhook` | 200 / 401 / 400 | **M4 built.** Telegram-only; secret header required before parsing |
 | POST | `/v1/_stub/reset` | 200 | **stub-only**, not part of the product contract |
 
-**Conventions:** money is **integer naira** (`*_ngn`) — never floats, never strings.
+**Conventions:** money is **integer naira** (`*_ngn`), never floats, never strings.
 Times are ISO 8601 UTC with `Z`. Errors are `{code, message, detail}` and callers branch
 on `code`, never on `message`. CORS is fully open locally (preflight verified, 204).
 Cap checks run **per-payment → monthly → balance** on both the REST route and the
@@ -609,7 +608,7 @@ agent, so the two paths cannot disagree about which refusal a payment gets.
 
 **Voice gate lives on the server.** `/v1/voice` returns `{ignored: true, reply: null}` when
 the transcript lacks `"stark"`; the client must stay silent. `reply` is already speakable
-text — feed it straight to TTS.
+text, feed it straight to TTS.
 
 **Mock values deliberately mirror the artboards** so the frontend renders with the real
 design's numbers: balance `₦64,200`, cap `₦30,000`, spent `₦23,000` (leaving `₦7,000`),
@@ -637,7 +636,7 @@ Each of these was checked against the live service or primary docs, not assumed.
 | NEAR AI model count | 59 models; `openai/gpt-5-nano` is `0.05`/`0.4` |
 | Pricing unit | `input`/`output` = **USD per 1M tokens**, confirmed against OpenAI's own published `gpt-4.1-nano` ($0.10/$0.40) and `gpt-5-nano` ($0.05/$0.40) |
 | Demo AI cost | ~`$0.000064`/turn on `gpt-5-nano`; **~$0.013 for 200 turns**. Whisper adds ~`$0.001`. The real cost is the *electricity* (~₦5,000 ≈ $3), ~150× the AI bill |
-| **Picovoice free tier is dead** | Free AccessKeys stopped 2026-06-30; the SDK refuses to run without a key. Porcupine is now paid — do not plan on it |
+| **Picovoice free tier is dead** | Free AccessKeys stopped 2026-06-30; the SDK refuses to run without a key. Porcupine is now paid, do not plan on it |
 | Design claims hold | Crimson Pro + Inter in 24/24 artboards, `#C2410C` + `#F08A4B` in 24/24, **zero real sliders** (only a CSS `input[type=range]` reset), glass footer present, Stark rename 24/24 |
 
 ---
@@ -656,9 +655,9 @@ Each of these was checked against the live service or primary docs, not assumed.
 | **Telegram first, PWA second, ESP32 last** | Telegram costs nothing and is the fallback; ESP32 is the highest-risk path in a 2-week build | Yes |
 | **AC is the tracked load, not light bulbs** | 4 bulbs ≈ ₦45–55/evening vs AC ≈ ₦1,900. Warning about bulbs makes the agent look dumb | Yes |
 | **Telegram is the chat door** | One adapter, free, no business approval. There is no public iMessage bot API. See §8A | Yes |
-| **Bills and limits are editable, not just seeded** | The design has Add-bill and Limits screens; seeded-only would leave both dead. Editing re-scopes the agent's allowlist and caps in-process | Yes — persisting is additive |
+| **Bills and limits are editable, not just seeded** | The design has Add-bill and Limits screens; seeded-only would leave both dead. Editing re-scopes the agent's allowlist and caps in-process | Yes, persisting is additive |
 | **The client never sends a plan price** | A plan is fixed-price at the vendor. Taking the amount from the UI is a way to underpay it, so the server resolves `plan_price_ngn` from the catalogue | No |
-| **`stark-ai/` left untouched** | Different, older artifact; not the visual reference | — |
+| **`stark-ai/` left untouched** | Different, older artifact; not the visual reference | n/a |
 
 ---
 
@@ -670,10 +669,10 @@ days of runway the original plan did not assume.
 | # | Window | Deliverable | Status |
 |---|---|---|---|
 | **M0** | now → Oct 27 | Contract frozen, VTpass sandbox confirmed, NEAR AI key, AC meter decision | **partly done** |
-| M1 | Oct 27–31 | Vault contract: monthly cap, per-payment cap, meter allowlist, `pay()`, events, unit tests | **built** — 38/38 tests, clippy clean, 203 KB wasm builds. **Not deployed** — needs a funded testnet account (§0.3) |
-| M2 | Nov 1–3 | Agent server: NEAR AI LLM + tools, signs `pay()` with a function-call key | **built 2026-10-22** — 59 tests, gate enforced in code, signature dry-run. LLM client and RPC path unproven (§10.11–12) |
-| M3 | Nov 4–5 | Real vending wired in, receipt store (tx hash ↔ token) | **built 2026-10-22** — 44 tests, 4 product families, dry-run; live blocked by VTpass `028` provisioning (§10.1) |
-| M4 | Nov 6–7 | Telegram bot + Whisper voice + TTS | **built 2026-10-22, finished 2026-10-24** — Telegram + identity linking + Whisper (now fed real audio from both doors) + TTS (ElevenLabs Flash, streamed). Fail-closed until secrets; no bot token has ever been set |
+| M1 | Oct 27–31 | Vault contract: monthly cap, per-payment cap, meter allowlist, `pay()`, events, unit tests | **built**: 38/38 tests, clippy clean, 203 KB wasm builds. **Not deployed**: needs a funded testnet account (§0.3) |
+| M2 | Nov 1–3 | Agent server: NEAR AI LLM + tools, signs `pay()` with a function-call key | **built 2026-10-22**: 59 tests, gate enforced in code, signature dry-run. LLM client and RPC path unproven (§10.11–12) |
+| M3 | Nov 4–5 | Real vending wired in, receipt store (tx hash ↔ token) | **built 2026-10-22**: 44 tests, 4 product families, dry-run; live blocked by VTpass `028` provisioning (§10.1) |
+| M4 | Nov 6–7 | Telegram bot + Whisper voice + TTS | **built 2026-10-22, finished 2026-10-24**: Telegram + identity linking + Whisper (now fed real audio from both doors) + TTS (ElevenLabs Flash, streamed). Fail-closed until secrets; no bot token has ever been set |
 | M5 | Nov 8 | NEAR Intents funding, one cross-chain deposit | not started |
 | M6 | Nov 9–10 | AC telemetry + suggestion engine | not started |
 | M7 | Nov 11 | Frontend wired to the live API, **record the token clip** | not started |
@@ -691,7 +690,7 @@ days of runway the original plan did not assume.
 | VTpass client written + dry-run verified | ✅ 30/30 |
 | NEAR AI audio model confirmed | ✅ `openai/whisper-large-v3` in `/v1/models` |
 | **VTpass live token vending** | ❌ **THE KILL-SWITCH.** Credentials and meter verify are live; `/pay` returns `028` until the sandbox account is provisioned |
-| NEAR AI API key | ✅ supplied 2026-10-22 — live turn + transcript verified |
+| NEAR AI API key | ✅ supplied 2026-10-22, live turn + transcript verified |
 | AC: 13A plug or hardwired breaker? | ❌ physical inspection |
 
 ---
@@ -786,13 +785,13 @@ Rules that are not optional:
   or a webhook body is never trusted.
 - Rate-limit link attempts; invalidate the code on success or after N failures.
 
-### Auth — app sessions built, other channels not
+### Auth: app sessions built, other channels not
 
 The app's side is done: every `/v1` route needs a Neon Auth bearer token (401
 without), and the Telegram webhook checks its own secret. Do not expose other
 webhooks publicly until their checks exist.
 
-**1. Channel authenticity — verify before parsing:**
+**1. Channel authenticity, verify before parsing:**
 
 | Channel | Check |
 |---|---|
@@ -801,11 +800,11 @@ webhooks publicly until their checks exist.
 
 A failed check returns 401, logs the channel and source IP, and processes nothing.
 
-**2. User identity — resolve before acting:** look up
+**2. User identity, resolve before acting:** look up
 `(channel, channel_user_id)` in `channel_identities`; scope every read and payment to
 that `user_id`. A missing link is a refusal, not a default user.
 
-**3. App auth:** `Authorization: Bearer <session token>` — built, not designed. The
+**3. App auth:** `Authorization: Bearer <session token>`, built, not designed. The
 frontend signs up/in at Neon Auth, stores the token, and every `/v1` route verifies it
 against the provider's JWKS (401 otherwise). `GET /v1/speak/stream` also takes the
 token as `?token=` for the `<audio>` element. One token resolves to one `accounts`
@@ -841,7 +840,7 @@ refactor delay the one working demo.
 
 - **Phone = ears; Bluetooth speaker = mouth.** Bluetooth speakers are effectively
   output-only (A2DP); the headset mic (HFP) is poor. Use the phone's own mic.
-- Wired 3.5 mm AUX or USB-C is more reliable than Bluetooth for an always-on install —
+- Wired 3.5 mm AUX or USB-C is more reliable than Bluetooth for an always-on install, with
   no pairing drops after reboot.
 - PWA in a kiosk browser + Wake Lock; HTTPS via Caddy/Cloudflare Tunnel; auto-start on
   boot; battery optimisation off; Wi-Fi reconnect.
@@ -850,24 +849,24 @@ refactor delay the one working demo.
 
 ### Do not claim (yet)
 
-- “Message Stark on iMessage” — there is no public API; only an approved provider or a
+- “Message Stark on iMessage”, there is no public API; only an approved provider or a
   commercial bridge can do it.
-- “Hello Stark works from anywhere on iPhone” — Siri is the trigger; a third-party app
+- “Hello Stark works from anywhere on iPhone”, Siri is the trigger; a third-party app
   cannot own the wake phrase.
-- “The whole conversation is private” — channel providers and TTS sit in the path. The
+- “The whole conversation is private”, channel providers and TTS sit in the path. The
   TEE claim covers Whisper only, and even that tier is unconfirmed (§10.3).
 
 ### Open decisions
 
 - **TTS provider**: decided, ElevenLabs Flash. Check its data-retention terms before
   writing privacy copy.
-- **iMessage path** — skip for the hackathon; evaluate Apple Messages for Business or a
+- **iMessage path**: skip for the hackathon; evaluate Apple Messages for Business or a
   provider afterwards.
-- **Apple Developer account** — needed before any App Intents work.
-- **Where auth lives** — decided: sessions are issued and verified by Neon Auth
+- **Apple Developer account**: needed before any App Intents work.
+- **Where auth lives**: decided, sessions are issued and verified by Neon Auth
   (JWKS, no server-side session store), and `accounts` maps the provider's user id to
   this app's wallet and receipts.
-- **Link-code UX** — show the code in the app, not in a URL that can leak.
+- **Link-code UX**: show the code in the app, not in a URL that can leak.
 
 ---
 
@@ -891,13 +890,13 @@ Re-checked 2026-11-14. The first two bullets were rewritten; the rest were accur
   money Stark holds (the Flutterwave NGN balance and the treasury's USDC). The vault does
   not hold tokens: crypto deposits land as USDC in Stark's treasury and the funder
   credits the vault. Say so plainly; the onchain guarantee is the **caps**, not custody.
-- **Auth** — Neon Auth sessions on every `/v1` route (401 `unauthorized` without one);
+- **Auth**: Neon Auth sessions on every `/v1` route (401 `unauthorized` without one);
   the Telegram webhook authenticates with its own secret.
-- **Persistence** — accounts, receipts, wallets, channel identities, bills
+- **Persistence**: accounts, receipts, wallets, channel identities, bills
   (`POST /v1/bills`), limits (`PATCH /v1/limits`) and telemetry readings are in Neon
   Postgres and survive restarts, scoped per account. `units_left` is derived from
   delivered receipts and readings, not stored, so it survives too (checked 2026-11-11).
-- **Water and internet** — Flutterwave is not used for them. A bill of either kind
+- **Water and internet**: Flutterwave is not used for them. A bill of either kind
   can be saved, but paying it fails with a plain message and charges nothing; there is
   no silent "recorded" fallback.
 - **A completed deposit.** Flutterwave checkout (bank transfer, card, USSD) and NEAR
@@ -913,14 +912,14 @@ Re-checked 2026-11-14. The first two bullets were rewritten; the rest were accur
   That is intended, but a UI that joins on `bill_id` must handle a missing bill.
 - **Apple Messages.** The Telegram bot is live (`@hellostarkai_bot`, §0). Apple
   Messages is design-only (§8A).
-- **Telemetry → suggestions** — `/v1/telemetry` readings now feed `load_imbalance`,
+- **Telemetry → suggestions**: `/v1/telemetry` readings now feed `load_imbalance`,
   but the sensor only exists in demo data: no real meter has ever posted. The line
   needs two devices, which is why it is quiet in a fresh install.
-- **Reminder pushes** — the loop, the de-dupe and the Telegram send are written and
+- **Reminder pushes**: the loop, the de-dupe and the Telegram send are written and
   tested. The bot is now live, but no delivered push has been recorded here.
-- **Frontend** — built and deployed: `dash.hellostark.xyz`, plus `/demo` as a read-only
+- **Frontend**: built and deployed at `dash.hellostark.xyz`, plus `/demo` as a read-only
   sample account. `docs/FRONTEND.md` is the screen-by-screen contract, not a wish list.
-- **Demo video, X post, submission** — not verifiable from this repo; the human owns all
+- **Demo video, X post, submission**: not verifiable from this repo; the human owns all
   three.
 
 ---
@@ -992,11 +991,11 @@ Decisions taken, and why:
    `Fund.dc.html:64` shows `USDT/USDC/ETH/SOL/BTC` and a raw `0x7a3F…91cE` address.
 7. **Reicon icon provenance is unverifiable.** 234 inline `<svg>` elements (157 of them
    carrying `stroke-width="1.5"`), but no library name, CDN or attribution anywhere in the
-   artboards. The "~180 Reicon swaps" claim cannot be confirmed by inspection — inlined
+   artboards. The "~180 Reicon swaps" claim cannot be confirmed by inspection, inlined
    SVG carries no provenance.
 8. **NEAR AI audio billing unit is undocumented.** Bounded from both directions (token math
    and OpenAI's $0.003–0.006/min), so "pennies" is safe; the exact figure is not published.
-9. **`whisper-large-v3` accuracy on Nigerian-accented English is unmeasured** — reasonable
+9. **`whisper-large-v3` accuracy on Nigerian-accented English is unmeasured**: reasonable
    inference from model size, not a measurement.
 10. ~~**One non-hermetic test.**~~ Gone: `test_live_flag_accepted_after_subcommand`
     lived in `test_vtpass.py`, which was deleted with VTpass.
@@ -1010,7 +1009,7 @@ Decisions taken, and why:
     transcripts. `openai/gpt-5-nano` was `is_ready: false` and is Incognito, so the
     default is now the NEAR-hosted Private TEE model.
 
-    **2026-10-24 — the model changed for speed.** `NEAR_AI_MODEL` in `.env` is now
+    **2026-10-24, the model changed for speed.** `NEAR_AI_MODEL` in `.env` is now
     `google/gemini-2.5-flash-lite`, because the demo was too slow to wait for:
 
     | Model (same prompt, 4 samples) | Median turn |
@@ -1021,14 +1020,14 @@ Decisions taken, and why:
 
     Three supporting changes in `agent.py`, in order of how much they saved:
 
-    1. **The system prompt carries a snapshot** — `get_state()` + `list_bills()` +
-       the five most recent payments — and when it is present the **read tools are
+    1. **The system prompt carries a snapshot**: `get_state()` + `list_bills()` +
+       the five most recent payments, and when it is present the **read tools are
        not offered** (`Agent._tools_for`): only `pay_bill` goes to the model, because
        a prompt cannot act. First the reads were merely unnecessary, then they kept
        being called anyway (`list_bills` half the time, then `recent_activity`),
        each one costing a round trip. A snapshot read that throws puts every tool
-       back — a wrong number is worse than a slow one.
-    2. **An empty final message is retried once with the tools removed** — gemini
+       back, a wrong number is worse than a slow one.
+    2. **An empty final message is retried once with the tools removed**: gemini
        returns zero tokens when tools are offered and the answer is already in hand,
        which used to surface as `Sorry, I didn't catch that.` after a payment had
        already gone through.
@@ -1087,10 +1086,10 @@ Decisions taken, and why:
     Measured against the real API with a free key: **1.0–1.1s** for a Stark-length
     reply on `eleven_flash_v2_5`. Two facts the docs did not hand us:
     **library voices are HTTP 402 `paid_plan_required` on a free key** (Rachel's id
-    is rejected; only the account's **premade** voices work — default is now
+    is rejected; only the account's **premade** voices work, default is now
     `onwK4e9ZLuTAKqWW03F9`, Daniel, and `GET /v1/voices` lists what a key owns), and
     `output_format=pcm_24000` is inside the free tier while 44.1 kHz needs Pro. The
-    free tier is 10,000 credits/month, non-commercial — fine for the demo, worth
+    free tier is 10,000 credits/month, non-commercial, fine for the demo, worth
     knowing before a launch claim.
 
 21. **The whole money flow is tested against faked clients only (2026-11-03).** Nothing
@@ -1119,7 +1118,7 @@ Decisions taken, and why:
   Remove it before any public demo, or at least never document it to judges.
 - **`smoke_test.py` assumes the server is running** and calls reset first. If it fails with
   connection errors, start `server.py`.
-- **argparse `SUPPRESS` defaults** in `vtpass.py` — deliberate, so `--live` and `--fixture`
+- **argparse `SUPPRESS` defaults** in `vtpass.py`, deliberate, so `--live` and `--fixture`
   work on either side of a subcommand. Don't "simplify" them away.
 - **Cap order** in `/v1/payments` and in the agent is per-payment → monthly → balance,
   so one route cannot refuse a payment for a different reason than the other. A ₦20,000
@@ -1128,7 +1127,7 @@ Decisions taken, and why:
 - **`_rebuild_limits()` is how state reaches the agent.** It replaces the frozen
   `Limits` and assigns `AGENT.limits`; bill add/delete and limit patches all go through
   it. Mutating `LIMITS` in place would leave the agent enforcing stale rules.
-- **VTpass `pay` returns 201 from our stub but HTTP 200 from VTpass itself** — the stub
+- **VTpass `pay` returns 201 from our stub but HTTP 200 from VTpass itself**: the stub
   normalises to 201 for payments only. Keep that mapping in mind when wiring M3.
 - **`extract_token` checks four locations** (`content.transactions.token`,
   `content.transactions.purchased_code`, top-level `purchased_code`, top-level `token`)
@@ -1140,7 +1139,7 @@ Decisions taken, and why:
   phrasing you are changing what the demo says, not what the agent can do.
 - **One agent per process.** `server.py` builds the agent once at import (`AGENT`), so
   each process has one toolbox over the module globals. `_stub/reset` restores those
-  globals and the agent follows automatically — do not cache state inside the agent.
+  globals and the agent follows automatically, do not cache state inside the agent.
 - **The agent signs before it books.** Deliberate: an unbroadcast signature costs
   nothing, an unauthorised purchase is a real problem. M3 kept that order: policy →
   sign → record → buy → charge.
@@ -1155,41 +1154,41 @@ Decisions taken, and why:
   `_pay_bill` refuses the payment (`authorisation_failed`). Do not "retry without
   signing" to make a demo work.
 - **`parse_amount` returns `None` when no amount was named**, and only then does the
-  agent default to ₦5,000. Don't collapse the two — the distinction is what lets you
+  agent default to ₦5,000. Don't collapse the two; the distinction is what lets you
   tell "top it up" from "top it up with nothing".
 
 ---
 
 ## 12. Repo hygiene
 
-**Where the repo actually is** (this section used to claim no git existed anywhere — wrong):
+**Where the repo actually is** (this section used to claim no git existed anywhere; that was wrong):
 
 ```
 /Users/mac/stark-ai/            git repo, remote github.com/maxxexee/stark-ai, public, branch main
   apps/backend                  FastAPI backend + tests
-  apps/dashboard                the app (TanStack Start) — dash.hellostark.xyz
-  apps/website                  the landing page — hellostark.xyz
+  apps/dashboard                the app (TanStack Start), dash.hellostark.xyz
+  apps/website                  the landing page, hellostark.xyz
   apps/contracts                the Rust vault contract
   docs/                         API.md, FRONTEND.md, HANDOFF.md, screenshots/
-  stark/                        the PRE-monorepo copy — stale, do not edit. A server
+  stark/                        the PRE-monorepo copy, stale, do not edit. A server
                                 started from stark/backend once held :8000 and broke smoke
-/Users/mac/stark/               STALE unversioned copy — missing all of M2/M3; do not use
+/Users/mac/stark/               STALE unversioned copy, missing all of M2/M3; do not use
 ```
 
 Rules that keep this from drifting again:
 
-- **Edit `/Users/mac/stark-ai/apps/…` and `/Users/mac/stark-ai/docs/…`** — the monorepo
-  layout — and never `stark/` (pre-monorepo) or `/Users/mac/stark/` (unversioned, and
+- **Edit `/Users/mac/stark-ai/apps/…` and `/Users/mac/stark-ai/docs/…`**: the monorepo
+  layout, and never `stark/` (pre-monorepo) or `/Users/mac/stark/` (unversioned, and
   *behind*: it lacks `agent.py`, `catalog.py`, `payments.py`, `receipts.py`,
   `vending.py`, `policy.py`, `near_tx.py`, `vault_signer.py`, both new test files and
-  all 13 captured fixtures). **Never rsync either copy into the repo** — that would
+  all 13 captured fixtures). **Never rsync either copy into the repo**: that would
   delete M2/M3 and the monorepo. If you need the unversioned copy refreshed, copy
   *from* the repo:
   ```sh
   rsync -a --exclude 'target/' --exclude '__pycache__/' /Users/mac/stark-ai/stark/ /Users/mac/stark/
   ```
 - **The repo is public as of 2026-11-13.** The app auto-deploys to hellostark.xyz on
-  push to `main`, so a push is a deploy — do not push broken code.
+  push to `main`, so a push is a deploy, do not push broken code.
 - `.gitignore` covers `__pycache__/`, `*.pyc`, `.venv/`, `.venv-tts/` (an old voice
   venv, still ignored so a local copy stays out of git), `.DS_Store`, `.env`, and now `target/` + `**/target/` (a near-sdk
   build is ~1 GB; `Cargo.lock` **is** committed).
@@ -1197,7 +1196,7 @@ Rules that keep this from drifting again:
   only; `.env` is ignored and `.env.example` is the tracked template.
 - `apps/backend/stark.db` is a local SQLite artifact that is **untracked and not ignored** as
   of 2026-11-14. Keep it out of commits, or add it to `.gitignore`.
-- `Desktop/export/` must not be modified — it is the human's design source (§1).
+- `Desktop/export/` must not be modified, it is the human's design source (§1).
 
 ---
 
@@ -1217,7 +1216,7 @@ and the human's submission steps.
    whitelisted, buy one Ikeja prepaid token with the test key and check the bill result
    shape against what `vending.py` expects (§10.2). Then one checkout deposit and one
    bank withdrawal end to end, watching the webhook arrive.
-3. **Per-user vaults — created, handover outstanding.** Three vaults are live on mainnet
+3. **Per-user vaults: created, handover outstanding.** Three vaults are live on mainnet
    (§0). Re-publish the vault code as a global contract after every contract change,
    from `apps/backend` (existing vaults keep the old code until then):
    ```sh
@@ -1238,7 +1237,7 @@ the repo public, sign transactions, spend tokens, deploy to mainnet, or commit s
 
 ---
 
-## 14. Appendix — reference values
+## 14. Appendix: reference values
 
 **Design tokens:** `#0a0b0f`-family near-black, burnt orange `#C2410C`, accent `#F08A4B`
 on dark, Crimson Pro (headings), Inter (body), helmet logo mark.
@@ -1254,5 +1253,5 @@ sign pay() with function-call key → VTpass pay → token → TTS reply`.
 Budget ~10s end to end; speak a filler ("checking your meter…") immediately.
 
 **Hardware:** spare Android phone as the wall device (PWA, `getUserMedia`, Wake Lock API,
-HTTPS mandatory — Caddy or a Cloudflare Tunnel), cheap Bluetooth speaker for output
+HTTPS mandatory, Caddy or a Cloudflare Tunnel), cheap Bluetooth speaker for output
 (Bluetooth is output-only; the phone is the input device). ESP32-S3 is week-2 stretch only.
